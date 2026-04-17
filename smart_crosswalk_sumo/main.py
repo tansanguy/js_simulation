@@ -77,6 +77,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             tuple(args.seeds),
             args.sim_duration,
             args.warmup,
+            demand_profile=getattr(args, "demand_profile", "average"),
         )
 
     if not args.skip_run:
@@ -87,6 +88,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             args.sim_duration,
             args.warmup,
             tuple(args.seeds),
+            getattr(args, "traci_step_length", 0.1),
         )
 
     if not args.skip_reports:
@@ -109,6 +111,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     parser.add_argument("--sim_duration", type=int, default=1800)
     parser.add_argument("--warmup", type=int, default=300)
+    parser.add_argument("--traci_step_length", type=float, default=0.1)
+    parser.add_argument("--demand_profile", default="average")
     parser.add_argument("--result_root", default=str(DEFAULT_RESULT_ROOT))
     parser.add_argument("--run_name", default=None)
     parser.add_argument("--run_dir", default=None)

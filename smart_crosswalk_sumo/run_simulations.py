@@ -149,6 +149,7 @@ def run_simulation(
     sim_duration: int = 1800,
     warmup: int = 300,
     seed: int = 42,
+    traci_step_length: float = 0.1,
 ) -> dict[str, float | int]:
     if traci is None:
         raise RuntimeError("traci가 설치되어 있지 않습니다.")
@@ -173,7 +174,7 @@ def run_simulation(
             "--seed",
             str(seed),
             "--step-length",
-            "0.1",
+            str(traci_step_length),
             "--time-to-teleport",
             "300",
             "--no-warnings",
@@ -289,6 +290,7 @@ def main() -> None:
     parser.add_argument("--sim_duration", type=int, default=1800)
     parser.add_argument("--warmup", type=int, default=300)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--traci_step_length", type=float, default=0.1)
     args = parser.parse_args()
     metrics = run_simulation(
         args.net_file,
@@ -302,6 +304,7 @@ def main() -> None:
         args.sim_duration,
         args.warmup,
         args.seed,
+        args.traci_step_length,
     )
     for key, value in metrics.items():
         print(f"{key}={value}")

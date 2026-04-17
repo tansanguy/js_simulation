@@ -15,13 +15,35 @@ except ImportError:
     from network_utils import load_metadata, normalized_sumo_home, sumo_env
 
 
-def get_demand_params(row: pd.Series, seed: int) -> dict[str, float]:
+DEMAND_PROFILES = {
+    "average": {
+        "veh_multiplier": 1.0,
+        "ped_lambda_min": 100,
+        "ped_lambda_max": 600,
+    },
+    "seoul_commute_peak": {
+        # Report stress profile: approximate Seoul AM/PM peak conditions by
+        # increasing commuter vehicle pressure and pedestrian arrivals together.
+        "veh_multiplier": 2.0,
+        "ped_lambda_min": 650,
+        "ped_lambda_max": 1100,
+    },
+}
+
+
+def get_demand_params(row: pd.Series, seed: int, demand_profile: str = "average") -> dict[str, float | str]:
+    if demand_profile not in DEMAND_PROFILES:
+        valid = ", ".join(sorted(DEMAND_PROFILES))
+        raise ValueError(f"Unknown demand_profile={demand_profile!r}. Valid profiles: {valid}")
+
+    profile = DEMAND_PROFILES[demand_profile]
     rng = np.random.default_rng(seed)
     aadt_noisy = max(1000, float(row["추정AADT"]) + int(rng.integers(-3000, 3001)))
     hourly_veh = aadt_noisy / 24 / max(float(row["LANES"]), 1.0)
-    veh_per_hour = hourly_veh * 1.8
-    ped_lambda = int(rng.integers(100, 601))
+    veh_per_hour = hourly_veh * 1.8 * float(profile["veh_multiplier"])
+    ped_lambda = int(rng.integers(int(profile["ped_lambda_min"]), int(profile["ped_lambda_max"]) + 1))
     return {
+        "demand_profile": demand_profile,
         "veh_per_hour": float(veh_per_hour),
         "ped_mean_gap_sec": float(3600 / ped_lambda),
         "elderly_ratio": float(row["노인비율"]),
@@ -190,6 +212,7 @@ def generate_for_candidates(
     sim_duration: int = 1800,
     warmup: int = 300,
     step_length: float = 1.0,
+    demand_profile: str = "average",
 ) -> pd.DataFrame:
     candidates = pd.read_csv(candidates_csv)
     output_dir = Path(output_dir)
@@ -208,8 +231,8 @@ def generate_for_candidates(
             continue
 
         for seed in seeds:
-            print(f"[demand] cw_{cw_id} seed={seed}", flush=True)
-            params = get_demand_params(row, seed)
+            print(f"[demand] cw_{cw_id} seed={seed} profile={demand_profile}", flush=True)
+            params = get_demand_params(row, seed, demand_profile)
             vehicle_file = cw_dir / f"routes_seed{seed}.rou.xml"
             pedestrian_file = cw_dir / f"peds_seed{seed}.rou.xml"
             try:
@@ -235,6 +258,7 @@ def generate_for_candidates(
                     {
                         "횡단보도ID": cw_id,
                         "seed": seed,
+                        "demand_profile": params["demand_profile"],
                         "veh_per_hour": params["veh_per_hour"],
                         "ped_lambda": params["ped_lambda"],
                         "elderly_ratio": params["elderly_ratio"],
@@ -266,6 +290,7 @@ def main() -> None:
     parser.add_argument("--sim_duration", type=int, default=1800)
     parser.add_argument("--warmup", type=int, default=300)
     parser.add_argument("--step_length", type=float, default=1.0)
+    parser.add_argument("--demand_profile", choices=sorted(DEMAND_PROFILES), default="average")
     args = parser.parse_args()
     generate_for_candidates(
         args.candidates,
@@ -275,6 +300,7 @@ def main() -> None:
         args.sim_duration,
         args.warmup,
         args.step_length,
+        args.demand_profile,
     )
 
 

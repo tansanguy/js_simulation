@@ -28,6 +28,7 @@ def collect_all(
     sim_duration: int = 1800,
     warmup: int = 300,
     seeds: tuple[int, ...] = (42, 43, 44),
+    traci_step_length: float = 0.1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +70,7 @@ def collect_all(
                         sim_duration,
                         warmup,
                         seed,
+                        traci_step_length,
                     )
                 except Exception as exc:
                     failures.append(
@@ -151,6 +153,7 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     parser.add_argument("--sim_duration", type=int, default=1800)
     parser.add_argument("--warmup", type=int, default=300)
+    parser.add_argument("--traci_step_length", type=float, default=0.1)
     args = parser.parse_args()
     collect_all(
         args.candidates,
@@ -159,6 +162,7 @@ def main() -> None:
         args.sim_duration,
         args.warmup,
         tuple(args.seeds),
+        args.traci_step_length,
     )
 
 
