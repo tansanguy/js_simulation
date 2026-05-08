@@ -120,6 +120,59 @@ def sumo_binary() -> str:
     return path
 
 
+def traci_trafficlight_ids() -> set[str]:
+    try:
+        return set(traci.trafficlight.getIDList())
+    except Exception:
+        return set()
+
+
+def is_known_trafficlight(tl_id: str | None, known_tls_ids: set[str] | None = None) -> bool:
+    if not tl_id:
+        return False
+    ids = known_tls_ids if known_tls_ids is not None else traci_trafficlight_ids()
+    return tl_id in ids
+
+
+def snapshot_traci_trafficlight_ids(
+    sumocfg: str | Path,
+    seed: int = 42,
+    step_length: float = 0.1,
+) -> set[str]:
+    if traci is None:
+        raise RuntimeError("traci가 설치되어 있지 않습니다.")
+    port = free_traci_port()
+    label = f"tls_probe_{seed}_{random.randint(0, 1_000_000)}"
+    traci.start(
+        [
+            sumo_binary(),
+            "-c",
+            str(sumocfg),
+            "--seed",
+            str(seed),
+            "--step-length",
+            str(step_length),
+            "--no-warnings",
+            "--no-step-log",
+        ],
+        port=port,
+        label=label,
+    )
+    try:
+        traci.switch(label)
+        try:
+            traci.simulationStep()
+        except Exception:
+            pass
+        return traci_trafficlight_ids()
+    finally:
+        try:
+            traci.switch(label)
+            traci.close(False)
+        except Exception:
+            pass
+
+
 def compass_direction(origin: tuple[float, float], target: tuple[float, float]) -> str:
     dx = float(target[0]) - float(origin[0])
     dy = float(target[1]) - float(origin[1])
@@ -699,8 +752,8 @@ def derived_summary_metrics(
     }
 
 
-def phase_state(tl_id: str | None, phase_index: int) -> str:
-    if not tl_id:
+def phase_state(tl_id: str | None, phase_index: int, known_tls_ids: set[str] | None = None) -> str:
+    if not is_known_trafficlight(tl_id, known_tls_ids):
         return ""
     try:
         logic = traci.trafficlight.getAllProgramLogics(tl_id)[0]
@@ -733,10 +786,16 @@ def is_vehicle_green_state(state: str, ped_link_indices: list[int]) -> bool:
     return any(ch in {"g", "G"} for ch in state)
 
 
-def tune_phase_duration(tl_id: str | None, phase_index: int, ped_link_indices: list[int], signal_timing: dict[str, float]) -> None:
-    if not tl_id:
+def tune_phase_duration(
+    tl_id: str | None,
+    phase_index: int,
+    ped_link_indices: list[int],
+    signal_timing: dict[str, float],
+    known_tls_ids: set[str] | None = None,
+) -> None:
+    if not is_known_trafficlight(tl_id, known_tls_ids):
         return
-    state = phase_state(tl_id, phase_index)
+    state = phase_state(tl_id, phase_index, known_tls_ids=known_tls_ids)
     if not state:
         return
     if is_ped_green_state(state, ped_link_indices):
@@ -970,6 +1029,8 @@ def run_simulation(
     ts_wait: deque[tuple[float, float]] = deque(maxlen=10000)
     ts_speed: deque[tuple[float, float]] = deque(maxlen=10000)
     surrounding_speed_samples: list[float] = []
+    known_tls_ids: set[str] = set()
+    tls_refresh_countdown = 0
 
     fcd_vehicle_records: list[tuple[float, str, float, float, float, str]] = []
     fcd_person_records: list[tuple[float, str, float, float, float, str]] = []
@@ -983,6 +1044,11 @@ def run_simulation(
             t = float(traci.simulation.getTime())
             rel_t = max(0.0, t - warmup)
             collect = t > warmup
+            if tls_refresh_countdown <= 0:
+                known_tls_ids = traci_trafficlight_ids()
+                tls_refresh_countdown = 10
+            else:
+                tls_refresh_countdown -= 1
 
             # Incident state transitions
             currently_active = active_incidents(incident_events, rel_t)
@@ -1019,8 +1085,14 @@ def run_simulation(
             active_capacity_multiplier = (
                 min(event.capacity_multiplier for event in currently_active) if currently_active else 1.0
             )
-            current_phase = traci.trafficlight.getPhase(tl_id) if tl_id else -1
-            state = phase_state(tl_id, current_phase) if tl_id else ""
+            tl_id_known = tl_id if is_known_trafficlight(tl_id, known_tls_ids) else None
+            try:
+                current_phase = traci.trafficlight.getPhase(tl_id_known) if tl_id_known else -1
+            except Exception:
+                tl_id_known = None
+                current_phase = -1
+                tls_refresh_countdown = 0
+            state = phase_state(tl_id_known, current_phase, known_tls_ids=known_tls_ids) if tl_id_known else ""
             current_phase_is_ped_green = is_ped_green_state(state, ped_link_indices)
             current_phase_is_vehicle_green = is_vehicle_green_state(state, ped_link_indices)
             phase_changed = current_phase != prev_phase
@@ -1041,15 +1113,25 @@ def run_simulation(
                         continue
 
             if phase_changed:
-                tune_phase_duration(tl_id, current_phase, ped_link_indices, signal_timing)
+                tune_phase_duration(
+                    tl_id_known,
+                    current_phase,
+                    ped_link_indices,
+                    signal_timing,
+                    known_tls_ids=known_tls_ids,
+                )
                 if current_phase_is_vehicle_green and not prev_vehicle_green:
                     cycle_count += 1
                     extension_count_in_cycle = 0
                     extended_in_cycle = False
                 prev_phase = current_phase
 
-            if scenario == "smart" and tl_id and current_phase_is_ped_green:
-                next_switch = float(traci.trafficlight.getNextSwitch(tl_id))
+            if scenario == "smart" and tl_id_known and current_phase_is_ped_green:
+                try:
+                    next_switch = float(traci.trafficlight.getNextSwitch(tl_id_known))
+                except Exception:
+                    next_switch = t
+                    tls_refresh_countdown = 0
                 remaining = next_switch - t
                 if (
                     remaining <= signal_params["trigger_remaining"]
@@ -1065,10 +1147,14 @@ def run_simulation(
                             continue
                     detected_peds = ped_on_crossing | ped_on_detectors
                     if detected_peds and random.random() > signal_params["sensor_fn_rate"]:
-                        traci.trafficlight.setPhaseDuration(
-                            tl_id,
-                            remaining + signal_params["extension_increment"],
-                        )
+                        try:
+                            traci.trafficlight.setPhaseDuration(
+                                tl_id_known,
+                                remaining + signal_params["extension_increment"],
+                            )
+                        except Exception:
+                            tls_refresh_countdown = 0
+                            continue
                         extension_count_in_cycle += 1
                         extended_in_cycle = True
                         total_extension_count += 1
@@ -1077,7 +1163,7 @@ def run_simulation(
                             {
                                 "sim_time": t,
                                 "crosswalk_id": str(crosswalk_id),
-                                "tls_id": str(tl_id),
+                                "tls_id": str(tl_id_known),
                                 "phase_index": int(current_phase),
                                 "remaining_before_extension": float(remaining),
                                 "extension_sec": float(signal_params["extension_increment"]),
@@ -1457,6 +1543,882 @@ def run_simulation(
             ET.ElementTree(person_root).write(fcd_person_path, encoding="utf-8", xml_declaration=True)
 
     return metrics, extension_events_log, incident_events_log, incident_impacts, file_exports
+
+
+def run_simulation_integrated(
+    net_file: str | Path,
+    route_file: str | Path,
+    ped_file: str | Path,
+    sumocfg: str | Path,
+    scenario: str,
+    crosswalk_contexts: list[dict[str, Any]],
+    smart_target_ids: set[str],
+    sim_duration: int = 1800,
+    warmup: int = 300,
+    seed: int = 42,
+    traci_step_length: float = 0.1,
+    traffic_measure_radius_m: float = 500.0,
+    extension_increment: float | None = None,
+    max_extensions: int | None = None,
+    vehicle_arrival_rate_per_hour: float | None = VEHICLE_MODEL_PARAMS["arrival_rate_per_hour"],
+    saturation_flow_rate_per_hour: float = float(VEHICLE_MODEL_PARAMS["saturation_flow_rate_per_hour"]),
+    vehicle_num_lanes: int = int(VEHICLE_MODEL_PARAMS["num_lanes"]),
+    vehicle_arrival_model: str = str(VEHICLE_MODEL_PARAMS["arrival_model"]),
+    disruption_scenario: str = "best_case",
+    enable_random_disruptions: bool = False,
+    bus_stop_rate_per_hour: float = DEFAULT_RANDOM_DISRUPTION_RATES["bus_stop"],
+    illegal_parking_rate_per_hour: float = DEFAULT_RANDOM_DISRUPTION_RATES["illegal_parking"],
+    minor_incident_rate_per_hour: float = DEFAULT_RANDOM_DISRUPTION_RATES["minor_incident"],
+    accident_rate_per_hour: float = DEFAULT_RANDOM_DISRUPTION_RATES["accident"],
+    incident_schedule: list[dict[str, Any]] | None = None,
+    model_parameters_path: str | Path | None = None,
+    export_fcd: bool = False,
+    output_dir: str | Path | None = None,
+    vehicle_only: bool = False,
+    sensitivity_config: dict[str, Any] | None = None,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
+    if traci is None:
+        raise RuntimeError("traci가 설치되어 있지 않습니다.")
+    if not crosswalk_contexts:
+        raise ValueError("crosswalk_contexts가 비어 있습니다.")
+
+    random.seed(seed)
+    rng = np.random.default_rng(seed)
+    model_params = apply_parameter_value_overrides(
+        load_model_parameters(model_parameters_path),
+        (sensitivity_config or {}).get("parameter_overrides"),
+    )
+    signal_params = dict(SIGNAL_PARAMS)
+    signal_params["extension_increment"] = float(
+        get_parameter_value(model_params, "extension_increment_sec", SIGNAL_PARAMS["extension_increment"])
+    )
+    signal_params["max_extensions"] = int(
+        get_parameter_value(model_params, "max_extensions", SIGNAL_PARAMS["max_extensions"])
+    )
+    signal_params["trigger_remaining"] = float(
+        get_parameter_value(model_params, "trigger_remaining_sec", SIGNAL_PARAMS["trigger_remaining"])
+    )
+    signal_params["sensor_fn_rate"] = float(
+        get_parameter_value(model_params, "sensor_fn_rate", SIGNAL_PARAMS["sensor_fn_rate"])
+    )
+    if extension_increment is not None:
+        signal_params["extension_increment"] = float(extension_increment)
+    if max_extensions is not None:
+        signal_params["max_extensions"] = int(max_extensions)
+    green_extension_policy = (sensitivity_config or {}).get("green_extension_policy_config", {})
+    if isinstance(green_extension_policy, dict) and green_extension_policy:
+        signal_params["extension_increment"] = float(
+            green_extension_policy.get("extension_increment_sec", signal_params["extension_increment"])
+        )
+        signal_params["max_extensions"] = int(
+            green_extension_policy.get("max_extensions", signal_params["max_extensions"])
+        )
+        signal_params["trigger_remaining"] = float(
+            green_extension_policy.get("trigger_remaining_sec", signal_params["trigger_remaining"])
+        )
+
+    normalized_home = normalized_sumo_home()
+    if normalized_home:
+        os.environ["SUMO_HOME"] = normalized_home
+
+    net = read_net(net_file)
+    context_states: list[dict[str, Any]] = []
+    group_defs: dict[str, dict[str, Any]] = {}
+    union_monitored_lanes: set[str] = set()
+    union_conflict_edges: set[str] = set()
+
+    for context in crosswalk_contexts:
+        crosswalk_id = str(context["crosswalk_id"])
+        signal_timing = compute_signal_timing(context)
+        scope = build_surrounding_scope(net_file, context, traffic_measure_radius_m)
+        monitored_lanes = set(scope["monitored_lanes"])
+        union_monitored_lanes.update(monitored_lanes)
+        union_conflict_edges.update(str(edge_id) for edge_id in context.get("vehicle_conflict_edges", []))
+        ped_detector_edges = {
+            str(context["crossing_edge"]),
+            str(context.get("ped_route", {}).get("from_edge", "")),
+            str(context.get("ped_route", {}).get("to_edge", "")),
+        }
+        ped_detector_edges |= set(str(edge) for edge in context.get("detector_edges", []))
+        ped_detector_edges.discard("")
+        tls_id = str(context.get("tls_id") or "")
+        group = group_defs.setdefault(
+            tls_id,
+            {
+                "tl_id": tls_id,
+                "contexts": [],
+                "ped_link_indices_union": set(),
+                "signal_timing": signal_timing,
+                "prev_phase": None,
+                "prev_phase_was_ped_green": False,
+                "prev_vehicle_green": False,
+                "cycle_count": 0,
+                "extension_count_in_cycle": 0,
+                "extended_in_cycle": False,
+                "total_extension_count": 0,
+                "pedestrian_green_extension_time": 0.0,
+                "target_context_ids": set(),
+            },
+        )
+        group["contexts"].append(crosswalk_id)
+        group["ped_link_indices_union"].update(int(idx) for idx in context.get("ped_link_indices", []))
+        if float(signal_timing["ped_green"]) > float(group["signal_timing"]["ped_green"]):
+            group["signal_timing"] = signal_timing
+        if crosswalk_id in smart_target_ids:
+            group["target_context_ids"].add(crosswalk_id)
+        adjacent_lanes: set[str] = set()
+        adjacent_tls_count = 0
+        context_states.append(
+            {
+                "crosswalk_id": crosswalk_id,
+                "metadata": context,
+                "scope": scope,
+                "signal_timing": signal_timing,
+                "ped_detector_edges": ped_detector_edges,
+                "context_person_first_seen": {},
+                "ped_wait_recorded": set(),
+                "all_seen_pedestrians": set(),
+                "elderly_seen_pedestrians": set(),
+                "ped_crossing_enter_time": {},
+                "pedestrian_crossing_times": [],
+                "pedestrian_wait_times": [],
+                "pet_a_records": [],
+                "pet_b_records": [],
+                "elderly_incomplete": 0,
+                "vehicle_on_conflict_prev": set(),
+                "vehicle_exit_times": deque(maxlen=1000),
+                "queue_lengths": [],
+                "area_vehicle_waits": {},
+                "area_seen_vehicles": set(),
+                "area_active_since": {},
+                "area_entry_count": 0,
+                "area_exit_count": 0,
+                "area_travel_times": [],
+                "area_vehicle_time_sec": 0.0,
+                "total_vehicle_wait_exposure": 0.0,
+                "surrounding_queue_totals": [],
+                "direction_queue_totals": {direction: [] for direction in COMPASS_DIRECTIONS},
+                "adjacent_lanes": adjacent_lanes,
+                "adjacent_tls_count": adjacent_tls_count,
+                "adjacent_tls_queue_totals": [],
+                "surrounding_speed_samples": [],
+                "spillback_steps": 0,
+                "measure_steps": 0,
+                "local_extension_count": 0,
+                "local_extension_time": 0.0,
+            }
+        )
+
+    if incident_schedule:
+        incident_events = parse_incident_schedule(incident_schedule)
+    else:
+        incident_events = generate_incident_schedule(
+            disruption_scenario,
+            sim_duration,
+            seed,
+            {
+                "approach_lanes": sorted(union_monitored_lanes),
+                "vehicle_conflict_edges": sorted(union_conflict_edges),
+            },
+            sorted(union_monitored_lanes),
+            model_params,
+            enable_random_disruptions,
+            bus_stop_rate_per_hour,
+            illegal_parking_rate_per_hour,
+            minor_incident_rate_per_hour,
+            accident_rate_per_hour,
+        )
+
+    traci_port = free_traci_port()
+    traci_label = f"integrated_{scenario}_{seed}_{random.randint(0, 1_000_000)}"
+    traci.start(
+        [
+            sumo_binary(),
+            "-c",
+            str(sumocfg),
+            "--seed",
+            str(seed),
+            "--step-length",
+            str(traci_step_length),
+            "--time-to-teleport",
+            "300",
+            "--no-warnings",
+            "--no-step-log",
+        ],
+        port=traci_port,
+        label=traci_label,
+    )
+    traci.switch(traci_label)
+
+    lane_original_states: dict[str, LaneState] = {}
+    active_event_ids: set[str] = set()
+    disruption_active_time = 0.0
+    cumulative_capacity_multiplier = 0.0
+    cumulative_effective_capacity = 0.0
+    lost_capacity_time = 0.0
+    capacity_loss_due_to_disruptions = 0.0
+    event_type_counts = Counter(event.event_type for event in incident_events)
+    event_type_total_durations = Counter()
+    for event in incident_events:
+        event_type_total_durations[event.event_type] += float(max(0.0, event.end_time - event.start_time))
+
+    extension_events_log: list[dict[str, Any]] = []
+    incident_impacts: list[dict[str, Any]] = []
+    incident_events_log = [
+        serialize_incident_event(event, "integrated_selected", seed, "shared")
+        for event in incident_events
+    ]
+    ts_queue: deque[tuple[float, float]] = deque(maxlen=10000)
+    ts_wait: deque[tuple[float, float]] = deque(maxlen=10000)
+    ts_speed: deque[tuple[float, float]] = deque(maxlen=10000)
+
+    network_arrival_count = 0
+    network_first_seen: dict[str, float] = {}
+    network_travel_times: list[float] = []
+    network_delay_step_means: list[float] = []
+    network_queue_counts: list[int] = []
+    network_speed_means: list[float] = []
+    network_spillback_steps = 0
+    network_measure_steps = 0
+    teleported_vehicle_count = 0
+    known_tls_ids: set[str] = set()
+    tls_refresh_countdown = 0
+
+    fcd_vehicle_records: list[tuple[float, str, float, float, float, str]] = []
+    fcd_person_records: list[tuple[float, str, float, float, float, str]] = []
+    lane_data_records: list[tuple[float, str, int, float]] = []
+    edge_data_records: list[tuple[float, str, int, float]] = []
+
+    try:
+        for state in context_states:
+            adjacent_lanes, adjacent_tls_count = adjacent_tls_lanes(
+                state["metadata"].get("tls_id"),
+                set(state["scope"]["monitored_lanes"]),
+            )
+            state["adjacent_lanes"] = adjacent_lanes
+            state["adjacent_tls_count"] = adjacent_tls_count
+
+        end_time = warmup + sim_duration
+        while traci.simulation.getTime() < end_time:
+            traci.simulationStep()
+            t = float(traci.simulation.getTime())
+            rel_t = max(0.0, t - warmup)
+            collect = t > warmup
+            if tls_refresh_countdown <= 0:
+                known_tls_ids = traci_trafficlight_ids()
+                tls_refresh_countdown = 10
+            else:
+                tls_refresh_countdown -= 1
+
+            currently_active = active_incidents(incident_events, rel_t)
+            current_ids = {event.incident_id for event in currently_active}
+            for event in currently_active:
+                if event.incident_id not in active_event_ids:
+                    apply_incident(event, lane_original_states)
+            for event in incident_events:
+                if event.incident_id in active_event_ids and event.incident_id not in current_ids:
+                    restore_incident(event, lane_original_states)
+                    before_vals = [v for tt, v in ts_queue if event.start_time - 60 <= tt < event.start_time]
+                    after_vals = [v for tt, v in ts_queue if event.end_time <= tt <= event.end_time + 60]
+                    before_wait = [v for tt, v in ts_wait if event.start_time - 60 <= tt < event.start_time]
+                    after_wait = [v for tt, v in ts_wait if event.end_time <= tt <= event.end_time + 60]
+                    before_spd = [v for tt, v in ts_speed if event.start_time - 60 <= tt < event.start_time]
+                    after_spd = [v for tt, v in ts_speed if event.end_time <= tt <= event.end_time + 60]
+                    incident_impacts.append(
+                        {
+                            "incident_id": event.incident_id,
+                            "crosswalk_id": "integrated_selected",
+                            "seed": seed,
+                            "scenario": scenario,
+                            "event_type": event.event_type,
+                            "before_queue_avg": float(np.nanmean(before_vals)) if before_vals else 0.0,
+                            "after_queue_avg": float(np.nanmean(after_vals)) if after_vals else 0.0,
+                            "before_wait_avg_sec": float(np.nanmean(before_wait)) if before_wait else 0.0,
+                            "after_wait_avg_sec": float(np.nanmean(after_wait)) if after_wait else 0.0,
+                            "before_speed_avg_mps": float(np.nanmean(before_spd)) if before_spd else 0.0,
+                            "after_speed_avg_mps": float(np.nanmean(after_spd)) if after_spd else 0.0,
+                        }
+                    )
+            active_event_ids = current_ids
+
+            active_capacity_multiplier = (
+                min(event.capacity_multiplier for event in currently_active) if currently_active else 1.0
+            )
+            if currently_active:
+                disruption_active_time += traci_step_length
+            cumulative_capacity_multiplier += active_capacity_multiplier
+            cumulative_effective_capacity += active_capacity_multiplier
+            lost_capacity_time += (1.0 - active_capacity_multiplier) * traci_step_length
+            capacity_loss_due_to_disruptions += (1.0 - active_capacity_multiplier)
+
+            current_vehicle_ids = set(traci.vehicle.getIDList())
+            arrived_ids = set(traci.simulation.getArrivedIDList())
+            try:
+                teleported_vehicle_count += len(set(traci.simulation.getStartingTeleportIDList()))
+            except Exception:
+                pass
+            if collect:
+                network_measure_steps += 1
+                network_arrival_count += len(arrived_ids)
+            for veh_id in arrived_ids:
+                first_seen = network_first_seen.pop(veh_id, None)
+                if first_seen is not None:
+                    network_travel_times.append(max(0.0, t - first_seen))
+            for veh_id in current_vehicle_ids:
+                network_first_seen.setdefault(veh_id, t)
+
+            vehicle_info: dict[str, dict[str, Any]] = {}
+            all_vehicle_speeds: list[float] = []
+            for veh_id in current_vehicle_ids:
+                try:
+                    lane_id = traci.vehicle.getLaneID(veh_id)
+                    road_id = traci.vehicle.getRoadID(veh_id)
+                    speed = float(traci.vehicle.getSpeed(veh_id))
+                    accumulated_wait = float(traci.vehicle.getAccumulatedWaitingTime(veh_id))
+                    vehicle_info[veh_id] = {
+                        "lane_id": lane_id,
+                        "road_id": road_id,
+                        "speed": speed,
+                        "accumulated_wait": accumulated_wait,
+                    }
+                    all_vehicle_speeds.append(speed)
+                except Exception:
+                    continue
+
+            if collect:
+                avg_wait = float(
+                    np.nanmean([info["accumulated_wait"] for info in vehicle_info.values()])
+                ) if vehicle_info else 0.0
+                network_delay_step_means.append(avg_wait)
+                network_queue_counts.append(
+                    int(sum(1 for info in vehicle_info.values() if float(info["speed"]) < 0.1))
+                )
+                avg_speed = float(np.nanmean(all_vehicle_speeds)) if all_vehicle_speeds else 0.0
+                network_speed_means.append(avg_speed)
+                ts_queue.append((rel_t, float(network_queue_counts[-1])))
+                ts_wait.append((rel_t, avg_wait))
+                ts_speed.append((rel_t, avg_speed))
+
+            union_lane_ids = sorted(
+                {
+                    lane_id
+                    for state in context_states
+                    for lane_id in state["scope"]["monitored_lanes"]
+                }
+            )
+            lane_halting: dict[str, int] = {}
+            lane_occupancy: dict[str, float] = {}
+            lane_speeds: dict[str, float] = {}
+            if collect:
+                for lane_id in union_lane_ids:
+                    try:
+                        halted = int(traci.lane.getLastStepHaltingNumber(lane_id))
+                        lane_halting[lane_id] = halted
+                        lane_occupancy[lane_id] = float(traci.lane.getLastStepOccupancy(lane_id))
+                        lane_speeds[lane_id] = float(traci.lane.getLastStepMeanSpeed(lane_id))
+                        lane_data_records.append((rel_t, lane_id, halted, lane_speeds[lane_id]))
+                    except Exception:
+                        continue
+                edge_queue: dict[str, int] = {}
+                edge_speed_sum: dict[str, float] = {}
+                edge_speed_cnt: dict[str, int] = {}
+                for state in context_states:
+                    for lane_id in state["scope"]["monitored_lanes"]:
+                        if lane_id not in lane_halting:
+                            continue
+                        edge_id = state["scope"]["lane_to_edge"].get(lane_id, lane_id.rsplit("_", 1)[0])
+                        edge_queue[edge_id] = edge_queue.get(edge_id, 0) + lane_halting[lane_id]
+                        edge_speed_sum[edge_id] = edge_speed_sum.get(edge_id, 0.0) + lane_speeds.get(lane_id, 0.0)
+                        edge_speed_cnt[edge_id] = edge_speed_cnt.get(edge_id, 0) + 1
+                for edge_id, queue in edge_queue.items():
+                    mean_sp = edge_speed_sum.get(edge_id, 0.0) / max(1, edge_speed_cnt.get(edge_id, 1))
+                    edge_data_records.append((rel_t, edge_id, queue, mean_sp))
+
+            for group in group_defs.values():
+                raw_tl_id = group["tl_id"] or None
+                tl_id = raw_tl_id if is_known_trafficlight(raw_tl_id, known_tls_ids) else None
+                try:
+                    current_phase = traci.trafficlight.getPhase(tl_id) if tl_id else -1
+                except Exception:
+                    tl_id = None
+                    current_phase = -1
+                    tls_refresh_countdown = 0
+                state_str = phase_state(tl_id, current_phase, known_tls_ids=known_tls_ids) if tl_id else ""
+                ped_link_indices_union = sorted(group["ped_link_indices_union"])
+                current_phase_is_ped_green = is_ped_green_state(state_str, ped_link_indices_union)
+                current_phase_is_vehicle_green = is_vehicle_green_state(state_str, ped_link_indices_union)
+                phase_changed = current_phase != group["prev_phase"]
+
+                if collect and phase_changed and group["prev_phase_was_ped_green"] and not current_phase_is_ped_green:
+                    for context_state in context_states:
+                        if context_state["crosswalk_id"] not in group["contexts"]:
+                            continue
+                        crossing_edge = str(context_state["metadata"]["crossing_edge"])
+                        for ped_id in traci.edge.getLastStepPersonIDs(crossing_edge):
+                            try:
+                                pos = float(traci.person.getLanePosition(ped_id))
+                                speed = float(traci.person.getSpeed(ped_id))
+                                if speed <= 0:
+                                    speed = 0.5
+                                remaining_dist = max(
+                                    0.0,
+                                    float(context_state["metadata"]["crossing_length_m"]) - pos,
+                                )
+                                time_to_clear = remaining_dist / speed
+                                context_state["pet_b_records"].append(
+                                    signal_params["all_red_time"] - time_to_clear
+                                )
+                                if "elderly" in traci.person.getTypeID(ped_id):
+                                    context_state["elderly_incomplete"] += 1
+                            except Exception:
+                                continue
+
+                if phase_changed:
+                    tune_phase_duration(
+                        tl_id,
+                        current_phase,
+                        ped_link_indices_union,
+                        group["signal_timing"],
+                        known_tls_ids=known_tls_ids,
+                    )
+                    if current_phase_is_vehicle_green and not group["prev_vehicle_green"]:
+                        group["cycle_count"] += 1
+                        group["extension_count_in_cycle"] = 0
+                        group["extended_in_cycle"] = False
+                    group["prev_phase"] = current_phase
+
+                if (
+                    scenario == "smart_selected"
+                    and tl_id
+                    and current_phase_is_ped_green
+                    and group["target_context_ids"]
+                ):
+                    try:
+                        next_switch = float(traci.trafficlight.getNextSwitch(tl_id))
+                    except Exception:
+                        tls_refresh_countdown = 0
+                        continue
+                    remaining = next_switch - t
+                    if (
+                        remaining <= signal_params["trigger_remaining"]
+                        and group["extension_count_in_cycle"] < signal_params["max_extensions"]
+                        and not group["extended_in_cycle"]
+                    ):
+                        triggered_context_ids: list[str] = []
+                        ped_on_crossing_total = 0
+                        for context_state in context_states:
+                            crosswalk_id = context_state["crosswalk_id"]
+                            if crosswalk_id not in group["target_context_ids"]:
+                                continue
+                            if crosswalk_id not in smart_target_ids:
+                                continue
+                            ped_link_indices = [int(idx) for idx in context_state["metadata"].get("ped_link_indices", [])]
+                            if not is_ped_green_state(state_str, ped_link_indices):
+                                continue
+                            crossing_edge = str(context_state["metadata"]["crossing_edge"])
+                            ped_on_crossing = set(traci.edge.getLastStepPersonIDs(crossing_edge))
+                            ped_on_detectors = set()
+                            for edge_id in context_state["ped_detector_edges"]:
+                                try:
+                                    ped_on_detectors.update(traci.edge.getLastStepPersonIDs(edge_id))
+                                except Exception:
+                                    continue
+                            detected_peds = ped_on_crossing | ped_on_detectors
+                            if detected_peds:
+                                triggered_context_ids.append(crosswalk_id)
+                                ped_on_crossing_total += len(ped_on_crossing)
+                        if triggered_context_ids and random.random() > signal_params["sensor_fn_rate"]:
+                            try:
+                                traci.trafficlight.setPhaseDuration(
+                                    tl_id,
+                                    remaining + signal_params["extension_increment"],
+                                )
+                            except Exception:
+                                tls_refresh_countdown = 0
+                                continue
+                            group["extension_count_in_cycle"] += 1
+                            group["extended_in_cycle"] = True
+                            group["total_extension_count"] += 1
+                            group["pedestrian_green_extension_time"] += signal_params["extension_increment"]
+                            extension_events_log.append(
+                                {
+                                    "sim_time": t,
+                                    "crosswalk_id": "|".join(triggered_context_ids),
+                                    "crosswalk_ids": json.dumps(triggered_context_ids, ensure_ascii=False),
+                                    "tls_id": str(tl_id),
+                                    "phase_index": int(current_phase),
+                                    "remaining_before_extension": float(remaining),
+                                    "extension_sec": float(signal_params["extension_increment"]),
+                                    "ped_count_on_crossing": int(ped_on_crossing_total),
+                                    "seed": int(seed),
+                                    "scenario": scenario,
+                                }
+                            )
+                            for context_state in context_states:
+                                if context_state["crosswalk_id"] in triggered_context_ids:
+                                    context_state["local_extension_count"] += 1
+                                    context_state["local_extension_time"] += signal_params["extension_increment"]
+
+                group["prev_phase_was_ped_green"] = current_phase_is_ped_green
+                group["prev_vehicle_green"] = current_phase_is_vehicle_green
+
+            if collect:
+                any_spillback_now = False
+                current_person_ids = set(traci.person.getIDList())
+                if export_fcd:
+                    for veh_id, info in vehicle_info.items():
+                        try:
+                            x, y = traci.vehicle.getPosition(veh_id)
+                            fcd_vehicle_records.append(
+                                (rel_t, veh_id, float(x), float(y), float(info["speed"]), str(info["road_id"]))
+                            )
+                        except Exception:
+                            continue
+                    for person_id in current_person_ids:
+                        try:
+                            x, y = traci.person.getPosition(person_id)
+                            fcd_person_records.append(
+                                (
+                                    rel_t,
+                                    person_id,
+                                    float(x),
+                                    float(y),
+                                    float(traci.person.getSpeed(person_id)),
+                                    traci.person.getRoadID(person_id),
+                                )
+                            )
+                        except Exception:
+                            continue
+
+                for context_state in context_states:
+                    context_state["measure_steps"] += 1
+                    metadata = context_state["metadata"]
+                    crossing_edge = str(metadata["crossing_edge"])
+                    current_vehicle_conflict = {
+                        veh_id
+                        for veh_id, info in vehicle_info.items()
+                        if str(info["road_id"]) in set(str(edge) for edge in metadata.get("vehicle_conflict_edges", []))
+                    }
+                    for veh_id in context_state["vehicle_on_conflict_prev"] - current_vehicle_conflict:
+                        context_state["vehicle_exit_times"].append(t)
+                    context_state["vehicle_on_conflict_prev"] = current_vehicle_conflict
+
+                    peds_on_crossing = set(traci.edge.getLastStepPersonIDs(crossing_edge))
+                    detector_peds = set()
+                    for edge_id in context_state["ped_detector_edges"]:
+                        try:
+                            detector_peds.update(traci.edge.getLastStepPersonIDs(edge_id))
+                        except Exception:
+                            continue
+                    observed_peds = peds_on_crossing | detector_peds
+                    for ped_id in observed_peds:
+                        context_state["context_person_first_seen"].setdefault(ped_id, t)
+                        context_state["all_seen_pedestrians"].add(ped_id)
+                        try:
+                            if traci.person.getTypeID(ped_id) == "elderly":
+                                context_state["elderly_seen_pedestrians"].add(ped_id)
+                        except Exception:
+                            continue
+                    for ped_id in peds_on_crossing:
+                        if ped_id not in context_state["ped_wait_recorded"]:
+                            context_state["pedestrian_wait_times"].append(
+                                max(0.0, t - context_state["context_person_first_seen"].get(ped_id, t))
+                            )
+                            context_state["ped_wait_recorded"].add(ped_id)
+                        context_state["ped_crossing_enter_time"].setdefault(ped_id, t)
+                    for ped_id in list(context_state["ped_crossing_enter_time"]):
+                        if ped_id not in peds_on_crossing:
+                            context_state["pedestrian_crossing_times"].append(
+                                max(0.0, t - context_state["ped_crossing_enter_time"].pop(ped_id))
+                            )
+                    prev_entered = set(context_state.setdefault("ped_entered_crossing", set()))
+                    for ped_id in peds_on_crossing - prev_entered:
+                        candidates = [
+                            vt
+                            for vt in recent_values(context_state["vehicle_exit_times"], t, 30.0)
+                            if vt <= t
+                        ]
+                        if candidates:
+                            context_state["pet_a_records"].append(t - max(candidates))
+                    context_state["ped_entered_crossing"] = prev_entered | peds_on_crossing
+
+                    current_area_vehicles = set()
+                    area_wait_sum = 0.0
+                    for veh_id, info in vehicle_info.items():
+                        lane_id = str(info["lane_id"])
+                        if lane_id in set(context_state["scope"]["monitored_lanes"]):
+                            current_area_vehicles.add(veh_id)
+                            context_state["area_seen_vehicles"].add(veh_id)
+                            context_state["area_vehicle_waits"][veh_id] = float(info["accumulated_wait"])
+                            area_wait_sum += float(info["accumulated_wait"])
+                            if veh_id not in context_state["area_active_since"]:
+                                context_state["area_active_since"][veh_id] = t
+                                context_state["area_entry_count"] += 1
+                    for veh_id in list(context_state["area_active_since"]):
+                        if veh_id not in current_area_vehicles:
+                            context_state["area_travel_times"].append(
+                                max(0.0, t - context_state["area_active_since"].pop(veh_id))
+                            )
+                            context_state["area_exit_count"] += 1
+                    context_state["area_vehicle_time_sec"] += len(current_area_vehicles) * traci_step_length
+                    context_state["total_vehicle_wait_exposure"] += area_wait_sum * traci_step_length
+
+                    surrounding_queue_total = sum(
+                        lane_halting.get(lane_id, 0)
+                        for lane_id in context_state["scope"]["monitored_lanes"]
+                    )
+                    context_state["surrounding_queue_totals"].append(surrounding_queue_total)
+                    context_state["surrounding_speed_samples"].append(
+                        float(
+                            np.nanmean(
+                                [
+                                    lane_speeds.get(lane_id, np.nan)
+                                    for lane_id in context_state["scope"]["monitored_lanes"]
+                                    if lane_id in lane_speeds
+                                ]
+                            )
+                        )
+                        if context_state["scope"]["monitored_lanes"]
+                        else 0.0
+                    )
+                    for direction, lanes in context_state["scope"]["direction_lanes"].items():
+                        context_state["direction_queue_totals"][direction].append(
+                            sum(lane_halting.get(lane_id, 0) for lane_id in lanes)
+                        )
+                    context_state["adjacent_tls_queue_totals"].append(
+                        sum(lane_halting.get(lane_id, 0) for lane_id in context_state["adjacent_lanes"])
+                    )
+                    spillback_now = False
+                    for lane_id in context_state["scope"]["boundary_lanes"]:
+                        halted = lane_halting.get(lane_id, 0)
+                        occupancy = lane_occupancy.get(lane_id, 0.0)
+                        capacity = max(1, int(context_state["scope"]["lane_capacities"].get(lane_id, 1)))
+                        if halted >= max(1, int(capacity * 0.8)) or occupancy >= 85.0:
+                            spillback_now = True
+                            break
+                    if spillback_now:
+                        context_state["spillback_steps"] += 1
+                        any_spillback_now = True
+                    for lane_id in metadata.get("approach_lanes", []):
+                        context_state["queue_lengths"].append(lane_halting.get(str(lane_id), 0))
+                if any_spillback_now:
+                    network_spillback_steps += 1
+    finally:
+        for event in incident_events:
+            if event.incident_id in active_event_ids:
+                restore_incident(event, lane_original_states)
+        try:
+            traci.switch(traci_label)
+            traci.close(False)
+        except Exception:
+            pass
+
+    per_crosswalk_metrics: list[dict[str, Any]] = []
+    total_extension_count = 0
+    total_extension_sec = 0.0
+    for context_state in context_states:
+        for enter_time in context_state["ped_crossing_enter_time"].values():
+            context_state["pedestrian_crossing_times"].append(max(0.0, float(warmup + sim_duration) - float(enter_time)))
+        vehicle_queue_length = int(context_state["queue_lengths"][-1]) if context_state["queue_lengths"] else 0
+        vehicle_departures = int(context_state["area_exit_count"])
+        vehicle_arrivals = int(context_state["area_entry_count"])
+        cycle_count = 0
+        metadata = context_state["metadata"]
+        tl_id = str(metadata.get("tls_id") or "")
+        if tl_id in group_defs:
+            cycle_count = int(group_defs[tl_id]["cycle_count"])
+        metrics = aggregate_metrics(
+            context_state["pet_a_records"],
+            context_state["pet_b_records"],
+            int(context_state["elderly_incomplete"]),
+            len(context_state["all_seen_pedestrians"]),
+            len(context_state["elderly_seen_pedestrians"]),
+            context_state["pedestrian_crossing_times"],
+            context_state["area_vehicle_waits"],
+            context_state["queue_lengths"],
+            context_state["pedestrian_wait_times"],
+            {
+                "vehicle_queue_length": vehicle_queue_length,
+                "total_vehicle_delay": float(context_state["total_vehicle_wait_exposure"]),
+                "vehicle_arrivals": vehicle_arrivals,
+                "vehicle_departures": vehicle_departures,
+                "max_vehicle_queue_length": max(context_state["queue_lengths"]) if context_state["queue_lengths"] else 0,
+                "cumulative_vehicle_queue_length": float(sum(context_state["queue_lengths"])),
+                "pedestrian_green_extension_time": float(context_state["local_extension_time"]),
+                "pedestrian_green_extension_count": int(context_state["local_extension_count"]),
+                "cycle_count": cycle_count,
+                "disruption_event_count": len(incident_events),
+                "total_disruption_duration": float(sum(max(0.0, e.end_time - e.start_time) for e in incident_events)),
+                "disruption_time_ratio": (disruption_active_time / sim_duration if sim_duration else 0.0),
+                "average_capacity_multiplier": (
+                    cumulative_capacity_multiplier / max(network_measure_steps, 1)
+                ),
+                "average_effective_capacity": (
+                    cumulative_effective_capacity / max(network_measure_steps, 1)
+                ),
+                "lost_capacity_time": lost_capacity_time,
+                "capacity_loss_due_to_disruptions": capacity_loss_due_to_disruptions,
+                "event_type_counts": json.dumps(dict(sorted(event_type_counts.items())), ensure_ascii=False),
+                "event_type_total_durations": json.dumps(
+                    {key: float(value) for key, value in sorted(event_type_total_durations.items())},
+                    ensure_ascii=False,
+                ),
+            },
+            context_state["measure_steps"],
+            sim_duration,
+        )
+        metrics.update(
+            surrounding_metrics(
+                context_state["scope"],
+                context_state["area_vehicle_waits"],
+                context_state["area_seen_vehicles"],
+                context_state["area_entry_count"],
+                context_state["area_exit_count"],
+                context_state["area_travel_times"],
+                context_state["area_vehicle_time_sec"],
+                context_state["surrounding_queue_totals"],
+                context_state["direction_queue_totals"],
+                context_state["adjacent_tls_count"],
+                context_state["adjacent_tls_queue_totals"],
+                network_arrival_count,
+                network_travel_times,
+                context_state["surrounding_speed_samples"],
+                context_state["spillback_steps"],
+                context_state["measure_steps"],
+                sim_duration,
+            )
+        )
+        metrics.update(derived_summary_metrics(metrics, model_params, sensitivity_config))
+        metrics["signal_extension_increment_sec"] = float(signal_params["extension_increment"])
+        metrics["signal_max_extensions"] = int(signal_params["max_extensions"])
+        metrics["vehicle_arrival_model"] = vehicle_arrival_model
+        metrics["disruption_scenario"] = disruption_scenario
+        per_crosswalk_metrics.append({"crosswalk_id": context_state["crosswalk_id"], **metrics})
+        total_extension_count += int(context_state["local_extension_count"])
+        total_extension_sec += float(context_state["local_extension_time"])
+
+    total_safety_risk = float(np.nansum([row.get("safety_risk_score", 0.0) for row in per_crosswalk_metrics]))
+    total_elderly_incomplete = float(np.nansum([row.get("elderly_incomplete_crossings", 0.0) for row in per_crosswalk_metrics]))
+    network_metrics = {
+        "scenario_group": "integrated_network",
+        "scenario": scenario,
+        "seed": int(seed),
+        "safety_risk_score": total_safety_risk,
+        "accident_expected_value": float(np.nansum([row.get("accident_expected_value", 0.0) for row in per_crosswalk_metrics])),
+        "elderly_incomplete_crossings": total_elderly_incomplete,
+        "avg_vehicle_delay_sec": float(np.nanmean(network_delay_step_means)) if network_delay_step_means else 0.0,
+        "avg_queue_length": float(np.nanmean(network_queue_counts)) if network_queue_counts else 0.0,
+        "max_queue_length": float(np.nanmax(network_queue_counts)) if network_queue_counts else 0.0,
+        "surrounding_road_delay_sec": float(np.nanmean(network_delay_step_means)) if network_delay_step_means else 0.0,
+        "vehicle_delay_cost": float(
+            (float(np.nansum(network_delay_step_means)) / 3600.0)
+            * float(get_parameter_value(model_params, "delay_cost_per_hour", 15000.0))
+        ),
+        "extension_count": float(total_extension_count),
+        "total_extension_sec": float(total_extension_sec),
+        "network_arrived_vehicles": int(network_arrival_count),
+        "network_avg_travel_time_sec": float(np.nanmean(network_travel_times)) if network_travel_times else 0.0,
+        "network_avg_speed_mps": float(np.nanmean(network_speed_means)) if network_speed_means else 0.0,
+        "network_teleported_vehicles": int(teleported_vehicle_count),
+        "network_spillback_rate": float(network_spillback_steps / max(network_measure_steps, 1)),
+        "network_spillback_step_count": int(network_spillback_steps),
+        "selected_crosswalk_count": int(len(crosswalk_contexts)),
+    }
+
+    file_exports: dict[str, Any] = {}
+    if output_dir:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        edge_data_path = out_dir / f"edge_data_{scenario}_seed{seed}.xml"
+        lane_data_path = out_dir / f"lane_data_{scenario}_seed{seed}.xml"
+        file_exports["edge_data_path"] = str(edge_data_path)
+        file_exports["lane_data_path"] = str(lane_data_path)
+
+        edge_root = ET.Element("edgeData")
+        for t, edge_id, queue, speed in edge_data_records:
+            ET.SubElement(
+                edge_root,
+                "edge",
+                {
+                    "time": f"{t:.2f}",
+                    "id": edge_id,
+                    "queue": str(queue),
+                    "meanSpeed": f"{speed:.4f}",
+                },
+            )
+        ET.indent(edge_root, space="  ")
+        ET.ElementTree(edge_root).write(edge_data_path, encoding="utf-8", xml_declaration=True)
+
+        lane_root = ET.Element("laneData")
+        for t, lane_id, queue, speed in lane_data_records:
+            ET.SubElement(
+                lane_root,
+                "lane",
+                {
+                    "time": f"{t:.2f}",
+                    "id": lane_id,
+                    "queue": str(queue),
+                    "meanSpeed": f"{speed:.4f}",
+                },
+            )
+        ET.indent(lane_root, space="  ")
+        ET.ElementTree(lane_root).write(lane_data_path, encoding="utf-8", xml_declaration=True)
+
+        if export_fcd:
+            fcd_vehicle_path = out_dir / f"fcd_vehicle_{scenario}_seed{seed}.xml"
+            fcd_person_path = out_dir / f"fcd_person_{scenario}_seed{seed}.xml"
+            file_exports["fcd_vehicle_path"] = str(fcd_vehicle_path)
+            file_exports["fcd_person_path"] = str(fcd_person_path)
+
+            veh_root = ET.Element("fcd-export")
+            for t, veh_id, x, y, speed, road in fcd_vehicle_records:
+                timestep = ET.SubElement(veh_root, "timestep", {"time": f"{t:.2f}"})
+                ET.SubElement(
+                    timestep,
+                    "vehicle",
+                    {
+                        "id": veh_id,
+                        "x": f"{x:.3f}",
+                        "y": f"{y:.3f}",
+                        "speed": f"{speed:.3f}",
+                        "edge": road,
+                    },
+                )
+            ET.indent(veh_root, space="  ")
+            ET.ElementTree(veh_root).write(fcd_vehicle_path, encoding="utf-8", xml_declaration=True)
+
+            person_root = ET.Element("fcd-export")
+            for t, person_id, x, y, speed, road in fcd_person_records:
+                timestep = ET.SubElement(person_root, "timestep", {"time": f"{t:.2f}"})
+                ET.SubElement(
+                    timestep,
+                    "person",
+                    {
+                        "id": person_id,
+                        "x": f"{x:.3f}",
+                        "y": f"{y:.3f}",
+                        "speed": f"{speed:.3f}",
+                        "edge": road,
+                    },
+                )
+            ET.indent(person_root, space="  ")
+            ET.ElementTree(person_root).write(fcd_person_path, encoding="utf-8", xml_declaration=True)
+
+    return (
+        per_crosswalk_metrics,
+        network_metrics,
+        extension_events_log,
+        incident_events_log,
+        incident_impacts,
+        file_exports,
+    )
 
 
 def compute_signal_timing(row: Any) -> dict[str, float]:

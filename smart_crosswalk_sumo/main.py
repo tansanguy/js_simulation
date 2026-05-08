@@ -7,8 +7,12 @@ from pathlib import Path
 
 try:
     from .model_config import load_model_parameters as load_model_parameters_file
+    from .mpl_runtime import ensure_matplotlib_env
 except ImportError:
     from model_config import load_model_parameters as load_model_parameters_file
+    from mpl_runtime import ensure_matplotlib_env
+
+ensure_matplotlib_env()
 
 try:
     from .build_networks import build_all_networks
@@ -16,6 +20,15 @@ try:
     from .collect_metrics import collect_all
     from .generate_demand import generate_for_candidates
     from .generate_reports import generate_all_reports
+    from .integrated_mode import (
+        build_integrated_network_manifest,
+        collect_integrated_metrics,
+        generate_integrated_demand,
+        generate_integrated_reports,
+        select_smart_crosswalks,
+        check_valid_smart_crosswalks,
+    )
+    from .implementation_diagnostics import generate_implementation_diagnostics
     from .model_config import dump_parameter_table
     from .preprocess import preprocess_inputs
     from .visualization_exports import export_visual_assets
@@ -25,6 +38,15 @@ except ImportError:
     from collect_metrics import collect_all
     from generate_demand import generate_for_candidates
     from generate_reports import generate_all_reports
+    from integrated_mode import (
+        build_integrated_network_manifest,
+        collect_integrated_metrics,
+        generate_integrated_demand,
+        generate_integrated_reports,
+        select_smart_crosswalks,
+        check_valid_smart_crosswalks,
+    )
+    from implementation_diagnostics import generate_implementation_diagnostics
     from model_config import dump_parameter_table
     from preprocess import preprocess_inputs
     from visualization_exports import export_visual_assets
@@ -72,6 +94,134 @@ def run_pipeline(args: argparse.Namespace) -> None:
     write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
     print(f"Result run directory: {run_dir}")
     assumptions_path = getattr(args, "model_assumptions", None) or getattr(args, "model_parameters", None)
+    simulation_mode = getattr(args, "simulation_mode", "per_candidate")
+
+    if (
+        getattr(args, "generate_implementation_diagnostics", False)
+        and not getattr(args, "list_valid_smart_crosswalks", False)
+    ):
+        check_valid_smart_crosswalks(
+            t2_path=args.t2,
+            output_dir=output_dir,
+            admin_polygon_path=getattr(args, "admin_polygon_path", DEFAULT_JUNGGU_ADMIN_POLYGON_PATH),
+            nets_dir=nets_dir,
+            max_match_distance_m=getattr(args, "max_match_distance_m", 50.0),
+            require_tls=getattr(args, "require_tls", True),
+            num_valid_crosswalks=getattr(args, "num_valid_crosswalks", 30),
+            buffer_m=getattr(args, "buffer_m", 1000.0),
+            corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
+            network_mode=getattr(args, "network_mode", "expanded"),
+        )
+        generate_implementation_diagnostics(output_dir, nets_dir)
+        if getattr(args, "implementation_diagnostics_only", False):
+            return
+
+    if getattr(args, "list_valid_smart_crosswalks", False):
+        print("유효한 스마트 횡단보도 후보 목록을 생성합니다...")
+        check_valid_smart_crosswalks(
+            t2_path=args.t2,
+            output_dir=output_dir,
+            admin_polygon_path=getattr(args, "admin_polygon_path", DEFAULT_JUNGGU_ADMIN_POLYGON_PATH),
+            nets_dir=nets_dir,
+            max_match_distance_m=getattr(args, "max_match_distance_m", 50.0),
+            require_tls=getattr(args, "require_tls", True),
+            num_valid_crosswalks=getattr(args, "num_valid_crosswalks", 30),
+            buffer_m=getattr(args, "buffer_m", 1000.0),
+            corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
+            network_mode=getattr(args, "network_mode", "expanded"),
+        )
+        if getattr(args, "generate_implementation_diagnostics", False):
+            generate_implementation_diagnostics(output_dir, nets_dir)
+        return
+
+    if simulation_mode == "integrated_selected":
+        smart_crosswalk_ids = list(getattr(args, "smart_crosswalk_ids", None) or [])
+        if not smart_crosswalk_ids:
+            raise ValueError("--simulation_mode integrated_selected 에서는 --smart_crosswalk_ids가 필요합니다.")
+        selected = select_smart_crosswalks(
+            args.t2,
+            smart_crosswalk_ids,
+            output_dir,
+            getattr(args, "admin_polygon_path", None),
+        )
+        if args.preprocess_only:
+            return
+        manifest_path = Path(nets_dir) / "integrated_selected" / "smart_crosswalk_manifest.json"
+        if not args.skip_networks:
+            manifest_path, _, manifest_df = build_integrated_network_manifest(
+                selected,
+                nets_dir,
+                output_dir,
+                force=args.force_networks,
+                admin_polygon_path=getattr(args, "admin_polygon_path", None),
+                buffer_m=getattr(args, "buffer_m", 1000.0),
+                corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
+                network_mode=getattr(args, "network_mode", "expanded"),
+            )
+            valid_ids = {str(crosswalk_id) for crosswalk_id in manifest_df["crosswalk_id"].astype(str)}
+            selected = selected[selected["crosswalk_id"].astype(str).isin(valid_ids)].reset_index(drop=True)
+            if selected.empty:
+                raise ValueError("실행 가능한 integrated_selected 후보가 없습니다. excluded report를 확인하세요.")
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"통합망 manifest가 없습니다: {manifest_path}")
+        if not args.skip_demand:
+            generate_integrated_demand(
+                selected,
+                manifest_path,
+                output_dir,
+                tuple(args.seeds),
+                args.sim_duration,
+                args.warmup,
+                step_length=getattr(args, "sumo_step_length", 1.0),
+                demand_profile=getattr(args, "demand_profile", "average"),
+                traffic_counts_csv=getattr(args, "traffic_counts", None),
+                representative_day_id=getattr(args, "representative_day_id", None),
+                model_parameters_path=assumptions_path,
+                vehicle_only=getattr(args, "vehicle_only", False),
+            )
+        if args.disruption_scenario is not None:
+            args.incident_scenario = args.disruption_scenario
+        if args.extension_increment is not None:
+            args.smart_extension_sec = args.extension_increment
+        if not args.skip_run:
+            collect_integrated_metrics(
+                selected,
+                manifest_path,
+                output_dir,
+                args.sim_duration,
+                args.warmup,
+                tuple(args.seeds),
+                getattr(args, "traci_step_length", 0.1),
+                getattr(args, "traffic_measure_radius_m", 500.0),
+                getattr(args, "smart_extension_sec", None),
+                getattr(args, "max_extensions", None),
+                getattr(args, "vehicle_arrival_rate_per_hour", None),
+                getattr(args, "saturation_flow_rate_per_hour", 1900.0),
+                getattr(args, "vehicle_arrival_model", "poisson"),
+                getattr(args, "incident_scenario", "best_case"),
+                getattr(args, "enable_random_disruptions", False),
+                getattr(args, "bus_stop_rate_per_hour", 0.0),
+                getattr(args, "illegal_parking_rate_per_hour", 0.0),
+                getattr(args, "minor_incident_rate_per_hour", 0.0),
+                getattr(args, "accident_rate_per_hour", 0.0),
+                assumptions_path,
+                getattr(args, "export_fcd", False),
+                getattr(args, "vehicle_only", False),
+            )
+        dump_parameter_table(
+            load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
+            output_dir / "model_assumptions_used.csv",
+        )
+        (output_dir / "calibration_report.csv").write_text("", encoding="utf-8")
+        (output_dir / "calibration_summary.md").write_text("", encoding="utf-8")
+        if not args.skip_reports:
+            generate_integrated_reports(
+                selected,
+                output_dir,
+                figures_dir,
+                assumptions_path,
+            )
+        return
 
     candidates, _, _ = preprocess_inputs(
         args.t1,
@@ -189,8 +339,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="서울 중구 스마트 횡단보도 SUMO 시뮬레이션")
     parser.add_argument("--t1", default=str(BASE_DIR / "data" / "T1_accident_crosswalk.csv"))
     parser.add_argument("--t2", default=str(BASE_DIR / "data" / "T2_crosswalk_features.csv"))
+    parser.add_argument(
+        "--simulation_mode",
+        choices=["per_candidate", "integrated_selected"],
+        default="per_candidate",
+    )
     parser.add_argument("--top_n", type=int, default=20)
     parser.add_argument("--target_crosswalk_ids", nargs="+", default=None)
+    parser.add_argument("--smart_crosswalk_ids", nargs="+", default=None)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
     parser.add_argument("--sim_duration", type=int, default=1800)
     parser.add_argument("--warmup", type=int, default=300)
@@ -265,6 +421,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip_demand", action="store_true")
     parser.add_argument("--skip_run", action="store_true")
     parser.add_argument("--skip_reports", action="store_true")
+
+    parser.add_argument("--list_valid_smart_crosswalks", action="store_true")
+    parser.add_argument("--generate_implementation_diagnostics", action="store_true")
+    parser.add_argument("--implementation_diagnostics_only", action="store_true")
+    parser.add_argument("--num_valid_crosswalks", type=int, default=30)
+    parser.add_argument("--max_match_distance_m", type=float, default=50.0)
+    parser.add_argument("--require_tls", type=lambda x: str(x).lower() == 'true', default=True)
+
     return parser.parse_args()
 
 
