@@ -1,32 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2026-04-14 23:58:32.551276 by Eclipse SUMO randomTrips.py v1.26.0
+<!-- generated on 2026-05-04 15:48:52.281575 by Eclipse SUMO randomTrips.py v1.26.0
 <configuration>
-    <net-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/network.net.xml"/>
-    <output-trip-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.trips.xml"/>
-    <route-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.rou.xml"/>
+    <net-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/network.net.xml"/>
+    <output-trip-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.trips.xml"/>
+    <route-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.rou.xml"/>
     <vehicle-class value="passenger"/>
-    <end value="60.0"/>
+    <end value="120.0"/>
     <period value="3.9327242324431526"/>
 </configuration>
 -->
 
-<!-- generated on 2026-04-14T23:58:32.542605+09:00 by Eclipse SUMO duarouter 1.26.0
+<!-- generated on 2026-05-04T15:48:52.274347+09:00 by Eclipse SUMO duarouter 1.26.0
 <duarouterConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/duarouterConfiguration.xsd">
 
     <input>
-        <net-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/network.net.xml"/>
-        <route-files value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.trips.xml"/>
+        <net-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/network.net.xml"/>
+        <route-files value="smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.trips.xml"/>
     </input>
 
     <output>
-        <output-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.rou.xml"/>
+        <output-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.rou.xml"/>
         <alternatives-output value="NUL"/>
     </output>
 
     <time>
         <begin value="0.0"/>
-        <end value="60.0"/>
+        <end value="120.0"/>
     </time>
 
     <report>
@@ -87,5 +87,50 @@
     </vehicle>
     <vehicle id="15" type="passenger" depart="58.99">
         <route edges="376666931#3 376666931#4 1339655668 516163750#0 516163750#1 224260190#0 224260190#1 224260190#2 376666930#0 376666930#1 376666930#2 -376666916#0 376666932#1 -376666930#0 -224260190#2"/>
+    </vehicle>
+    <vehicle id="16" type="passenger" depart="62.92">
+        <route edges="-778973690 -384030401#1 -384030401#0"/>
+    </vehicle>
+    <vehicle id="17" type="passenger" depart="66.86">
+        <route edges="376666930#1 376666930#2 -376666916#0 376666932#1 -376666930#0 -224260190#2 -224260190#1 -224260190#0 -516163750#1 -516163750#0 -1339655668 -376666931#4 -376666931#3 -376666921 224260190#2 376666930#0"/>
+    </vehicle>
+    <vehicle id="18" type="passenger" depart="70.79">
+        <route edges="-376666931#3 -376666921 -224260190#1 -224260190#0 1206220503#0 1206220503#1 464445691#0"/>
+    </vehicle>
+    <vehicle id="19" type="passenger" depart="74.72">
+        <route edges="331990404#1 331990404#3 1206220504#0 1206220504#1 224260190#0 224260190#1 224260190#2 376666930#0 376666930#1 376666930#2 -376666916#0 376666932#1"/>
+    </vehicle>
+    <vehicle id="20" type="passenger" depart="78.65">
+        <route edges="-384030401#2 778973690 -376666931#4 -376666931#3 -376666921 -224260190#1 -224260190#0"/>
+    </vehicle>
+    <vehicle id="21" type="passenger" depart="82.59">
+        <route edges="615671505#0 331990404#0 331990404#1 331990404#3 1206220504#0 1206220504#1 224260190#0"/>
+    </vehicle>
+    <vehicle id="22" type="passenger" depart="86.52">
+        <route edges="331990404#1 331990404#3 1206220504#0 1206220504#1 -516163750#1"/>
+    </vehicle>
+    <vehicle id="23" type="passenger" depart="90.45">
+        <route edges="1206220503#1 464445691#0 464445691#1 464445692#0 464445692#1 -384030401#0 -516163750#1 -516163750#0 -1339655668 -778973690 -384030401#1"/>
+    </vehicle>
+    <vehicle id="24" type="passenger" depart="94.39">
+        <route edges="-376666916#2 -376666916#1 -376666930#2 -376666930#1 -376666930#0 -224260190#2"/>
+    </vehicle>
+    <vehicle id="25" type="passenger" depart="98.32">
+        <route edges="-376666930#0 -224260190#2 -224260190#1 -224260190#0 -516163750#1 -516163750#0 -1339655668 -376666931#4 -376666931#3 -376666921 224260190#2 376666930#0 376666930#1 376666930#2"/>
+    </vehicle>
+    <vehicle id="26" type="passenger" depart="102.25">
+        <route edges="-1339655668 -778973690 384030401#2"/>
+    </vehicle>
+    <vehicle id="27" type="passenger" depart="106.18">
+        <route edges="376666931#1 376666931#2 376666931#3 376666931#4 1339655668 516163750#0 516163750#1 1206220503#0 1206220503#1 333554718"/>
+    </vehicle>
+    <vehicle id="28" type="passenger" depart="110.12">
+        <route edges="-376666930#0 -224260190#2 -224260190#1 -224260190#0 1206220503#0 1206220503#1 333554718 219696191#0"/>
+    </vehicle>
+    <vehicle id="29" type="passenger" depart="114.05">
+        <route edges="585352852#0 585352852#0-AddedOffRampEdge 913268036 1206220504#1 -516163750#1"/>
+    </vehicle>
+    <vehicle id="30" type="passenger" depart="117.98">
+        <route edges="376666916#0 -376666930#2 -376666930#1 -376666930#0 -224260190#2 -224260190#1 -224260190#0 -516163750#1 -516163750#0 -1339655668 -376666931#4 -376666931#3 -376666931#2"/>
     </vehicle>
 </routes>

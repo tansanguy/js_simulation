@@ -1,0 +1,2 @@
+crosswalk_id,matched_crossing_edge,matched_tls_id,matched_ped_link_indices,connection_count_on_crossing,junction_internal_ids_on_crossing,has_signal,has_pedestrian_phase,ped_route_from_edge,ped_route_to_edge,vehicle_conflict_edges,approach_lanes
+23040,:11177412832_c0,11177412832,2,2,:11177412832_c0|:11177412832_w0|:11177412832_w1,True,True,464445691#0,-464445691#0,-464445691#1|464445691#0|-464445691#0|464445691#1,-464445691#1_1|464445691#0_1

@@ -1,0 +1,4 @@
+count_point_id,datetime,start_time_sec,end_time_sec,road_name,direction,edge_id,lane_id,volume,speed_kph,source,representative_day_id
+CP001,2026-04-15T08:00:00,0,900,퇴계로,E,edge_placeholder_1,,120,28.5,loop_detector,2026-04-15
+CP001,2026-04-15T08:15:00,900,1800,퇴계로,E,edge_placeholder_1,,135,27.2,loop_detector,2026-04-15
+CP002,2026-04-15T08:00:00,0,900,을지로,W,edge_placeholder_2,,95,24.3,cctv_count,2026-04-15

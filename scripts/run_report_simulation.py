@@ -12,6 +12,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SMART_DIR = PROJECT_DIR / "smart_crosswalk_sumo"
 DEFAULT_REUSE_NETS = PROJECT_DIR / "result" / "report_top12_seed4_2h" / "sumo_nets"
+DEFAULT_JUNGGU_ADMIN_POLYGON_PATH = SMART_DIR / "data" / "junggu_admin_boundary.geojson"
 
 sys.path.insert(0, str(PROJECT_DIR))
 
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--run_name", default="report_ready_top12_seed4_30min")
     parser.add_argument("--top_n", type=int, default=12)
+    parser.add_argument("--target_crosswalk_ids", nargs="+", default=None)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44, 45])
     parser.add_argument("--sim_duration", type=int, default=1800)
     parser.add_argument("--warmup", type=int, default=300)
@@ -32,6 +34,42 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.5,
         help="TraCI simulation step length. 보고서용 기본값은 속도와 정밀도의 균형을 위해 0.5초.",
+    )
+    parser.add_argument(
+        "--traffic_measure_radius_m",
+        type=float,
+        default=500.0,
+        help="차량 파급효과를 집계할 횡단보도 중심 반경(m).",
+    )
+    parser.add_argument(
+        "--extension_increment",
+        type=float,
+        default=5.0,
+        help="스마트 신호 1회 연장 시간(초). 기본값은 5초 1회.",
+    )
+    parser.add_argument("--max_extensions", type=int, default=1)
+    parser.add_argument(
+        "--network_radius_m",
+        type=float,
+        default=None,
+        help="새 네트워크 생성 시 OSM bbox 반경(m). 주변 파급효과 분석에는 300~500m 이상 권장.",
+    )
+    parser.add_argument(
+        "--network_mode",
+        choices=["local", "expanded", "local_radius", "jungu_admin_buffer", "corridor_network"],
+        default="expanded",
+        help="기본값은 중구 전체 + 인접 도로를 포함하는 expanded 네트워크.",
+    )
+    parser.add_argument(
+        "--admin_polygon_path",
+        default=str(DEFAULT_JUNGGU_ADMIN_POLYGON_PATH),
+        help="행정경계 GeoJSON 경로. network_mode=jungu_admin_buffer에서 사용.",
+    )
+    parser.add_argument(
+        "--buffer_m",
+        type=float,
+        default=1000.0,
+        help="행정경계 바깥 연결도로를 포함하기 위한 buffer(m).",
     )
     parser.add_argument(
         "--demand_profile",
@@ -60,13 +98,20 @@ def write_preset_note(run_dir: Path, args: argparse.Namespace, pipeline_args: Na
         "purpose": "보고서용 baseline/smart 비교 결과 생성",
         "preset": {
             "top_n": args.top_n,
+            "target_crosswalk_ids": args.target_crosswalk_ids,
             "seeds": args.seeds,
             "sim_duration": args.sim_duration,
             "warmup": args.warmup,
             "traci_step_length": args.traci_step_length,
+            "traffic_measure_radius_m": args.traffic_measure_radius_m,
+            "extension_increment": args.extension_increment,
+            "max_extensions": args.max_extensions,
+            "network_radius_m": args.network_radius_m,
             "demand_profile": args.demand_profile,
             "analysis_minutes": args.sim_duration / 60,
-            "sumo_runs": args.top_n * len(args.seeds) * 2,
+            "sumo_runs": (len(args.target_crosswalk_ids) if args.target_crosswalk_ids else args.top_n)
+            * len(args.seeds)
+            * 2,
         },
         "network_mode": "build" if args.build_networks else "reuse",
         "reuse_nets_dir": None if args.build_networks else args.reuse_nets_dir,
@@ -79,7 +124,7 @@ def write_preset_note(run_dir: Path, args: argparse.Namespace, pipeline_args: Na
 
 
 def prepared_nets_dir(args: argparse.Namespace) -> str | None:
-    if args.build_networks:
+    if args.build_networks or args.network_mode not in {"local", "local_radius"}:
         return None
 
     reuse_nets_dir = Path(args.reuse_nets_dir)
@@ -101,11 +146,21 @@ def build_pipeline_args(args: argparse.Namespace, nets_dir: str | None) -> Names
         t1=str(SMART_DIR / "data" / "T1_accident_crosswalk.csv"),
         t2=str(SMART_DIR / "data" / "T2_crosswalk_features.csv"),
         top_n=args.top_n,
+        target_crosswalk_ids=args.target_crosswalk_ids,
         seeds=args.seeds,
         sim_duration=args.sim_duration,
         warmup=args.warmup,
         traci_step_length=args.traci_step_length,
+        traffic_measure_radius_m=args.traffic_measure_radius_m,
+        extension_increment=args.extension_increment,
+        max_extensions=args.max_extensions,
+        network_radius_m=args.network_radius_m,
+        network_mode=args.network_mode,
+        admin_polygon_path=args.admin_polygon_path,
+        buffer_m=args.buffer_m,
         demand_profile=args.demand_profile,
+        incident_scenario="normal_urban",
+        model_assumptions=str(SMART_DIR / "config" / "model_assumptions.yaml"),
         result_root=args.result_root,
         run_name=args.run_name,
         run_dir=None,
@@ -129,10 +184,18 @@ def main() -> None:
     print("[report-run] configuration")
     print(f"  run_dir={run_dir}")
     print(f"  top_n={args.top_n}")
+    print(f"  target_crosswalk_ids={args.target_crosswalk_ids}")
     print(f"  seeds={args.seeds}")
     print(f"  sim_duration={args.sim_duration}")
     print(f"  warmup={args.warmup}")
     print(f"  traci_step_length={args.traci_step_length}")
+    print(f"  traffic_measure_radius_m={args.traffic_measure_radius_m}")
+    print(f"  extension_increment={args.extension_increment}")
+    print(f"  max_extensions={args.max_extensions}")
+    print(f"  network_radius_m={args.network_radius_m}")
+    print(f"  network_mode={args.network_mode}")
+    print(f"  admin_polygon_path={args.admin_polygon_path}")
+    print(f"  buffer_m={args.buffer_m}")
     print(f"  demand_profile={args.demand_profile}")
     print(f"  skip_networks={pipeline_args.skip_networks}")
     if pipeline_args.skip_networks:

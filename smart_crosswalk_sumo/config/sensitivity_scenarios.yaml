@@ -1,0 +1,137 @@
+base_scenario:
+  pedestrian_arrival_rate_multiplier: 1.0
+  elderly_ratio_multiplier: 1.0
+  elderly_ratio_override: null
+  walking_speed_profile: base
+  vehicle_volume_multiplier: 1.0
+  vehicle_speed_factor: base
+  accident_risk_coefficient: base
+  green_extension_policy: base_extension
+
+walking_speed_profiles:
+  normal_fast:
+    normal_ped_speed_mps: 1.35
+    elderly_ped_speed_mps: 1.05
+    elderly_startup_delay_sec: 1.2
+  base:
+    normal_ped_speed_mps: 1.20
+    elderly_ped_speed_mps: 0.90
+    elderly_startup_delay_sec: 1.5
+  elderly_slow:
+    normal_ped_speed_mps: 1.10
+    elderly_ped_speed_mps: 0.75
+    elderly_startup_delay_sec: 1.8
+  conservative_slow:
+    normal_ped_speed_mps: 1.00
+    elderly_ped_speed_mps: 0.70
+    elderly_startup_delay_sec: 2.2
+
+vehicle_speed_profiles:
+  slow:
+    speed_factor: 0.90
+    saturation_flow_multiplier: 0.90
+    risk_exposure_multiplier: 0.90
+  base:
+    speed_factor: 1.00
+    saturation_flow_multiplier: 1.00
+    risk_exposure_multiplier: 1.00
+  fast:
+    speed_factor: 1.10
+    saturation_flow_multiplier: 1.08
+    risk_exposure_multiplier: 1.15
+
+accident_risk_profiles:
+  low:
+    coefficient: 0.80
+  base:
+    coefficient: 1.00
+  high:
+    coefficient: 1.25
+
+green_extension_policies:
+  no_extension:
+    extension_increment_sec: 0.0
+    max_extensions: 0
+    trigger_remaining_sec: 0.0
+  base_extension:
+    extension_increment_sec: 5.0
+    max_extensions: 1
+    trigger_remaining_sec: 10.0
+  aggressive_extension:
+    extension_increment_sec: 7.0
+    max_extensions: 2
+    trigger_remaining_sec: 14.0
+
+sensitivity_dimensions:
+  pedestrian_arrival_rate_multiplier:
+    levels:
+      low:
+        pedestrian_arrival_rate_multiplier: 0.5
+      base:
+        pedestrian_arrival_rate_multiplier: 1.0
+      high:
+        pedestrian_arrival_rate_multiplier: 1.5
+      very_high:
+        pedestrian_arrival_rate_multiplier: 2.0
+  elderly_ratio:
+    levels:
+      low:
+        elderly_ratio_multiplier: 0.8
+      base:
+        elderly_ratio_multiplier: 1.0
+      high:
+        elderly_ratio_multiplier: 1.2
+  walking_speed_profile:
+    levels:
+      normal_fast:
+        walking_speed_profile: normal_fast
+      base:
+        walking_speed_profile: base
+      elderly_slow:
+        walking_speed_profile: elderly_slow
+      conservative_slow:
+        walking_speed_profile: conservative_slow
+  vehicle_volume_multiplier:
+    levels:
+      low:
+        vehicle_volume_multiplier: 0.7
+      base:
+        vehicle_volume_multiplier: 1.0
+      high:
+        vehicle_volume_multiplier: 1.3
+      congested:
+        vehicle_volume_multiplier: 1.6
+  vehicle_speed_factor:
+    levels:
+      slow:
+        vehicle_speed_factor: slow
+      base:
+        vehicle_speed_factor: base
+      fast:
+        vehicle_speed_factor: fast
+  accident_risk_coefficient:
+    levels:
+      low:
+        accident_risk_coefficient: low
+      base:
+        accident_risk_coefficient: base
+      high:
+        accident_risk_coefficient: high
+  green_extension_policy:
+    levels:
+      no_extension:
+        green_extension_policy: no_extension
+      base_extension:
+        green_extension_policy: base_extension
+      aggressive_extension:
+        green_extension_policy: aggressive_extension
+
+scenario_catalog:
+  base:
+    pedestrian_arrival_rate_multiplier: 1.0
+    elderly_ratio_multiplier: 1.0
+    walking_speed_profile: base
+    vehicle_volume_multiplier: 1.0
+    vehicle_speed_factor: base
+    accident_risk_coefficient: base
+    green_extension_policy: base_extension

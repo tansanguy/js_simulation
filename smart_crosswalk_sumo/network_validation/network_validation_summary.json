@@ -1,0 +1,12 @@
+{
+  "candidate_count": 1,
+  "aggregate": {
+    "node_count_estimate_sum": 129,
+    "edge_count_sum": 599,
+    "lane_count_sum": 724,
+    "total_road_length_m_sum": 9176.83
+  },
+  "no_signal_count": 0,
+  "no_ped_phase_count": 0,
+  "disconnected_edge_count": 18
+}

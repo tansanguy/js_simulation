@@ -1,0 +1,159 @@
+vehicle_arrival_distribution:
+  value: poisson
+  unit: categorical
+  source_type: assumption
+  source_note: "차량 도착은 기본적으로 포아송 분포로 단순화한다. 관측 교통량이 있으면 해당 값으로 대체한다."
+  used_in: vehicle demand generation
+  fallback: true
+
+pedestrian_arrival_distribution:
+  value: exponential
+  unit: categorical
+  source_type: assumption
+  source_note: "보행자 도착 간격은 지수분포로 단순화한다. 현장 계수자료가 확보되면 교체한다."
+  used_in: pedestrian demand generation
+  fallback: true
+
+accident_event_distribution:
+  value: fixed_and_poisson_mix
+  unit: categorical
+  source_type: assumption
+  source_note: "테스트 단계에서는 고정 시나리오와 seed 기반 포아송 이벤트를 병행한다. 선행연구 기반 보정 예정."
+  used_in: event schedule generation
+  fallback: true
+
+bus_stop_event_distribution:
+  value: fixed_and_poisson_mix
+  unit: categorical
+  source_type: assumption
+  source_note: "버스 정차 이벤트는 테스트용 혼합 분포로 둔다. 실제 정차 패턴 자료 연동 전까지 가정값이다."
+  used_in: event schedule generation
+  fallback: true
+
+normal_ped_speed_mps:
+  value: 1.2
+  unit: m/s
+  source_type: literature
+  source_note: "일반 보행자 횡단속도 기본값."
+  used_in: pedestrian crossing completion model
+  fallback: true
+
+elderly_ped_speed_mps:
+  value: 0.9
+  unit: m/s
+  source_type: literature
+  source_note: "고령자 횡단속도 관련 선행연구 또는 보행신호 지침 기반. 정확한 출처는 보고서에서 보완."
+  used_in: pedestrian crossing completion model
+  fallback: true
+
+elderly_startup_delay_sec:
+  value: 1.5
+  unit: s
+  source_type: assumption
+  source_note: "고령 보행자의 출발 지연을 단순화한 가정값."
+  used_in: pedestrian crossing completion model
+  fallback: true
+
+saturation_flow_rate:
+  value: 1900
+  unit: pc/h/ln
+  source_type: literature
+  source_note: "도심부 차로 포화교통류율 기본값."
+  used_in: queue and delay model
+  fallback: true
+
+trigger_remaining_sec:
+  value: 10
+  unit: s
+  source_type: assumption
+  source_note: "보행 녹색 종료 전 감지 판단을 시작하는 잔여 시간."
+  used_in: smart extension trigger
+  fallback: true
+
+extension_increment_sec:
+  value: 5
+  unit: s
+  source_type: observed_data
+  source_note: "회의 확정안: smart 시나리오는 보행 녹색을 5초만 1회 연장."
+  used_in: smart extension trigger
+  fallback: false
+
+max_extensions:
+  value: 1
+  unit: count/cycle
+  source_type: observed_data
+  source_note: "회의 확정안: 한 cycle에서 1회만 연장."
+  used_in: smart extension trigger
+  fallback: false
+
+sensor_fn_rate:
+  value: 0.05
+  unit: ratio
+  source_type: assumption
+  source_note: "보행자 감지 false negative 비율. 센서 실측치 확보 전까지 가정값."
+  used_in: smart extension trigger
+  fallback: true
+
+capacity_multiplier_accident:
+  value: 0.45
+  unit: ratio
+  source_type: assumption
+  source_note: "사고 발생 시 유효 용량 감소율. 선행연구 기반 보정 예정."
+  used_in: event-based capacity reduction
+  fallback: true
+
+capacity_multiplier_bus_stop:
+  value: 0.75
+  unit: ratio
+  source_type: assumption
+  source_note: "버스 정차 시 유효 용량 감소율. 정류장 운영자료 연동 전 가정값."
+  used_in: event-based capacity reduction
+  fallback: true
+
+speed_multiplier_accident:
+  value: 0.45
+  unit: ratio
+  source_type: assumption
+  source_note: "사고 발생 시 차로 속도 배수."
+  used_in: event-based capacity reduction
+  fallback: true
+
+speed_multiplier_bus_stop:
+  value: 0.8
+  unit: ratio
+  source_type: assumption
+  source_note: "버스 정차 시 차로 속도 배수."
+  used_in: event-based capacity reduction
+  fallback: true
+
+value_of_time_vehicle:
+  value: 15000
+  unit: KRW/hour
+  source_type: assumption
+  source_note: "차량 지체 비용 환산용 시간가치. 보고서 작성 시 기준 문헌으로 보완."
+  used_in: vehicle delay cost conversion
+  fallback: true
+
+delay_cost_per_hour:
+  value: 15000
+  unit: KRW/hour
+  source_type: assumption
+  source_note: "vehicle_delay_cost 계산 시 value_of_time_vehicle와 동일하게 사용."
+  used_in: vehicle delay cost conversion
+  fallback: true
+
+accident_expected_cost:
+  value: 1000000
+  unit: KRW/risk_unit
+  source_type: assumption
+  source_note: "안전 위험지표를 비용형 기대값으로 변환하기 위한 가정값."
+  used_in: accident expected value
+  fallback: true
+
+safety_cost_weight:
+  value: 2.0
+  unit: weight
+  source_type: assumption
+  source_note: "고령자 미완료 횡단을 safety_risk_score에 반영하는 가중치."
+  used_in: safety risk score
+  fallback: true

@@ -1,0 +1,93 @@
+vehicle_arrival_distribution:
+  value: poisson
+  unit: categorical
+  source_type: assumption
+  source_note: "기본 차량 도착분포는 포아송 가정. 관측 교통량 입력이 있으면 보정값 우선."
+  fallback: true
+
+pedestrian_arrival_distribution:
+  value: exponential
+  unit: categorical
+  source_type: assumption
+  source_note: "보행자 도착은 지수분포 간격 가정. 현장 계수기 자료가 있으면 대체."
+  fallback: true
+
+normal_ped_speed_mps:
+  value: 1.2
+  unit: m/s
+  source_type: literature
+  source_note: "FHWA/HCM 계열 보행자 횡단속도 기준 범위에서 기본값 설정."
+  fallback: true
+
+elderly_ped_speed_mps:
+  value: 0.9
+  unit: m/s
+  source_type: literature
+  source_note: "고령 보행자 민감도 반영을 위한 보수값."
+  fallback: true
+
+elderly_startup_delay_sec:
+  value: 1.5
+  unit: s
+  source_type: assumption
+  source_note: "보행 시작 지연을 단순화해 반영한 초기 지연 시간."
+  fallback: true
+
+saturation_flow_rate_pcphpl:
+  value: 1900
+  unit: pc/h/ln
+  source_type: literature
+  source_note: "HCM ideal saturation flow 기준값. 도심 보정 가능."
+  fallback: true
+
+sensor_fn_rate:
+  value: 0.05
+  unit: ratio
+  source_type: assumption
+  source_note: "보행 감지 실패율 기본값. 센서 품질 민감도 분석 가능."
+  fallback: true
+
+capacity_multiplier_by_event_type:
+  value:
+    bus_stop: 0.75
+    illegal_parking: 0.55
+    minor_crash: 0.45
+    lane_block: 0.30
+    slowdown: 0.80
+  unit: ratio
+  source_type: assumption
+  source_note: "외란 이벤트별 유효 용량 배수. 현장 캘리브레이션 필요."
+  fallback: true
+
+speed_multiplier_by_event_type:
+  value:
+    bus_stop: 0.80
+    illegal_parking: 0.65
+    minor_crash: 0.45
+    lane_block: 0.10
+    slowdown: 0.70
+  unit: ratio
+  source_type: assumption
+  source_note: "외란 이벤트별 차로 속도 배수."
+  fallback: true
+
+trigger_remaining_sec:
+  value: 10
+  unit: s
+  source_type: assumption
+  source_note: "보행 녹색 연장 판단을 시작하는 잔여 시간 임계값."
+  fallback: true
+
+extension_increment_sec:
+  value: 5
+  unit: s
+  source_type: observed_data
+  source_note: "스마트 정책 기본값: 5초 단일 연장."
+  fallback: false
+
+max_extensions:
+  value: 1
+  unit: count/cycle
+  source_type: observed_data
+  source_note: "스마트 정책 기본값: cycle당 1회만 연장."
+  fallback: false

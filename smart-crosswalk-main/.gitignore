@@ -1,0 +1,15 @@
+venv/
+.ipynb_checkpoints/
+__pycache__/
+.DS_Store
+*.zip
+
+data/raw/*
+!data/raw/README.md
+
+data/processed/*
+!data/processed/README.md
+TODO.md
+CLAUDE.md
+.claude
+*.log

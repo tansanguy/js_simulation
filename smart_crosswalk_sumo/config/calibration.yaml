@@ -1,0 +1,13 @@
+observed_counts:
+  value: smart_crosswalk_sumo/inputs/traffic_counts_15min.csv
+  unit: path
+  source_type: observed_data
+  source_note: "대표일 관측 교통량 파일"
+  fallback: false
+
+representative_day_id:
+  value: "2026-04-15"
+  unit: date
+  source_type: observed_data
+  source_note: "FHWA 취지에 맞춘 대표일"
+  fallback: true

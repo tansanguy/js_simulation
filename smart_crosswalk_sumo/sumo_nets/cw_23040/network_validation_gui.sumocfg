@@ -1,0 +1,33 @@
+<configuration>
+"
+        "  <input>
+"
+        f"    <net-file value="{net_path.name}"/>
+"
+        "  </input>
+"
+        "  <time>
+"
+        "    <begin value="0"/>
+"
+        "    <end value="120"/>
+"
+        "    <step-length value="1"/>
+"
+        "  </time>
+"
+        "  <processing>
+"
+        "    <ignore-route-errors value="true"/>
+"
+        "  </processing>
+"
+        "  <gui_only>
+"
+        "    <start value="true"/>
+"
+        "  </gui_only>
+"
+        "</configuration>
+"
+        

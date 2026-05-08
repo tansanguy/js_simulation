@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2026-04-14 23:58:32.341886 by Eclipse SUMO randomTrips.py v1.26.0
+<!-- generated on 2026-05-04 15:48:52.175645 by Eclipse SUMO randomTrips.py v1.26.0
 <configuration>
-    <net-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/network.net.xml"/>
-    <output-trip-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.trips.xml"/>
-    <route-file value="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.rou.xml"/>
+    <net-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/network.net.xml"/>
+    <output-trip-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.trips.xml"/>
+    <route-file value="smart_crosswalk_sumo/sumo_nets/cw_23040/routes_seed42.rou.xml"/>
     <vehicle-class value="passenger"/>
-    <end value="60.0"/>
+    <end value="120.0"/>
     <period value="3.9327242324431526"/>
 </configuration>
 -->
@@ -29,4 +29,19 @@
     <trip id="13" depart="51.13" from="-778973690" to="37402371" type="passenger"/>
     <trip id="14" depart="55.06" from="516163750#1" to="376666930#1" type="passenger"/>
     <trip id="15" depart="58.99" from="376666931#3" to="-224260190#2" type="passenger"/>
+    <trip id="16" depart="62.92" from="-778973690" to="-384030401#0" type="passenger"/>
+    <trip id="17" depart="66.86" from="376666930#1" to="376666930#0" type="passenger"/>
+    <trip id="18" depart="70.79" from="-376666931#3" to="464445691#0" type="passenger"/>
+    <trip id="19" depart="74.72" from="331990404#1" to="376666932#1" type="passenger"/>
+    <trip id="20" depart="78.65" from="-384030401#2" to="-224260190#0" type="passenger"/>
+    <trip id="21" depart="82.59" from="615671505#0" to="224260190#0" type="passenger"/>
+    <trip id="22" depart="86.52" from="331990404#1" to="-516163750#1" type="passenger"/>
+    <trip id="23" depart="90.45" from="1206220503#1" to="-384030401#1" type="passenger"/>
+    <trip id="24" depart="94.39" from="-376666916#2" to="-224260190#2" type="passenger"/>
+    <trip id="25" depart="98.32" from="-376666930#0" to="376666930#2" type="passenger"/>
+    <trip id="26" depart="102.25" from="-1339655668" to="384030401#2" type="passenger"/>
+    <trip id="27" depart="106.18" from="376666931#1" to="333554718" type="passenger"/>
+    <trip id="28" depart="110.12" from="-376666930#0" to="219696191#0" type="passenger"/>
+    <trip id="29" depart="114.05" from="585352852#0" to="-516163750#1" type="passenger"/>
+    <trip id="30" depart="117.98" from="376666916#0" to="-376666931#2" type="passenger"/>
 </routes>

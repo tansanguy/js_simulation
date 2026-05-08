@@ -1,0 +1,2 @@
+crosswalk_id,network_mode,network_bbox,bbox_lonlat,bbox_xy,node_count_estimate,edge_count,lane_count,junction_count,traffic_light_count,crossing_edge_count,total_road_length_m,disconnected_edge_count,isolated_component_count,largest_component_edges,gui_sumocfg
+23040,,,"{""xmin"": 126.638099, ""ymin"": 37.384663, ""xmax"": 127.103615, ""ymax"": 37.716138}","{""xmin"": 0.0, ""ymin"": 0.0, ""xmax"": 496.07, ""ymax"": 873.61}",129,599,724,159,8,49,9176.83,18,5,187,smart_crosswalk_sumo/sumo_nets/cw_23040/network_validation_gui.sumocfg

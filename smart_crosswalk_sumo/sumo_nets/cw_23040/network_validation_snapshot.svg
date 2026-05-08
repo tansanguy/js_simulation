@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900">
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<text x="24" y="36" font-family="monospace" font-size="24" fill="#0f172a">SUMO Network Validation Snapshot</text>
+<text x="24" y="70" font-family="monospace" font-size="16" fill="#334155">normal edges: 205, disconnected: 18</text>
+<text x="24" y="110" font-family="monospace" font-size="14" fill="#0f172a">Disconnected edge ids (first 60):</text>
+<text x="36" y="134" font-family="monospace" font-size="12" fill="#dc2626">-651817398#0</text>
+<text x="36" y="150" font-family="monospace" font-size="12" fill="#dc2626">-651817398#1</text>
+<text x="36" y="166" font-family="monospace" font-size="12" fill="#dc2626">-651817398#2</text>
+<text x="36" y="182" font-family="monospace" font-size="12" fill="#dc2626">-651817398#3</text>
+<text x="36" y="198" font-family="monospace" font-size="12" fill="#dc2626">-781193722</text>
+<text x="36" y="214" font-family="monospace" font-size="12" fill="#dc2626">-781193723</text>
+<text x="36" y="230" font-family="monospace" font-size="12" fill="#dc2626">1206949873</text>
+<text x="36" y="246" font-family="monospace" font-size="12" fill="#dc2626">331994924</text>
+<text x="36" y="262" font-family="monospace" font-size="12" fill="#dc2626">495011619</text>
+<text x="36" y="278" font-family="monospace" font-size="12" fill="#dc2626">612854217#0</text>
+<text x="36" y="294" font-family="monospace" font-size="12" fill="#dc2626">612854218#0</text>
+<text x="36" y="310" font-family="monospace" font-size="12" fill="#dc2626">651817398#0</text>
+<text x="36" y="326" font-family="monospace" font-size="12" fill="#dc2626">651817398#1</text>
+<text x="36" y="342" font-family="monospace" font-size="12" fill="#dc2626">651817398#2</text>
+<text x="36" y="358" font-family="monospace" font-size="12" fill="#dc2626">651817398#3</text>
+<text x="36" y="374" font-family="monospace" font-size="12" fill="#dc2626">767111813</text>
+<text x="36" y="390" font-family="monospace" font-size="12" fill="#dc2626">781193722</text>
+<text x="36" y="406" font-family="monospace" font-size="12" fill="#dc2626">781193723</text>
+</svg>

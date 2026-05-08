@@ -201,6 +201,139 @@ def pedestrian_route_from_crossing(crossing_edge: Any) -> dict[str, str]:
     }
 
 
+def _safe_get_edge(net: Any, edge_id: str | None) -> Any | None:
+    if not edge_id:
+        return None
+    try:
+        return net.getEdge(str(edge_id))
+    except Exception:
+        return None
+
+
+def _edge_id_list(edges: list[Any] | tuple[Any, ...] | None) -> list[str]:
+    if not edges:
+        return []
+    return [edge.getID() for edge in edges]
+
+
+def validate_pedestrian_connectivity(
+    net_file: str | Path,
+    metadata: dict[str, Any],
+    cw_id: str | int | None = None,
+) -> dict[str, Any]:
+    net = read_net(net_file)
+    ped_route = metadata.get("ped_route") or {}
+    crossing_edge_id = str(metadata.get("crossing_edge", "") or "")
+    from_edge_id = str(ped_route.get("from_edge", "") or "")
+    to_edge_id = str(ped_route.get("to_edge", "") or "")
+
+    row: dict[str, Any] = {
+        "crosswalk_id": str(cw_id if cw_id is not None else metadata.get("cw_id", "")),
+        "net_file": str(net_file),
+        "crossing_edge": crossing_edge_id,
+        "from_edge": from_edge_id,
+        "to_edge": to_edge_id,
+        "validation_status": "valid",
+        "invalid_reason": "",
+        "crossing_edge_exists": False,
+        "from_edge_exists": False,
+        "to_edge_exists": False,
+        "crossing_edge_function": "",
+        "from_edge_allows_pedestrian": False,
+        "to_edge_allows_pedestrian": False,
+        "incoming_walkingarea_count": 0,
+        "outgoing_walkingarea_count": 0,
+        "incoming_walkingareas": "",
+        "outgoing_walkingareas": "",
+        "path_exists": False,
+        "path_uses_crossing": False,
+        "path_uses_walkingarea": False,
+        "path_cost": math.nan,
+        "path_edge_count": 0,
+        "path_edge_sequence": "",
+    }
+
+    errors: list[str] = []
+    crossing_edge = _safe_get_edge(net, crossing_edge_id)
+    from_edge = _safe_get_edge(net, from_edge_id)
+    to_edge = _safe_get_edge(net, to_edge_id)
+
+    if crossing_edge is None:
+        errors.append("missing_crossing_edge")
+    else:
+        row["crossing_edge_exists"] = True
+        row["crossing_edge_function"] = edge_function(crossing_edge)
+        if edge_function(crossing_edge) != "crossing":
+            errors.append("crossing_edge_not_crossing_function")
+        incoming_walkareas = [
+            edge.getID()
+            for edge in crossing_edge.getIncoming().keys()
+            if edge_function(edge) == "walkingarea"
+        ]
+        outgoing_walkareas = [
+            edge.getID()
+            for edge in crossing_edge.getOutgoing().keys()
+            if edge_function(edge) == "walkingarea"
+        ]
+        row["incoming_walkingarea_count"] = len(incoming_walkareas)
+        row["outgoing_walkingarea_count"] = len(outgoing_walkareas)
+        row["incoming_walkingareas"] = "|".join(sorted(incoming_walkareas))
+        row["outgoing_walkingareas"] = "|".join(sorted(outgoing_walkareas))
+        if not incoming_walkareas:
+            errors.append("missing_incoming_walkingarea")
+        if not outgoing_walkareas:
+            errors.append("missing_outgoing_walkingarea")
+
+    if from_edge is None:
+        errors.append("missing_from_edge")
+    else:
+        row["from_edge_exists"] = True
+        row["from_edge_allows_pedestrian"] = edge_allows(from_edge, "pedestrian")
+        if not row["from_edge_allows_pedestrian"]:
+            errors.append("from_edge_disallows_pedestrian")
+
+    if to_edge is None:
+        errors.append("missing_to_edge")
+    else:
+        row["to_edge_exists"] = True
+        row["to_edge_allows_pedestrian"] = edge_allows(to_edge, "pedestrian")
+        if not row["to_edge_allows_pedestrian"]:
+            errors.append("to_edge_disallows_pedestrian")
+
+    if from_edge is not None and to_edge is not None:
+        try:
+            path_edges, path_cost = net.getShortestPath(
+                from_edge,
+                to_edge,
+                vClass="pedestrian",
+                withInternal=True,
+            )
+        except Exception:
+            path_edges, path_cost = None, math.nan
+            errors.append("pedestrian_shortest_path_exception")
+        if not path_edges:
+            errors.append("no_pedestrian_path")
+        else:
+            path_ids = _edge_id_list(path_edges)
+            row["path_exists"] = True
+            row["path_cost"] = float(path_cost) if path_cost is not None else math.nan
+            row["path_edge_count"] = len(path_ids)
+            row["path_edge_sequence"] = "|".join(path_ids)
+            row["path_uses_crossing"] = crossing_edge_id in path_ids
+            row["path_uses_walkingarea"] = any(
+                edge_function(edge) == "walkingarea" for edge in path_edges
+            )
+            if crossing_edge_id and crossing_edge_id not in path_ids:
+                errors.append("path_missing_crossing_edge")
+            if not row["path_uses_walkingarea"]:
+                errors.append("path_missing_walkingarea")
+
+    if errors:
+        row["validation_status"] = "invalid_pedestrian_candidate"
+        row["invalid_reason"] = ";".join(errors)
+    return row
+
+
 def vehicle_edges_at_crossing(crossing_edge: Any) -> list[str]:
     node = crossing_edge.getFromNode()
     return [edge.getID() for edge in normal_edges_at_node(node, "passenger")]

@@ -1,16 +1,42 @@
 # 서울 중구 스마트 횡단보도 SUMO 모델
 
-이 디렉터리는 기존 `sumo_2d` 모델을 수정하지 않고 새로 만든 OSM 기반 SUMO 파이프라인이다.
+이 파이프라인은 미래 교통량을 정확히 예측하는 모델이 아니라, 동일 조건에서 후보 횡단보도별 `baseline`과 `smart`를 비교하는 정책 시나리오 실험 모델이다.
+
+핵심 목적은 다음 4가지다.
+
+- 후보 횡단보도별 baseline/smart 전후 비교
+- 보행 녹색 5초 단일 연장이 보행 안전과 차량 지체에 미치는 상대적 효과 평가
+- 차량 지체를 교통비용으로 변환한 trade-off 확인
+- 후보 선정 이후의 정량 평가와 비용-효과 분석 보조
+
+이 파이프라인은 전체 횡단보도 자동 선정, 실제 사고 확정 예측, 모든 중구 횡단보도 최적화를 목표로 하지 않는다.
+
+## 현재 상태
+
+- 테스트 실행 단계
+- SUMO 시각화 일부 테스트 완료
+- 실제 최종 결과는 아직 없음
+- 서버 또는 실행 환경 연결 시도 중
+
+## 현재 기본 모델
+
+- 신호는 기본적으로 고정 신호다.
+- `smart` 시나리오는 보행 감지 시 보행 녹색을 `5초`만 `1회` 연장한다.
+- 연장 조건은 보행 녹색 phase, 잔여시간 임계값 이하, crossing/detector 보행자 존재, 같은 cycle 미연장, false negative 미발생이다.
+- 이벤트 기반 용량 감소는 `accident`, `bus_stop` 두 종류만 반영한다.
+- baseline과 smart는 같은 seed에서 같은 이벤트 스케줄을 공유한다.
+- 네트워크 기본 모드는 `expanded`이며, 중구 + 인접 도로를 포함하도록 `buffer_m=1000`을 사용한다.
+- 제어 대상은 전체 횡단보도가 아니라 사전에 선정된 후보 횡단보도다.
 
 ## 실행 흐름
 
 ```text
-preprocess.py       -> 위험도 상위 후보 선정
-build_networks.py   -> 후보별 OSM 네트워크 생성
-generate_demand.py  -> 차량/보행자 수요 생성
-run_simulations.py  -> baseline/smart TraCI 실행
-collect_metrics.py  -> seed별 및 평균 지표 저장
-generate_reports.py -> 보고서와 그림 생성
+preprocess.py       -> 후보 횡단보도 입력 정리
+build_networks.py   -> local / expanded 네트워크 생성
+generate_demand.py  -> 차량·보행 수요 생성
+run_simulations.py  -> baseline / smart 개별 실행 + event penalty 반영
+collect_metrics.py  -> seed별 원시 지표 수집
+generate_reports.py -> 최종 요약 CSV + tradeoff 그림 생성
 main.py             -> 전체 실행
 ```
 
@@ -21,70 +47,37 @@ python3 smart_crosswalk_sumo/main.py \
   --top_n 20 \
   --seeds 42 43 44 \
   --sim_duration 1800 \
-  --warmup 300
+  --warmup 300 \
+  --network_mode expanded \
+  --buffer_m 1000
 ```
 
-실행할 때마다 기본적으로 아래처럼 시행별 폴더가 만들어진다.
-
-```text
-result/YYYY-MM-DD_HH-MM-SS/
-├── run_metadata.json
-├── outputs/
-├── figures/
-└── sumo_nets/
-```
-
-폴더명을 직접 정하고 싶으면:
+또는 루트에서:
 
 ```bash
-python3 smart_crosswalk_sumo/main.py --run_name test_01 --top_n 1 --seeds 42
+python3 run_pipeline.py --top_n 20 --seeds 42 43 44
 ```
 
-기본 입력은 새 모델 안에 복사된 정제 데이터다.
+## 주요 옵션
 
-```text
-smart_crosswalk_sumo/data/T1_accident_crosswalk.csv
-smart_crosswalk_sumo/data/T2_crosswalk_features.csv
-```
+- `--network_mode expanded|local`
+- `--buffer_m 1000`
+- `--smart_extension_sec 5`
+- `--max_extensions 1`
+- `--incident_scenario normal_urban`
+- `--model_assumptions smart_crosswalk_sumo/config/model_assumptions.yaml`
 
-## 빠른 전처리 확인
+## 최종 보고용 핵심 출력
 
-SUMO나 OSM 다운로드 없이 후보 선정만 확인하려면:
+- `outputs/simulation_summary.csv`
+- `outputs/baseline_vs_smart_summary.csv`
+- `outputs/model_assumptions_used.csv`
+- `figures/tradeoff_summary.png`
 
-```bash
-python3 smart_crosswalk_sumo/main.py --preprocess_only --top_n 20
-```
+## 선택 디버그 출력
 
-## 주요 출력
+- `outputs/debug_extension_events.csv`에 해당하는 기존 `extension_events_seed.csv`
+- `outputs/debug_incident_events.csv`에 해당하는 기존 `incident_events_seed.csv`
+- SUMO snapshot / FCD / lane-edge debug 산출물
 
-```text
-result/YYYY-MM-DD_HH-MM-SS/outputs/candidates.csv
-result/YYYY-MM-DD_HH-MM-SS/outputs/demand_params.csv
-result/YYYY-MM-DD_HH-MM-SS/outputs/simulation_results_seed.csv
-result/YYYY-MM-DD_HH-MM-SS/outputs/simulation_results.csv
-result/YYYY-MM-DD_HH-MM-SS/outputs/report_1_simulation_results.csv
-result/YYYY-MM-DD_HH-MM-SS/outputs/report_2_comparison.md
-result/YYYY-MM-DD_HH-MM-SS/outputs/report_3_tradeoff.md
-result/YYYY-MM-DD_HH-MM-SS/outputs/report_4_methodology.md
-result/YYYY-MM-DD_HH-MM-SS/figures/tradeoff_scatter.png
-result/YYYY-MM-DD_HH-MM-SS/figures/pet_comparison_bar.png
-result/YYYY-MM-DD_HH-MM-SS/figures/crosswalk_map.html
-```
-
-## PET 관련 주의
-
-이 모델은 실제 trajectory pair 기반 PET를 직접 계산하지 않는다.
-
-- `PET_A_proxy`: 차량이 crossing 주변 차량 edge를 벗어난 시각과 보행자 crossing 진입 시각의 차이
-- `PET_B_surrogate`: 보행 녹색 종료 시점의 전적색 시간과 보행자 잔여 횡단시간의 차이
-
-보고서에서는 PET가 아니라 `PET proxy` 또는 `surrogate PET`로 표기해야 한다.
-
-## 환경
-
-```bash
-export SUMO_HOME=/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO
-python3 -m pip install pandas numpy scipy matplotlib requests
-```
-
-`sumolib`과 `traci`는 SUMO Python tools 경로에서 로드되어야 한다. 이 워크스페이스 환경에서는 둘 다 import 가능하다.
+최종 보고에서는 핵심 출력 4개만 사용하고, 디버그 출력은 개발용 또는 부록용으로 분리한다.
