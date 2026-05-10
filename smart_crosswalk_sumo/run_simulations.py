@@ -7,6 +7,7 @@ import os
 import random
 import shutil
 import socket
+import time
 import xml.etree.ElementTree as ET
 from collections import Counter, deque
 from dataclasses import dataclass
@@ -14,6 +15,15 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+try:
+    from scipy.stats import invgauss, weibull_min, expon  # type: ignore
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    invgauss = None
+    weibull_min = None
+    expon = None
+    _SCIPY_AVAILABLE = False
 
 try:
     import traci  # type: ignore
@@ -30,6 +40,7 @@ try:
         lane_allows,
         load_metadata,
         normalized_sumo_home,
+        pedestrian_link_indices,
         read_net,
         recent_values,
     )
@@ -48,10 +59,28 @@ except ImportError:
         lane_allows,
         load_metadata,
         normalized_sumo_home,
+        pedestrian_link_indices,
         read_net,
         recent_values,
     )
     from sensitivity import apply_parameter_value_overrides, load_sensitivity_scenarios, resolve_sensitivity_case
+
+try:
+    from .smart_extension_logic import (
+        evaluate_smart_extension_decision,
+        is_all_red_state,
+        is_ped_green_state,
+        is_vehicle_green_state,
+        is_yellow_state,
+    )
+except ImportError:
+    from smart_extension_logic import (
+        evaluate_smart_extension_decision,
+        is_all_red_state,
+        is_ped_green_state,
+        is_vehicle_green_state,
+        is_yellow_state,
+    )
 
 
 SIGNAL_PARAMS = {
@@ -125,6 +154,37 @@ def traci_trafficlight_ids() -> set[str]:
         return set(traci.trafficlight.getIDList())
     except Exception:
         return set()
+
+
+def _runtime_log_append(path: str | Path | None, payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _runtime_failure_write(path: str | Path | None, payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    failure_path = Path(path)
+    failure_path.parent.mkdir(parents=True, exist_ok=True)
+    failure_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _active_sumo_return_code(traci_label: str | None) -> int | None:
+    if not traci_label:
+        return None
+    try:
+        conn = traci.getConnection(traci_label)
+    except Exception:
+        return None
+    proc = getattr(conn, "_process", None)
+    try:
+        return None if proc is None else proc.poll()
+    except Exception:
+        return None
 
 
 def is_known_trafficlight(tl_id: str | None, known_tls_ids: set[str] | None = None) -> bool:
@@ -376,6 +436,89 @@ def choose_incident_lanes(
     return target[: min(3, len(target))]
 
 
+def _sample_bus_stop_duration(
+    rng: np.random.Generator,
+    model_params: dict[str, dict[str, Any]],
+) -> float:
+    """버스 정차 지속시간을 샘플링한다.
+
+    scipy 사용 가능 시 Inverse Gaussian(μ, λ) (Kwesiga et al. 2026),
+    미사용 시 lognormal fallback.
+    """
+    mu = float(get_parameter_value(model_params, "bus_stop_invgauss_mu", 35.0))
+    lam = float(get_parameter_value(model_params, "bus_stop_invgauss_lambda", 50.0))
+    cap = float(get_parameter_value(model_params, "bus_stop_duration_cap", 180.0))
+    if _SCIPY_AVAILABLE and mu > 0 and lam > 0:
+        mu_param = mu / max(lam, 1e-9)
+        u = float(rng.uniform(1e-9, 1.0 - 1e-9))
+        val = float(invgauss.ppf(u, mu_param, scale=lam))
+    else:
+        sigma = 0.6
+        mean_log = math.log(max(mu, 1.0)) - 0.5 * sigma ** 2
+        val = float(rng.lognormal(mean=mean_log, sigma=sigma))
+    return float(np.clip(val, 5.0, cap))
+
+
+def _sample_accident_duration_and_severity(
+    rng: np.random.Generator,
+    model_params: dict[str, dict[str, Any]],
+) -> tuple[float, float, str]:
+    """사고 지속시간과 심각도를 strata별로 샘플링한다.
+
+    scipy 사용 가능 시 Weibull(k, θ) per strata (Li et al. 2018),
+    미사용 시 numpy weibull fallback.
+    반환: (duration_sec, severity_float, severity_label)
+    """
+    raw_probs = get_parameter_value(model_params, "accident_severity_probs", [0.6, 0.3, 0.1])
+    if not isinstance(raw_probs, (list, tuple)) or len(raw_probs) != 3:
+        raw_probs = [0.6, 0.3, 0.1]
+    probs = np.array([float(p) for p in raw_probs], dtype=float)
+    probs = probs / probs.sum()
+    cap = float(get_parameter_value(model_params, "accident_duration_cap", 900.0))
+
+    strata_labels = ["minor", "moderate", "severe"]
+    default_shapes = [1.5, 1.7, 2.0]
+    default_scales = [120.0, 240.0, 420.0]
+    severity_map = {"minor": 0.35, "moderate": 0.55, "severe": 0.80}
+
+    strata_idx = int(rng.choice(3, p=probs))
+    label = strata_labels[strata_idx]
+    k = float(get_parameter_value(
+        model_params, f"accident_weibull_shape_{label}", default_shapes[strata_idx]
+    ))
+    theta = float(get_parameter_value(
+        model_params, f"accident_weibull_scale_{label}", default_scales[strata_idx]
+    ))
+
+    if _SCIPY_AVAILABLE and k > 0 and theta > 0:
+        u = float(rng.uniform(1e-9, 1.0 - 1e-9))
+        val = float(weibull_min.ppf(u, k, scale=theta))
+    else:
+        val = float(rng.weibull(k) * theta)
+
+    duration = float(np.clip(val, 30.0, cap))
+    return duration, float(severity_map[label]), label
+
+
+def _sample_illegal_parking_duration(
+    rng: np.random.Generator,
+    model_params: dict[str, dict[str, Any]],
+) -> float:
+    """불법 주정차 지속시간을 샘플링한다.
+
+    scipy 사용 가능 시 Exponential(β) (Gao & Ozbay 2016),
+    미사용 시 numpy exponential fallback.
+    """
+    beta = float(get_parameter_value(model_params, "illegal_parking_exp_beta", 180.0))
+    cap = float(get_parameter_value(model_params, "illegal_parking_duration_cap", 600.0))
+    if _SCIPY_AVAILABLE and beta > 0:
+        u = float(rng.uniform(1e-9, 1.0 - 1e-9))
+        val = float(expon.ppf(u, scale=beta))
+    else:
+        val = float(rng.exponential(beta))
+    return float(np.clip(val, 10.0, cap))
+
+
 def generate_incident_schedule(
     disruption_scenario: str,
     sim_duration: int,
@@ -408,6 +551,13 @@ def generate_incident_schedule(
                 0.75,
             )
         ),
+        "illegal_parking": float(
+            get_parameter_value(
+                model_params,
+                "capacity_multiplier_illegal_parking",
+                0.65,
+            )
+        ),
     }
     speed_map = {
         "accident": float(
@@ -422,6 +572,13 @@ def generate_incident_schedule(
                 model_params,
                 "speed_multiplier_bus_stop",
                 0.8,
+            )
+        ),
+        "illegal_parking": float(
+            get_parameter_value(
+                model_params,
+                "speed_multiplier_illegal_parking",
+                0.75,
             )
         ),
     }
@@ -454,43 +611,93 @@ def generate_incident_schedule(
         idx += 1
 
     if enable_random_disruptions:
-        rate_specs = [
-            ("bus_stop", bus_stop_rate_per_hour),
-            ("accident", accident_rate_per_hour),
-        ]
-        duration_by_type = {
-            "bus_stop": 35.0,
-            "accident": 240.0,
-        }
         sim_hours = max(float(sim_duration) / 3600.0, 0.0)
-        for event_type, rate in rate_specs:
-            count = int(rng.poisson(max(rate, 0.0) * sim_hours))
-            for _ in range(count):
-                duration = duration_by_type[event_type]
-                start = float(rng.uniform(0.0, max(float(sim_duration) - duration, 0.0)))
-                if start >= float(sim_duration):
-                    continue
-                end = min(float(sim_duration), start + duration)
-                if end <= start:
-                    continue
-                lanes = choose_incident_lanes(event_type, monitored_lanes, approach_lanes)
-                if not lanes:
-                    continue
-                event = IncidentEvent(
-                    incident_id=f"inc_{seed}_{idx}",
-                    event_type=event_type,
-                    start_time=start,
-                    end_time=end,
-                    affected_edge_ids=tuple(sorted(set(conflict_edges))),
-                    affected_lane_ids=tuple(sorted(set(lanes))),
-                    severity=0.6,
-                    capacity_multiplier=clip_capacity_multiplier(float(cap_map.get(event_type, 0.6))),
-                    speed_multiplier=clip_capacity_multiplier(float(speed_map.get(event_type, 0.7))),
-                    blocked_lanes_count=1 if event_type == "accident" else 0,
-                    allow_rerouting=event_type == "accident",
-                )
-                events.append(event)
-                idx += 1
+
+        # bus_stop — Inverse Gaussian duration (Kwesiga et al. 2026 / lognormal fallback)
+        bus_count = int(rng.poisson(max(bus_stop_rate_per_hour, 0.0) * sim_hours))
+        for _ in range(bus_count):
+            duration = _sample_bus_stop_duration(rng, model_params)
+            start = float(rng.uniform(0.0, max(float(sim_duration) - duration, 0.0)))
+            if start >= float(sim_duration):
+                continue
+            end = min(float(sim_duration), start + duration)
+            if end <= start:
+                continue
+            lanes = choose_incident_lanes("bus_stop", monitored_lanes, approach_lanes)
+            if not lanes:
+                continue
+            events.append(IncidentEvent(
+                incident_id=f"inc_{seed}_{idx}",
+                event_type="bus_stop",
+                start_time=start,
+                end_time=end,
+                affected_edge_ids=tuple(sorted(set(conflict_edges))),
+                affected_lane_ids=tuple(sorted(set(lanes))),
+                severity=0.75,
+                capacity_multiplier=clip_capacity_multiplier(float(cap_map["bus_stop"])),
+                speed_multiplier=clip_capacity_multiplier(float(speed_map["bus_stop"])),
+                blocked_lanes_count=0,
+                allow_rerouting=False,
+            ))
+            idx += 1
+
+        # accident — Weibull duration + severity strata (Li et al. 2018)
+        acc_count = int(rng.poisson(max(accident_rate_per_hour, 0.0) * sim_hours))
+        for _ in range(acc_count):
+            duration, severity_float, _severity_label = _sample_accident_duration_and_severity(
+                rng, model_params
+            )
+            start = float(rng.uniform(0.0, max(float(sim_duration) - duration, 0.0)))
+            if start >= float(sim_duration):
+                continue
+            end = min(float(sim_duration), start + duration)
+            if end <= start:
+                continue
+            lanes = choose_incident_lanes("accident", monitored_lanes, approach_lanes)
+            if not lanes:
+                continue
+            events.append(IncidentEvent(
+                incident_id=f"inc_{seed}_{idx}",
+                event_type="accident",
+                start_time=start,
+                end_time=end,
+                affected_edge_ids=tuple(sorted(set(conflict_edges))),
+                affected_lane_ids=tuple(sorted(set(lanes))),
+                severity=severity_float,
+                capacity_multiplier=clip_capacity_multiplier(float(cap_map["accident"])),
+                speed_multiplier=clip_capacity_multiplier(float(speed_map["accident"])),
+                blocked_lanes_count=1,
+                allow_rerouting=True,
+            ))
+            idx += 1
+
+        # illegal_parking — Poisson + Exponential duration (Gao & Ozbay 2016)
+        park_count = int(rng.poisson(max(illegal_parking_rate_per_hour, 0.0) * sim_hours))
+        for _ in range(park_count):
+            duration = _sample_illegal_parking_duration(rng, model_params)
+            start = float(rng.uniform(0.0, max(float(sim_duration) - duration, 0.0)))
+            if start >= float(sim_duration):
+                continue
+            end = min(float(sim_duration), start + duration)
+            if end <= start:
+                continue
+            lanes = choose_incident_lanes("illegal_parking", monitored_lanes, approach_lanes)
+            if not lanes:
+                continue
+            events.append(IncidentEvent(
+                incident_id=f"inc_{seed}_{idx}",
+                event_type="illegal_parking",
+                start_time=start,
+                end_time=end,
+                affected_edge_ids=tuple(sorted(set(conflict_edges))),
+                affected_lane_ids=tuple(sorted(set(lanes))),
+                severity=0.5,
+                capacity_multiplier=clip_capacity_multiplier(float(cap_map["illegal_parking"])),
+                speed_multiplier=clip_capacity_multiplier(float(speed_map["illegal_parking"])),
+                blocked_lanes_count=0,
+                allow_rerouting=False,
+            ))
+            idx += 1
 
     return sorted(events, key=lambda e: e.start_time)
 
@@ -762,30 +969,6 @@ def phase_state(tl_id: str | None, phase_index: int, known_tls_ids: set[str] | N
         return ""
 
 
-def is_ped_green_state(state: str, ped_link_indices: list[int]) -> bool:
-    if not state or not ped_link_indices:
-        return False
-    return any(idx < len(state) and state[idx] in {"g", "G"} for idx in ped_link_indices)
-
-
-def is_yellow_state(state: str) -> bool:
-    return any(ch in {"y", "Y"} for ch in state)
-
-
-def is_all_red_state(state: str) -> bool:
-    return bool(state) and all(ch in {"r", "R", "s", "S", "o", "O"} for ch in state)
-
-
-def is_vehicle_green_state(state: str, ped_link_indices: list[int]) -> bool:
-    if not state:
-        return False
-    if is_ped_green_state(state, ped_link_indices):
-        return False
-    if is_yellow_state(state) or is_all_red_state(state):
-        return False
-    return any(ch in {"g", "G"} for ch in state)
-
-
 def tune_phase_duration(
     tl_id: str | None,
     phase_index: int,
@@ -847,6 +1030,8 @@ def run_simulation(
     output_dir: str | Path | None = None,
     vehicle_only: bool = False,
     sensitivity_config: dict[str, Any] | None = None,
+    enable_risk_event_collection: bool = False,
+    risk_event_sample_interval_s: float = 1.0,
 ) -> tuple[dict[str, float | int], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     if traci is None:
         raise RuntimeError("traci가 설치되어 있지 않습니다.")
@@ -892,11 +1077,66 @@ def run_simulation(
     if normalized_home:
         os.environ["SUMO_HOME"] = normalized_home
 
+    # run_simulation은 runtime_trace_path 파라미터를 받지 않으므로 None으로 고정한다.
+    # (run_simulation_integrated는 해당 파라미터를 별도로 수신함)
+    runtime_trace_path: str | Path | None = None
+
+    debug_state: dict[str, Any] = {
+        "scenario": scenario,
+        "seed": int(seed),
+        "simulation_time": None,
+        "rel_time": None,
+        "current_crosswalk_id": "",
+        "tls_id": "",
+        "crossing_edge": "",
+        "last_traci_call": "init",
+        "last_object_id": "",
+        "sumo_return_code": None,
+    }
+
+    def record_runtime_event(event: str, **fields: Any) -> None:
+        payload = {**debug_state, **fields, "event": event}
+        _runtime_log_append(runtime_trace_path, payload)
+
+    update_runtime_state = debug_state.update
+
     crossing_edge = metadata["crossing_edge"]
     vehicle_conflict_edges = set(metadata["vehicle_conflict_edges"])
     approach_lanes = list(metadata["approach_lanes"])
     tl_id = metadata.get("tls_id")
     ped_link_indices = [int(idx) for idx in metadata.get("ped_link_indices", [])]
+    ped_link_indices_source = str(metadata.get("ped_link_indices_source", "manifest"))
+
+    # Runtime fallback: if manifest has empty ped_link_indices but tls_id and crossing_edge
+    # are known, re-derive from net.xml so signalized candidates don't silently no-op.
+    if not ped_link_indices and tl_id and crossing_edge:
+        try:
+            inferred = pedestrian_link_indices(net_file, tl_id, crossing_edge)
+            if inferred:
+                ped_link_indices = inferred
+                ped_link_indices_source = "inferred_from_net_xml"
+        except Exception as _pli_exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "[smart_extension] cw=%s: ped_link_indices inference failed: %s",
+                crosswalk_id, _pli_exc,
+            )
+
+    signal_extension_mapping_status = "ok" if ped_link_indices else "empty_ped_link_indices"
+    smart_extension_mapping_warning = (
+        ""
+        if ped_link_indices
+        else (
+            f"signalized+runnable candidate has ped_link_indices=[] after manifest and "
+            f"net.xml lookup; extension will not trigger "
+            f"(tls_id={tl_id}, crossing_edge={crossing_edge})"
+        )
+    )
+    if smart_extension_mapping_warning:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "[smart_extension] cw=%s: %s", crosswalk_id, smart_extension_mapping_warning
+        )
 
     scope = build_surrounding_scope(net_file, metadata, traffic_measure_radius_m)
     monitored_lanes = set(scope["monitored_lanes"])
@@ -1133,45 +1373,63 @@ def run_simulation(
                     next_switch = t
                     tls_refresh_countdown = 0
                 remaining = next_switch - t
+                # Fetch peds only when pre-conditions pass (preserves original TraCI call timing).
+                ped_on_crossing: set = set()
+                detected_peds: set = set()
+                sensor_pass = True
                 if (
                     remaining <= signal_params["trigger_remaining"]
                     and extension_count_in_cycle < signal_params["max_extensions"]
                     and not extended_in_cycle
                 ):
                     ped_on_crossing = set(traci.edge.getLastStepPersonIDs(crossing_edge))
-                    ped_on_detectors = set()
+                    ped_on_detectors: set = set()
                     for edge_id in ped_detector_edges:
                         try:
                             ped_on_detectors.update(traci.edge.getLastStepPersonIDs(edge_id))
                         except Exception:
                             continue
                     detected_peds = ped_on_crossing | ped_on_detectors
-                    if detected_peds and random.random() > signal_params["sensor_fn_rate"]:
-                        try:
-                            traci.trafficlight.setPhaseDuration(
-                                tl_id_known,
-                                remaining + signal_params["extension_increment"],
-                            )
-                        except Exception:
-                            tls_refresh_countdown = 0
-                            continue
-                        extension_count_in_cycle += 1
-                        extended_in_cycle = True
-                        total_extension_count += 1
-                        pedestrian_green_extension_time += signal_params["extension_increment"]
-                        extension_events_log.append(
-                            {
-                                "sim_time": t,
-                                "crosswalk_id": str(crosswalk_id),
-                                "tls_id": str(tl_id_known),
-                                "phase_index": int(current_phase),
-                                "remaining_before_extension": float(remaining),
-                                "extension_sec": float(signal_params["extension_increment"]),
-                                "ped_count_on_crossing": int(len(ped_on_crossing)),
-                                "seed": int(seed),
-                                "scenario": scenario,
-                            }
+                    if detected_peds:
+                        # random.random() called only when peds detected — same timing as before.
+                        sensor_pass = random.random() > signal_params["sensor_fn_rate"]
+                decision = evaluate_smart_extension_decision(
+                    tls_id=tl_id_known,
+                    ped_link_indices=ped_link_indices,
+                    tls_state=state,
+                    remaining_s=remaining,
+                    pedestrians_detected=bool(detected_peds),
+                    extension_count_in_cycle=extension_count_in_cycle,
+                    extended_in_cycle=extended_in_cycle,
+                    signal_params=signal_params,
+                    sensor_pass=sensor_pass,
+                )
+                if decision["should_extend"]:
+                    try:
+                        traci.trafficlight.setPhaseDuration(
+                            tl_id_known,
+                            remaining + decision["extension_sec"],
                         )
+                    except Exception:
+                        tls_refresh_countdown = 0
+                        continue
+                    extension_count_in_cycle += 1
+                    extended_in_cycle = True
+                    total_extension_count += 1
+                    pedestrian_green_extension_time += decision["extension_sec"]
+                    extension_events_log.append(
+                        {
+                            "sim_time": t,
+                            "crosswalk_id": str(crosswalk_id),
+                            "tls_id": str(tl_id_known),
+                            "phase_index": int(current_phase),
+                            "remaining_before_extension": float(remaining),
+                            "extension_sec": float(decision["extension_sec"]),
+                            "ped_count_on_crossing": int(len(ped_on_crossing)),
+                            "seed": int(seed),
+                            "scenario": scenario,
+                        }
+                    )
 
             if collect:
                 measure_steps += 1
@@ -1376,6 +1634,8 @@ def run_simulation(
         try:
             traci.switch(traci_label)
             traci.close(False)
+            debug_state.update(sumo_return_code=_active_sumo_return_code(traci_label))
+            record_runtime_event("traci_closed", sumo_return_code=_active_sumo_return_code(traci_label))
         except Exception:
             pass
 
@@ -1542,6 +1802,18 @@ def run_simulation(
             ET.indent(person_root, space="  ")
             ET.ElementTree(person_root).write(fcd_person_path, encoding="utf-8", xml_declaration=True)
 
+    # per-candidate 모드: 이번 Phase에서는 루프 연동 없이 flag 필드만 기록
+    metrics["risk_event_collection_enabled"] = bool(enable_risk_event_collection)
+    metrics["risk_event_count"] = 0
+    metrics["senior_risk_event_count"] = 0
+    metrics["risk_events_path"] = ""
+    metrics["pedestrian_frame_count"] = 0
+    metrics["vehicle_frame_count"] = 0
+    metrics["ped_link_indices_count"] = len(ped_link_indices)
+    metrics["ped_link_indices_source"] = ped_link_indices_source
+    metrics["signal_extension_mapping_status"] = signal_extension_mapping_status
+    metrics["smart_extension_mapping_warning"] = smart_extension_mapping_warning
+
     return metrics, extension_events_log, incident_events_log, incident_impacts, file_exports
 
 
@@ -1574,8 +1846,12 @@ def run_simulation_integrated(
     model_parameters_path: str | Path | None = None,
     export_fcd: bool = False,
     output_dir: str | Path | None = None,
+    runtime_trace_path: str | Path | None = None,
+    failure_context_path: str | Path | None = None,
     vehicle_only: bool = False,
     sensitivity_config: dict[str, Any] | None = None,
+    enable_risk_event_collection: bool = False,
+    risk_event_sample_interval_s: float = 1.0,
 ) -> tuple[
     list[dict[str, Any]],
     dict[str, Any],
@@ -1628,6 +1904,24 @@ def run_simulation_integrated(
     if normalized_home:
         os.environ["SUMO_HOME"] = normalized_home
 
+    debug_state: dict[str, Any] = {
+        "scenario": scenario,
+        "seed": int(seed),
+        "simulation_time": None,
+        "current_crosswalk_id": "",
+        "tls_id": "",
+        "crossing_edge": "",
+        "last_traci_call": "init",
+        "last_object_id": "",
+        "sumo_return_code": None,
+    }
+
+    def record_runtime_event(event: str, **fields: Any) -> None:
+        payload = {**debug_state, **fields, "event": event}
+        _runtime_log_append(runtime_trace_path, payload)
+
+    update_runtime_state = debug_state.update
+
     net = read_net(net_file)
     context_states: list[dict[str, Any]] = []
     group_defs: dict[str, dict[str, Any]] = {}
@@ -1668,7 +1962,19 @@ def run_simulation_integrated(
             },
         )
         group["contexts"].append(crosswalk_id)
-        group["ped_link_indices_union"].update(int(idx) for idx in context.get("ped_link_indices", []))
+        ctx_pli = [int(idx) for idx in context.get("ped_link_indices", [])]
+        # Per-context fallback: if ped_link_indices is missing in manifest, re-derive from net.xml
+        # before accumulating into the TLS-level union.
+        if not ctx_pli:
+            ctx_tls_id = str(context.get("tls_id") or "")
+            ctx_crossing_edge = str(context.get("crossing_edge") or "")
+            ctx_net_file = context.get("net_file") or net_file
+            if ctx_tls_id and ctx_crossing_edge:
+                try:
+                    ctx_pli = pedestrian_link_indices(ctx_net_file, ctx_tls_id, ctx_crossing_edge)
+                except Exception:
+                    ctx_pli = []
+        group["ped_link_indices_union"].update(ctx_pli)
         if float(signal_timing["ped_green"]) > float(group["signal_timing"]["ped_green"]):
             group["signal_timing"] = signal_timing
         if crosswalk_id in smart_target_ids:
@@ -1738,24 +2044,85 @@ def run_simulation_integrated(
 
     traci_port = free_traci_port()
     traci_label = f"integrated_{scenario}_{seed}_{random.randint(0, 1_000_000)}"
-    traci.start(
-        [
-            sumo_binary(),
-            "-c",
-            str(sumocfg),
-            "--seed",
-            str(seed),
-            "--step-length",
-            str(traci_step_length),
-            "--time-to-teleport",
-            "300",
-            "--no-warnings",
-            "--no-step-log",
-        ],
-        port=traci_port,
-        label=traci_label,
+    out_dir = Path(output_dir) if output_dir is not None else None
+    traci_trace_file = None
+    sumo_stdout_file = out_dir / f"sumo_stdout_{scenario}_seed{seed}.log" if out_dir else None
+    sumo_stderr_file = out_dir / f"sumo_stderr_{scenario}_seed{seed}.log" if out_dir else None
+    sumo_stdout_handle = None
+    sumo_cmd = [
+        sumo_binary(),
+        "-c",
+        str(sumocfg),
+        "--seed",
+        str(seed),
+        "--step-length",
+        str(traci_step_length),
+        "--time-to-teleport",
+        "300",
+        "--no-warnings",
+        "--no-step-log",
+    ]
+    if sumo_stderr_file is not None:
+        sumo_cmd.extend(["--error-log", str(sumo_stderr_file)])
+    start_ts = time.time()
+    record_runtime_event(
+        "traci_start_begin",
+        timestamp=start_ts,
+        scenario=scenario,
+        seed=int(seed),
+        port=int(traci_port),
+        traci_label=traci_label,
+        sumocfg=str(sumocfg),
+        sumo_command=" ".join(sumo_cmd),
+        traci_trace_file=str(traci_trace_file) if traci_trace_file else "",
+        sumo_stdout_file=str(sumo_stdout_file) if sumo_stdout_file else "",
+        sumo_stderr_file=str(sumo_stderr_file) if sumo_stderr_file else "",
     )
-    traci.switch(traci_label)
+    try:
+        if sumo_stdout_file is not None:
+            sumo_stdout_handle = open(sumo_stdout_file, "w", encoding="utf-8")
+        traci.start(
+            sumo_cmd,
+            port=traci_port,
+            numRetries=180,
+            label=traci_label,
+            verbose=False,
+            traceFile=None,
+            stdout=sumo_stdout_handle,
+        )
+        traci.switch(traci_label)
+    except Exception as exc:
+        debug_state.update(
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+            sumo_return_code=_active_sumo_return_code(traci_label),
+        )
+        failure_payload = {
+            **debug_state,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+        }
+        _runtime_failure_write(failure_context_path, failure_payload)
+        record_runtime_event(
+            "traci_start_exception",
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+            elapsed_seconds=float(time.time() - start_ts),
+        )
+        raise
+    finally:
+        if sumo_stdout_handle is not None:
+            sumo_stdout_handle.close()
+    debug_state.update(sumo_return_code=_active_sumo_return_code(traci_label))
+    record_runtime_event(
+        "traci_started",
+        sumocfg=str(sumocfg),
+        traci_label=traci_label,
+        elapsed_seconds=float(time.time() - start_ts),
+        sumo_return_code=_active_sumo_return_code(traci_label),
+        tls_count=int(len(traci.trafficlight.getIDList())),
+        simulation_time=float(traci.simulation.getTime()),
+    )
 
     lane_original_states: dict[str, LaneState] = {}
     active_event_ids: set[str] = set()
@@ -1795,6 +2162,13 @@ def run_simulation_integrated(
     fcd_person_records: list[tuple[float, str, float, float, float, str]] = []
     lane_data_records: list[tuple[float, str, int, float]] = []
     edge_data_records: list[tuple[float, str, int, float]] = []
+    active_target_count = int(sum(1 for state in context_states if state["crosswalk_id"] in smart_target_ids))
+
+    # feature-flagged risk event collection buffers
+    _risk_ped_frames: list[dict[str, Any]] = []
+    _risk_veh_frames: list[dict[str, Any]] = []
+    _risk_next_sample_t: float = float(warmup)
+    _risk_sample_interval = max(float(risk_event_sample_interval_s), float(traci_step_length))
 
     try:
         for state in context_states:
@@ -1806,10 +2180,36 @@ def run_simulation_integrated(
             state["adjacent_tls_count"] = adjacent_tls_count
 
         end_time = warmup + sim_duration
+        progress_log_interval_s = 25.0 if scenario == "smart_selected" else 100.0
+        next_progress_log = 0.0
         while traci.simulation.getTime() < end_time:
-            traci.simulationStep()
+            debug_state.update(last_traci_call="traci.simulationStep", last_object_id="", current_crosswalk_id="", tls_id="", crossing_edge="")
+            try:
+                traci.simulationStep()
+            except Exception as exc:
+                debug_state.update(
+                    exception_type=type(exc).__name__,
+                    exception_message=str(exc),
+                    sumo_return_code=_active_sumo_return_code(traci_label),
+                )
+                failure_payload = {
+                    **debug_state,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                }
+                _runtime_failure_write(failure_context_path, failure_payload)
+                raise
             t = float(traci.simulation.getTime())
             rel_t = max(0.0, t - warmup)
+            debug_state.update(simulation_time=t, rel_time=rel_t)
+            loop_timing_ms: dict[str, float] = {
+                "incident_loop_ms": 0.0,
+                "vehicle_metrics_loop_ms": 0.0,
+                "lane_edge_loop_ms": 0.0,
+                "trafficlight_loop_ms": 0.0,
+                "trafficlight_extension_loop_ms": 0.0,
+                "per_crosswalk_context_loop_ms": 0.0,
+            }
             collect = t > warmup
             if tls_refresh_countdown <= 0:
                 known_tls_ids = traci_trafficlight_ids()
@@ -1817,6 +2217,7 @@ def run_simulation_integrated(
             else:
                 tls_refresh_countdown -= 1
 
+            incident_loop_t0 = time.perf_counter()
             currently_active = active_incidents(incident_events, rel_t)
             current_ids = {event.incident_id for event in currently_active}
             for event in currently_active:
@@ -1847,6 +2248,7 @@ def run_simulation_integrated(
                         }
                     )
             active_event_ids = current_ids
+            loop_timing_ms["incident_loop_ms"] = float((time.perf_counter() - incident_loop_t0) * 1000.0)
 
             active_capacity_multiplier = (
                 min(event.capacity_multiplier for event in currently_active) if currently_active else 1.0
@@ -1874,13 +2276,18 @@ def run_simulation_integrated(
             for veh_id in current_vehicle_ids:
                 network_first_seen.setdefault(veh_id, t)
 
+            vehicle_metrics_t0 = time.perf_counter()
             vehicle_info: dict[str, dict[str, Any]] = {}
             all_vehicle_speeds: list[float] = []
             for veh_id in current_vehicle_ids:
                 try:
+                    debug_state.update(last_traci_call="traci.vehicle.getLaneID", last_object_id=str(veh_id))
                     lane_id = traci.vehicle.getLaneID(veh_id)
+                    debug_state.update(last_traci_call="traci.vehicle.getRoadID", last_object_id=str(veh_id))
                     road_id = traci.vehicle.getRoadID(veh_id)
+                    debug_state.update(last_traci_call="traci.vehicle.getSpeed", last_object_id=str(veh_id))
                     speed = float(traci.vehicle.getSpeed(veh_id))
+                    debug_state.update(last_traci_call="traci.vehicle.getAccumulatedWaitingTime", last_object_id=str(veh_id))
                     accumulated_wait = float(traci.vehicle.getAccumulatedWaitingTime(veh_id))
                     vehicle_info[veh_id] = {
                         "lane_id": lane_id,
@@ -1905,6 +2312,7 @@ def run_simulation_integrated(
                 ts_queue.append((rel_t, float(network_queue_counts[-1])))
                 ts_wait.append((rel_t, avg_wait))
                 ts_speed.append((rel_t, avg_speed))
+            loop_timing_ms["vehicle_metrics_loop_ms"] = float((time.perf_counter() - vehicle_metrics_t0) * 1000.0)
 
             union_lane_ids = sorted(
                 {
@@ -1916,12 +2324,16 @@ def run_simulation_integrated(
             lane_halting: dict[str, int] = {}
             lane_occupancy: dict[str, float] = {}
             lane_speeds: dict[str, float] = {}
+            lane_edge_t0 = time.perf_counter()
             if collect:
                 for lane_id in union_lane_ids:
                     try:
+                        debug_state.update(last_traci_call="traci.lane.getLastStepHaltingNumber", last_object_id=str(lane_id))
                         halted = int(traci.lane.getLastStepHaltingNumber(lane_id))
                         lane_halting[lane_id] = halted
+                        debug_state.update(last_traci_call="traci.lane.getLastStepOccupancy", last_object_id=str(lane_id))
                         lane_occupancy[lane_id] = float(traci.lane.getLastStepOccupancy(lane_id))
+                        debug_state.update(last_traci_call="traci.lane.getLastStepMeanSpeed", last_object_id=str(lane_id))
                         lane_speeds[lane_id] = float(traci.lane.getLastStepMeanSpeed(lane_id))
                         lane_data_records.append((rel_t, lane_id, halted, lane_speeds[lane_id]))
                     except Exception:
@@ -1940,11 +2352,20 @@ def run_simulation_integrated(
                 for edge_id, queue in edge_queue.items():
                     mean_sp = edge_speed_sum.get(edge_id, 0.0) / max(1, edge_speed_cnt.get(edge_id, 1))
                     edge_data_records.append((rel_t, edge_id, queue, mean_sp))
+            loop_timing_ms["lane_edge_loop_ms"] = float((time.perf_counter() - lane_edge_t0) * 1000.0)
 
+            trafficlight_t0 = time.perf_counter()
+            trafficlight_extension_elapsed_ms = 0.0
             for group in group_defs.values():
                 raw_tl_id = group["tl_id"] or None
                 tl_id = raw_tl_id if is_known_trafficlight(raw_tl_id, known_tls_ids) else None
+                debug_state.update(
+                    current_crosswalk_id=str(group["contexts"][0]) if group["contexts"] else "",
+                    tls_id=str(tl_id or raw_tl_id or ""),
+                    crossing_edge="",
+                )
                 try:
+                    debug_state.update(last_traci_call="traci.trafficlight.getPhase", last_object_id=str(tl_id or ""))
                     current_phase = traci.trafficlight.getPhase(tl_id) if tl_id else -1
                 except Exception:
                     tl_id = None
@@ -1961,9 +2382,24 @@ def run_simulation_integrated(
                         if context_state["crosswalk_id"] not in group["contexts"]:
                             continue
                         crossing_edge = str(context_state["metadata"]["crossing_edge"])
+                        debug_state.update(
+                            current_crosswalk_id=str(context_state["crosswalk_id"]),
+                            tls_id=str(tl_id or raw_tl_id or ""),
+                            crossing_edge=crossing_edge,
+                            last_traci_call="traci.edge.getLastStepPersonIDs",
+                            last_object_id=crossing_edge,
+                        )
                         for ped_id in traci.edge.getLastStepPersonIDs(crossing_edge):
                             try:
+                                debug_state.update(
+                                    current_crosswalk_id=str(context_state["crosswalk_id"]),
+                                    tls_id=str(tl_id or raw_tl_id or ""),
+                                    crossing_edge=crossing_edge,
+                                    last_traci_call="traci.person.getLanePosition",
+                                    last_object_id=str(ped_id),
+                                )
                                 pos = float(traci.person.getLanePosition(ped_id))
+                                debug_state.update(last_traci_call="traci.person.getSpeed", last_object_id=str(ped_id))
                                 speed = float(traci.person.getSpeed(ped_id))
                                 if speed <= 0:
                                     speed = 0.5
@@ -2000,19 +2436,25 @@ def run_simulation_integrated(
                     and current_phase_is_ped_green
                     and group["target_context_ids"]
                 ):
+                    extension_t0 = time.perf_counter()
                     try:
+                        debug_state.update(
+                            last_traci_call="traci.trafficlight.getNextSwitch",
+                            last_object_id=str(tl_id or ""),
+                        )
                         next_switch = float(traci.trafficlight.getNextSwitch(tl_id))
                     except Exception:
                         tls_refresh_countdown = 0
                         continue
                     remaining = next_switch - t
+                    # Fetch peds only when pre-conditions pass (preserves original TraCI call timing).
+                    triggered_context_ids: list[str] = []
+                    ped_on_crossing_total = 0
                     if (
                         remaining <= signal_params["trigger_remaining"]
                         and group["extension_count_in_cycle"] < signal_params["max_extensions"]
                         and not group["extended_in_cycle"]
                     ):
-                        triggered_context_ids: list[str] = []
-                        ped_on_crossing_total = 0
                         for context_state in context_states:
                             crosswalk_id = context_state["crosswalk_id"]
                             if crosswalk_id not in group["target_context_ids"]:
@@ -2034,41 +2476,62 @@ def run_simulation_integrated(
                             if detected_peds:
                                 triggered_context_ids.append(crosswalk_id)
                                 ped_on_crossing_total += len(ped_on_crossing)
-                        if triggered_context_ids and random.random() > signal_params["sensor_fn_rate"]:
-                            try:
-                                traci.trafficlight.setPhaseDuration(
-                                    tl_id,
-                                    remaining + signal_params["extension_increment"],
-                                )
-                            except Exception:
-                                tls_refresh_countdown = 0
-                                continue
-                            group["extension_count_in_cycle"] += 1
-                            group["extended_in_cycle"] = True
-                            group["total_extension_count"] += 1
-                            group["pedestrian_green_extension_time"] += signal_params["extension_increment"]
-                            extension_events_log.append(
-                                {
-                                    "sim_time": t,
-                                    "crosswalk_id": "|".join(triggered_context_ids),
-                                    "crosswalk_ids": json.dumps(triggered_context_ids, ensure_ascii=False),
-                                    "tls_id": str(tl_id),
-                                    "phase_index": int(current_phase),
-                                    "remaining_before_extension": float(remaining),
-                                    "extension_sec": float(signal_params["extension_increment"]),
-                                    "ped_count_on_crossing": int(ped_on_crossing_total),
-                                    "seed": int(seed),
-                                    "scenario": scenario,
-                                }
+                    # random.random() called only when triggered_context_ids non-empty — same timing as before.
+                    sensor_pass = random.random() > signal_params["sensor_fn_rate"] if triggered_context_ids else False
+                    decision = evaluate_smart_extension_decision(
+                        tls_id=tl_id,
+                        ped_link_indices=ped_link_indices_union,
+                        tls_state=state_str,
+                        remaining_s=remaining,
+                        pedestrians_detected=bool(triggered_context_ids),
+                        extension_count_in_cycle=group["extension_count_in_cycle"],
+                        extended_in_cycle=group["extended_in_cycle"],
+                        signal_params=signal_params,
+                        sensor_pass=sensor_pass,
+                    )
+                    if decision["should_extend"]:
+                        try:
+                            debug_state.update(
+                                last_traci_call="traci.trafficlight.setPhaseDuration",
+                                last_object_id=str(tl_id or ""),
                             )
-                            for context_state in context_states:
-                                if context_state["crosswalk_id"] in triggered_context_ids:
-                                    context_state["local_extension_count"] += 1
-                                    context_state["local_extension_time"] += signal_params["extension_increment"]
+                            traci.trafficlight.setPhaseDuration(
+                                tl_id,
+                                remaining + decision["extension_sec"],
+                            )
+                        except Exception:
+                            tls_refresh_countdown = 0
+                            continue
+                        group["extension_count_in_cycle"] += 1
+                        group["extended_in_cycle"] = True
+                        group["total_extension_count"] += 1
+                        group["pedestrian_green_extension_time"] += decision["extension_sec"]
+                        extension_events_log.append(
+                            {
+                                "sim_time": t,
+                                "crosswalk_id": "|".join(triggered_context_ids),
+                                "crosswalk_ids": json.dumps(triggered_context_ids, ensure_ascii=False),
+                                "tls_id": str(tl_id),
+                                "phase_index": int(current_phase),
+                                "remaining_before_extension": float(remaining),
+                                "extension_sec": float(decision["extension_sec"]),
+                                "ped_count_on_crossing": int(ped_on_crossing_total),
+                                "seed": int(seed),
+                                "scenario": scenario,
+                            }
+                        )
+                        for context_state in context_states:
+                            if context_state["crosswalk_id"] in triggered_context_ids:
+                                context_state["local_extension_count"] += 1
+                                context_state["local_extension_time"] += decision["extension_sec"]
+                    trafficlight_extension_elapsed_ms += float((time.perf_counter() - extension_t0) * 1000.0)
 
                 group["prev_phase_was_ped_green"] = current_phase_is_ped_green
                 group["prev_vehicle_green"] = current_phase_is_vehicle_green
+            loop_timing_ms["trafficlight_loop_ms"] = float((time.perf_counter() - trafficlight_t0) * 1000.0)
+            loop_timing_ms["trafficlight_extension_loop_ms"] = float(trafficlight_extension_elapsed_ms)
 
+            per_crosswalk_t0 = time.perf_counter()
             if collect:
                 any_spillback_now = False
                 current_person_ids = set(traci.person.getIDList())
@@ -2101,6 +2564,11 @@ def run_simulation_integrated(
                     context_state["measure_steps"] += 1
                     metadata = context_state["metadata"]
                     crossing_edge = str(metadata["crossing_edge"])
+                    debug_state.update(
+                        current_crosswalk_id=str(context_state["crosswalk_id"]),
+                        tls_id=str(metadata.get("tls_id") or ""),
+                        crossing_edge=crossing_edge,
+                    )
                     current_vehicle_conflict = {
                         veh_id
                         for veh_id, info in vehicle_info.items()
@@ -2110,10 +2578,18 @@ def run_simulation_integrated(
                         context_state["vehicle_exit_times"].append(t)
                     context_state["vehicle_on_conflict_prev"] = current_vehicle_conflict
 
+                    debug_state.update(
+                        last_traci_call="traci.edge.getLastStepPersonIDs",
+                        last_object_id=crossing_edge,
+                    )
                     peds_on_crossing = set(traci.edge.getLastStepPersonIDs(crossing_edge))
                     detector_peds = set()
                     for edge_id in context_state["ped_detector_edges"]:
                         try:
+                            debug_state.update(
+                                last_traci_call="traci.edge.getLastStepPersonIDs",
+                                last_object_id=str(edge_id),
+                            )
                             detector_peds.update(traci.edge.getLastStepPersonIDs(edge_id))
                         except Exception:
                             continue
@@ -2122,6 +2598,10 @@ def run_simulation_integrated(
                         context_state["context_person_first_seen"].setdefault(ped_id, t)
                         context_state["all_seen_pedestrians"].add(ped_id)
                         try:
+                            debug_state.update(
+                                last_traci_call="traci.person.getTypeID",
+                                last_object_id=str(ped_id),
+                            )
                             if traci.person.getTypeID(ped_id) == "elderly":
                                 context_state["elderly_seen_pedestrians"].add(ped_id)
                         except Exception:
@@ -2210,6 +2690,108 @@ def run_simulation_integrated(
                         context_state["queue_lengths"].append(lane_halting.get(str(lane_id), 0))
                 if any_spillback_now:
                     network_spillback_steps += 1
+            loop_timing_ms["per_crosswalk_context_loop_ms"] = float((time.perf_counter() - per_crosswalk_t0) * 1000.0)
+
+            # feature-flagged: risk event frame collection (enable_risk_event_collection=True 시만 실행)
+            if enable_risk_event_collection and collect and t >= _risk_next_sample_t:
+                _risk_next_sample_t = t + _risk_sample_interval
+                # vehicle frames
+                for veh_id, vinfo in vehicle_info.items():
+                    try:
+                        vx, vy = traci.vehicle.getPosition(veh_id)
+                        _risk_veh_frames.append({
+                            "time_s": t,
+                            "vehicle_id": veh_id,
+                            "edge_id": str(vinfo.get("road_id", "")),
+                            "lane_id": str(vinfo.get("lane_id", "")),
+                            "x": float(vx),
+                            "y": float(vy),
+                            "speed_mps": float(vinfo.get("speed", 0.0)),
+                        })
+                    except Exception:
+                        continue
+                # pedestrian frames: 시뮬레이션 내 모든 person 수집
+                # (crossing_edge 메타데이터 유무에 관계없이 동작)
+                try:
+                    _all_person_ids = set(traci.person.getIDList())
+                except Exception:
+                    _all_person_ids = set()
+                _ctx0_cw_id = str(context_states[0].get("crosswalk_id", "")) if context_states else ""
+                for ped_id in _all_person_ids:
+                    try:
+                        px, py = traci.person.getPosition(ped_id)
+                    except Exception:
+                        continue
+                    try:
+                        _is_snr = "elderly" in str(traci.person.getTypeID(ped_id)).lower()
+                    except Exception:
+                        _is_snr = False
+                    # crosswalk_id: road ID가 context crossing_edge와 일치하면 해당 id, 아니면 첫 번째 context
+                    _ped_cw_id = _ctx0_cw_id
+                    try:
+                        _ped_road = traci.person.getRoadID(ped_id)
+                        for _ctx in context_states:
+                            _ctx_meta = _ctx.get("metadata") or {}
+                            _ctx_cross = str(_ctx_meta.get("crossing_edge") or "")
+                            if _ctx_cross and _ctx_cross == _ped_road:
+                                _ped_cw_id = str(_ctx.get("crosswalk_id", ""))
+                                break
+                    except Exception:
+                        pass
+                    _risk_ped_frames.append({
+                        "time_s": t,
+                        "pedestrian_id": ped_id,
+                        "crosswalk_id": _ped_cw_id,
+                        "x": float(px),
+                        "y": float(py),
+                        "is_senior": _is_snr,
+                        "signal_state": "",
+                        "ped_remaining_crossing_time_s": float("nan"),
+                    })
+
+            if rel_t >= next_progress_log:
+                try:
+                    vehicle_count = int(len(traci.vehicle.getIDList()))
+                except Exception:
+                    vehicle_count = -1
+                try:
+                    person_count = int(len(traci.person.getIDList()))
+                except Exception:
+                    person_count = -1
+                try:
+                    min_expected_number = int(traci.simulation.getMinExpectedNumber())
+                except Exception:
+                    min_expected_number = -1
+                record_runtime_event(
+                    "runtime_loop_progress",
+                    simulation_time=t,
+                    rel_time=rel_t,
+                    vehicle_count=vehicle_count,
+                    person_count=person_count,
+                    min_expected_number=min_expected_number,
+                    active_target_count=active_target_count,
+                    **loop_timing_ms,
+                )
+                next_progress_log += progress_log_interval_s
+        record_runtime_event(
+            "runtime_loop_complete",
+            simulation_time=float(traci.simulation.getTime()),
+            sumo_return_code=_active_sumo_return_code(traci_label),
+        )
+    except Exception as exc:
+        debug_state.update(
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+            sumo_return_code=_active_sumo_return_code(traci_label),
+        )
+        failure_payload = {
+            **debug_state,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+        }
+        _runtime_failure_write(failure_context_path, failure_payload)
+        record_runtime_event("runtime_exception", exception_type=type(exc).__name__, exception_message=str(exc))
+        raise
     finally:
         for event in incident_events:
             if event.incident_id in active_event_ids:
@@ -2324,6 +2906,14 @@ def run_simulation_integrated(
         "extension_count": float(total_extension_count),
         "total_extension_sec": float(total_extension_sec),
         "network_arrived_vehicles": int(network_arrival_count),
+        "ped_link_indices_count": sum(
+            len(list(g["ped_link_indices_union"])) for g in group_defs.values()
+        ),
+        "signal_extension_mapping_status": (
+            "ok"
+            if any(g["ped_link_indices_union"] for g in group_defs.values())
+            else "empty_ped_link_indices"
+        ),
         "network_avg_travel_time_sec": float(np.nanmean(network_travel_times)) if network_travel_times else 0.0,
         "network_avg_speed_mps": float(np.nanmean(network_speed_means)) if network_speed_means else 0.0,
         "network_teleported_vehicles": int(teleported_vehicle_count),
@@ -2410,6 +3000,59 @@ def run_simulation_integrated(
                 )
             ET.indent(person_root, space="  ")
             ET.ElementTree(person_root).write(fcd_person_path, encoding="utf-8", xml_declaration=True)
+
+    # feature-flagged: risk event 탐지 및 저장
+    _risk_result: dict[str, Any] = {
+        "risk_event_collection_enabled": bool(enable_risk_event_collection),
+        "risk_event_count": 0,
+        "senior_risk_event_count": 0,
+        "risk_events_path": "",
+        "pedestrian_frame_count": len(_risk_ped_frames),
+        "vehicle_frame_count": len(_risk_veh_frames),
+        "risk_event_collection_error": "",
+    }
+    if enable_risk_event_collection:
+        try:
+            try:
+                from .safety.risk_event_detector import (  # noqa: PLC0415
+                    RiskEventDetectorParams,
+                    compute_pair_diagnostics,
+                    detect_risk_events_from_frames,
+                    write_risk_events_csv,
+                )
+            except ImportError:
+                from smart_crosswalk_sumo.safety.risk_event_detector import (  # noqa: PLC0415
+                    RiskEventDetectorParams,
+                    compute_pair_diagnostics,
+                    detect_risk_events_from_frames,
+                    write_risk_events_csv,
+                )
+            import pandas as _pd  # noqa: PLC0415
+            _risk_ped_df = _pd.DataFrame(_risk_ped_frames) if _risk_ped_frames else _pd.DataFrame()
+            _risk_veh_df = _pd.DataFrame(_risk_veh_frames) if _risk_veh_frames else _pd.DataFrame()
+            _pair_diag = compute_pair_diagnostics(_risk_ped_df, _risk_veh_df)
+            _risk_result.update({
+                "pair_diag_n_pairs_total": _pair_diag.get("n_pairs_total", 0),
+                "pair_diag_n_within_15m": _pair_diag.get("n_pairs_within_15m", 0),
+                "pair_diag_n_within_30m": _pair_diag.get("n_pairs_within_30m", 0),
+                "pair_diag_min_distance_m": _pair_diag.get("min_distance_m"),
+                "pair_diag_mean_distance_m": _pair_diag.get("mean_distance_m"),
+                "pair_diag_n_time_steps": _pair_diag.get("n_time_steps_matched", 0),
+            })
+            _risk_events_df = detect_risk_events_from_frames(
+                _risk_ped_df, _risk_veh_df, RiskEventDetectorParams()
+            )
+            _risk_result["risk_event_count"] = int(len(_risk_events_df))
+            if "is_senior" in _risk_events_df.columns:
+                _risk_result["senior_risk_event_count"] = int(_risk_events_df["is_senior"].sum())
+            if output_dir:
+                _risk_csv_path = Path(output_dir) / f"risk_events_{scenario}_seed{seed}.csv"
+                write_risk_events_csv(_risk_events_df, _risk_csv_path)
+                _risk_result["risk_events_path"] = str(_risk_csv_path)
+                file_exports["risk_events_path"] = str(_risk_csv_path)
+        except Exception as _exc:
+            _risk_result["risk_event_collection_error"] = str(_exc)
+    network_metrics.update(_risk_result)
 
     return (
         per_crosswalk_metrics,
