@@ -413,6 +413,136 @@ def _build_readme(output_dir: Path, risk_event_count_bl: int, risk_event_count_s
 
 
 # ---------------------------------------------------------------------------
+# 3-b-extra. smart_crosswalk_candidate_pool.csv — 662 후보 설치 가능성 분류
+# ---------------------------------------------------------------------------
+
+def _build_candidate_pool_csv(
+    registry_path: "Path | None",
+    runtime_selected_ids: "list[str] | None",
+    output_path: "Path",
+) -> bool:
+    """Build smart_crosswalk_candidate_pool.csv from the registry CSV.
+
+    Adds derived installability classification fields without modifying the
+    registry or candidate pool.  Returns True if the file was written.
+    """
+    if registry_path is None or not Path(registry_path).exists():
+        return False
+    try:
+        import pandas as _pd
+
+        df = _pd.read_csv(registry_path)
+        df["crosswalk_id"] = df["crosswalk_id"].astype(str)
+
+        selected_set: set[str] = set(runtime_selected_ids or [])
+
+        def _bool_col(val: object) -> bool:
+            return str(val).strip().lower() in {"true", "1", "yes"}
+
+        def _nan_safe_str(val: object) -> str:
+            try:
+                if val is None:
+                    return ""
+                import math as _math
+                if isinstance(val, float) and _math.isnan(val):
+                    return ""
+                return str(val).strip()
+            except Exception:
+                return ""
+
+        def _signal_ext_installability(row: object) -> str:
+            runnable = _bool_col(row.get("runnable_for_signal_extension", False))  # type: ignore[union-attr]
+            assumption = _nan_safe_str(row.get("installation_assumption"))  # type: ignore[union-attr]
+            control = str(row.get("control_mode") or "").strip()  # type: ignore[union-attr]
+            tls = str(row.get("tls_id") or "").strip()  # type: ignore[union-attr]
+            c_sub = str(row.get("c_subtype") or "").strip()  # type: ignore[union-attr]
+            r_status = str(row.get("registry_status") or "").strip()  # type: ignore[union-attr]
+            if runnable and assumption == "synthetic_pedestrian_signal":
+                return "ready_synthetic_tls_required"
+            if runnable and assumption != "synthetic_pedestrian_signal":
+                return "ready_existing_tls"
+            if control != "signalized" and c_sub not in {
+                "C4_missing_crossing", "C6_ped_route_failed", "C11_manual_netedit_required",
+            }:
+                return "not_signal_extension_unsignalized"
+            if c_sub in {"C4_missing_crossing", "C6_ped_route_failed", "C11_manual_netedit_required"} and r_status not in {"A", "recovered"}:
+                return "not_ready_topology_repair_required"
+            if not tls and assumption != "synthetic_pedestrian_signal":
+                return "not_ready_missing_mapping"
+            return "not_signal_extension_unsignalized"
+
+        def _smart_cw_installability(row: object) -> str:  # type: ignore[return]
+            sig = _signal_ext_installability(row)
+            if sig.startswith("ready_"):
+                return "signal_extension_candidate"
+            control = str(row.get("control_mode") or "").strip()  # type: ignore[union-attr]
+            runnable_unsig = _bool_col(row.get("runnable_for_unsignalized_sim", False))  # type: ignore[union-attr]
+            r_status = str(row.get("registry_status") or "").strip()  # type: ignore[union-attr]
+            c_sub = str(row.get("c_subtype") or "").strip()  # type: ignore[union-attr]
+            if control in {"unsignalized", "proxy_unsignalized"} and runnable_unsig:
+                return "unsignalized_safety_support_candidate"
+            if c_sub in {"C4_missing_crossing", "C6_ped_route_failed", "C11_manual_netedit_required"} and r_status not in {"A", "recovered"}:
+                return "topology_repair_required"
+            if runnable_unsig:
+                return "signal_installation_candidate"
+            return "excluded_or_unknown"
+
+        def _runtime_action(row: object) -> str:
+            cw_id = str(row.get("crosswalk_id") or "").strip()  # type: ignore[union-attr]
+            if cw_id not in selected_set:
+                runnable = _bool_col(row.get("runnable_for_signal_extension", False))  # type: ignore[union-attr]
+                runnable_u = _bool_col(row.get("runnable_for_unsignalized_sim", False))  # type: ignore[union-attr]
+                if not runnable and not runnable_u:
+                    return "excluded_not_runnable"
+                return "not_selected_no_runtime_change"
+            assumption = _nan_safe_str(row.get("installation_assumption"))  # type: ignore[union-attr]
+            if assumption == "synthetic_pedestrian_signal":
+                return "selected_synthetic_tls_injection"
+            control = str(row.get("control_mode") or "").strip()  # type: ignore[union-attr]
+            if control == "signalized":
+                return "selected_existing_tls_control"
+            return "selected_unsignalized_support"
+
+        records = df.to_dict(orient="records")
+        out_rows = []
+        for rec in records:
+            sig_inst = _signal_ext_installability(rec)
+            smart_inst = _smart_cw_installability(rec)
+            assumption = _nan_safe_str(rec.get("installation_assumption"))
+            c_sub = str(rec.get("c_subtype") or "").strip()
+            r_status = str(rec.get("registry_status") or "").strip()
+            cw_id = str(rec.get("crosswalk_id") or "")
+            out_rows.append({
+                "crosswalk_id": cw_id,
+                "registry_status": r_status,
+                "implementation_status": str(rec.get("implementation_status") or ""),
+                "control_mode": str(rec.get("control_mode") or ""),
+                "crossing_edge": str(rec.get("crossing_edge") or ""),
+                "tls_id": str(rec.get("tls_id") or ""),
+                "ped_link_indices": str(rec.get("ped_link_indices") or ""),
+                "runnable_for_signal_extension": _bool_col(rec.get("runnable_for_signal_extension", False)),
+                "runnable_for_unsignalized_sim": _bool_col(rec.get("runnable_for_unsignalized_sim", False)),
+                "signal_extension_installability": sig_inst,
+                "smart_crosswalk_installability": smart_inst,
+                "requires_synthetic_tls": assumption == "synthetic_pedestrian_signal",
+                "requires_topology_repair": (
+                    c_sub in {"C4_missing_crossing", "C6_ped_route_failed", "C11_manual_netedit_required"}
+                    and r_status not in {"A", "recovered"}
+                ),
+                "runtime_selected": cw_id in selected_set,
+                "runtime_action_for_this_run": _runtime_action(rec),
+                "interpretation_note": str(rec.get("interpretation_note") or ""),
+            })
+
+        out_df = _pd.DataFrame(out_rows)
+        out_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        return True
+    except Exception as _exc:
+        print(f"[candidate_pool] smart_crosswalk_candidate_pool.csv 생성 실패: {_exc}")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # 3-b. 결과_읽는법.md  — 한국어 안내 (비개발자용)
 # ---------------------------------------------------------------------------
 
@@ -456,7 +586,7 @@ def _build_korean_guide(output_dir: Path, has_diag_counters: bool) -> str:
 
 ---
 
-## csv/ 폴더의 세 파일
+## csv/ 폴더의 파일
 
 ### csv/baseline.csv
 
@@ -472,6 +602,30 @@ smart_crosswalk(또는 smart_selected) 시나리오의 관측값 테이블입니
 
 baseline 대비 smart_crosswalk의 관측 delta 테이블입니다.
 `delta = smart_crosswalk_value - baseline_value`이며, **인과관계가 아니라 관측 차이**입니다.
+
+### csv/smart_crosswalk_candidate_pool.csv
+
+662개 스마트 횡단보도 설치 후보 풀의 설치 가능성 분류 테이블입니다.
+
+**중요**: 이 테이블의 662개 항목이 이번 런타임 네트워크에 모두 주입된 것이 **아닙니다**.
+
+| 컬럼 | 의미 |
+|---|---|
+| `signal_extension_installability` | 신호 연장 시뮬레이션 가능성 분류 |
+| `smart_crosswalk_installability` | 스마트 횡단보도 설치 가능성 분류 |
+| `requires_synthetic_tls` | `True`이면 신호 연장 시뮬레이션에 synthetic TLS 주입이 필요함 |
+| `runtime_selected` | 이번 런타임에 선택된 후보이면 `True` |
+| `runtime_action_for_this_run` | 이번 런타임에서 이 후보에 취해진 조치 |
+
+`runtime_action_for_this_run` 값:
+- `selected_existing_tls_control` — 선택됨, 기존 TLS 제어 (예: 119055)
+- `selected_synthetic_tls_injection` — 선택됨, synthetic TLS 주입
+- `not_selected_no_runtime_change` — 선택되지 않아 이번 런에 아무 조치 없음
+- `excluded_not_runnable` — 현재 실행 불가 상태
+
+119055를 단독 선택하면 `tls_id=1945254658`을 필요로 하는 후보들
+(`125786`, `125787` 등)은 `not_selected_no_runtime_change`로 표시되며,
+해당 synthetic TLS는 런타임 네트워크에 주입되지 않습니다.
 
 ---
 
@@ -699,6 +853,8 @@ def build_final_package(
     safety_report_dir: Path | None,
     output_dir: Path,
     make_charts: bool = False,
+    registry_path: "Path | None" = None,
+    runtime_selected_ids: "list[str] | None" = None,
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_dir = output_dir / "csv"
@@ -724,6 +880,14 @@ def build_final_package(
     cmp_df  = _build_comparison_df(seed_summary, smart_scenario)
     cmp_path = csv_dir / "comparison.csv"
     cmp_df.to_csv(cmp_path, index=False, encoding="utf-8-sig")
+
+    # 3-extra. csv/smart_crosswalk_candidate_pool.csv
+    pool_path = csv_dir / "smart_crosswalk_candidate_pool.csv"
+    pool_ok = _build_candidate_pool_csv(
+        registry_path=registry_path,
+        runtime_selected_ids=runtime_selected_ids,
+        output_path=pool_path,
+    )
 
     # 4. 결과_읽는법.md  (한국어 안내)
     has_diag = not seed_summary.empty and any(
@@ -751,6 +915,8 @@ def build_final_package(
         "README":            readme_path,
         "validity_checklist": checklist_path,
     }
+    if pool_ok:
+        result["candidate_pool"] = pool_path
 
     if make_charts:
         for i, cr in enumerate(_try_make_charts(seed_summary, output_dir)):

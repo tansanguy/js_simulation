@@ -156,13 +156,28 @@ def traci_trafficlight_ids() -> set[str]:
         return set()
 
 
+def _json_safe(value: Any) -> Any:
+    """Recursively convert non-JSON-serializable types for diagnostic/logging output only."""
+    if isinstance(value, set):
+        return sorted(_json_safe(v) for v in value)
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
 def _runtime_log_append(path: str | Path | None, payload: dict[str, Any]) -> None:
     if path is None:
         return
     log_path = Path(path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+        fh.write(json.dumps(_json_safe(payload), ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def _runtime_failure_write(path: str | Path | None, payload: dict[str, Any]) -> None:
@@ -170,7 +185,7 @@ def _runtime_failure_write(path: str | Path | None, payload: dict[str, Any]) -> 
         return
     failure_path = Path(path)
     failure_path.parent.mkdir(parents=True, exist_ok=True)
-    failure_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    failure_path.write_text(json.dumps(_json_safe(payload), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _active_sumo_return_code(traci_label: str | None) -> int | None:
@@ -1968,7 +1983,10 @@ def run_simulation_integrated(
         if not ctx_pli:
             ctx_tls_id = str(context.get("tls_id") or "")
             ctx_crossing_edge = str(context.get("crossing_edge") or "")
-            ctx_net_file = context.get("net_file") or net_file
+            _ctx_net = Path(context.get("net_file") or str(net_file))
+            # network_with_signal.net.xml 이 같은 디렉터리에 있으면 우선 사용 (구 manifest 하위호환)
+            _signal_net = _ctx_net.parent / "network_with_signal.net.xml"
+            ctx_net_file = _signal_net if _signal_net.exists() else _ctx_net
             if ctx_tls_id and ctx_crossing_edge:
                 try:
                     ctx_pli = pedestrian_link_indices(ctx_net_file, ctx_tls_id, ctx_crossing_edge)
@@ -2555,7 +2573,7 @@ def run_simulation_integrated(
                                 "remaining_s": remaining,
                                 "trigger_remaining": signal_params["trigger_remaining"],
                                 "crossing_edge": str(_ctx["metadata"].get("crossing_edge", "")),
-                                "ped_detector_edges": json.dumps(_ctx.get("ped_detector_edges", [])),
+                                "ped_detector_edges": json.dumps(_json_safe(_ctx.get("ped_detector_edges", []))),
                                 "ped_on_crossing_count": _cross_cnt,
                                 "ped_on_detector_count": _det_cnt,
                                 "detected_peds_count": _cross_cnt + _det_cnt,

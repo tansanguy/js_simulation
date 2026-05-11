@@ -110,7 +110,7 @@ def _to_int_list(value: Any) -> list[int]:
         out: list[int] = []
         for item in value:
             try:
-                out.append(int(item))
+                out.append(int(float(item)))
             except Exception:
                 continue
         return out
@@ -129,7 +129,7 @@ def _to_int_list(value: Any) -> list[int]:
         if not token:
             continue
         try:
-            out.append(int(token))
+            out.append(int(float(token)))
         except Exception:
             continue
     return out
@@ -151,9 +151,13 @@ def _to_str_list(value: Any) -> list[str]:
 
 
 def _load_integrated_network_fingerprint(integrated_dir: Path) -> dict[str, Any]:
-    net_file = integrated_dir / "network.net.xml"
-    if not net_file.exists():
-        raise FileNotFoundError(f"통합 네트워크 파일이 없습니다: {net_file}")
+    base_net = integrated_dir / "network.net.xml"
+    if not base_net.exists():
+        raise FileNotFoundError(f"통합 네트워크 파일이 없습니다: {base_net}")
+    # SHA256 은 registry 버전 정합성을 위해 항상 network.net.xml 기준으로 유지한다.
+    # runtime net_file 은 network_with_signal.net.xml 이 있으면 그것을 우선한다.
+    signal_net = integrated_dir / "network_with_signal.net.xml"
+    net_file = signal_net if signal_net.exists() else base_net
     provenance_path = integrated_dir / "network_build_provenance.json"
     if provenance_path.exists():
         provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
@@ -175,13 +179,335 @@ def _load_integrated_network_fingerprint(integrated_dir: Path) -> dict[str, Any]
     )
     return {
         "net_file": net_file,
-        "network_net_sha256": str(provenance.get("network_net_sha256") or _sha256_file(net_file)),
+        "network_net_sha256": str(provenance.get("network_net_sha256") or _sha256_file(base_net)),
         "netconvert_options_sha256": str(
             provenance.get("netconvert_option_fingerprint_sha256")
             or provenance.get("netconvert_options_sha256")
             or option_fingerprint
         ),
     }
+
+
+def _build_runtime_registry(
+    integrated_dir: Path,
+    global_registry_path: Path,
+    network_mode: str,
+    buffer_m: float,
+    output_path: Path,
+) -> str:
+    """Build a run-local registry for the current runtime network.
+
+    If the global registry already has rows for canonical_current, copies them
+    to output_path.  Otherwise upserts: replaces only the three network-hash
+    fields (canonical_network_version, network_net_sha256,
+    netconvert_options_sha256) while preserving every other column
+    (crosswalk geometry, tls_id, ped_link_indices, runnable flags,
+    installation_assumption, registry_status, recovery fields, c1 provenance
+    etc.).  A topological spot-check warns when runnable tls_ids are absent
+    from the runtime net.xml but does not abort.
+
+    Returns canonical_current (the version string for this runtime network).
+    """
+    if not global_registry_path.exists():
+        raise FileNotFoundError(f"글로벌 레지스트리가 없습니다: {global_registry_path}")
+
+    fingerprint = _load_integrated_network_fingerprint(integrated_dir)
+    canonical_current = _canonical_network_version(
+        network_mode=network_mode,
+        buffer_m=buffer_m,
+        network_net_sha256=fingerprint["network_net_sha256"],
+        netconvert_options_sha256=fingerprint["netconvert_options_sha256"],
+    )
+
+    global_df = pd.read_csv(global_registry_path)
+    global_df["canonical_network_version"] = global_df["canonical_network_version"].astype(str)
+
+    # Direct match — use as-is
+    scoped_df = global_df[global_df["canonical_network_version"] == canonical_current].copy()
+    if not scoped_df.empty:
+        print(
+            f"[registry] canonical_network_version={canonical_current} "
+            f"matched global registry ({len(scoped_df)} rows)."
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        write_csv_utf8_sig(scoped_df, output_path)
+        return canonical_current
+
+    # Upsert path — global registry has a different network version.
+    # CRITICAL: select exactly ONE source canonical_network_version block.
+    # The global registry may contain multiple version blocks (e.g. 1340 rows =
+    # 2 versions × 670 rows).  Copying all rows would create duplicate
+    # crosswalk_ids in the runtime registry — unsafe for manifest building.
+    existing_versions = global_df["canonical_network_version"].unique().tolist()
+    print(
+        f"[registry] Runtime net version {canonical_current} not in global registry. "
+        f"Existing versions: {existing_versions}."
+    )
+
+    # Build per-version groups preserving CSV order (sort=False).
+    version_group_sizes: dict[str, int] = {}
+    version_group_dfs: dict[str, pd.DataFrame] = {}
+    for _ver, _grp in global_df.groupby("canonical_network_version", sort=False):
+        version_group_sizes[str(_ver)] = len(_grp)
+        version_group_dfs[str(_ver)] = _grp
+
+    # Prefer the largest (most complete) block — typically 670 rows.
+    max_size = max(version_group_sizes.values())
+    full_version_candidates = [v for v, sz in version_group_sizes.items() if sz == max_size]
+
+    if len(full_version_candidates) == 1:
+        source_version = full_version_candidates[0]
+    elif "validated_at" in global_df.columns:
+        # Multiple equal-size blocks: pick the one with the latest validated_at.
+        best_ver: str | None = None
+        best_ts: str | None = None
+        for _v in full_version_candidates:
+            _ts_series = version_group_dfs[_v]["validated_at"].dropna()
+            if not _ts_series.empty:
+                _latest = str(_ts_series.max())
+                if best_ts is None or _latest > best_ts:
+                    best_ts = _latest
+                    best_ver = _v
+        source_version = best_ver if best_ver else full_version_candidates[-1]
+    else:
+        # Fall back to the last full-size version in CSV order (most recently appended).
+        _csv_order = list(dict.fromkeys(global_df["canonical_network_version"].tolist()))
+        source_version = next(
+            (v for v in reversed(_csv_order) if v in full_version_candidates),
+            full_version_candidates[-1],
+        )
+
+    source_df = version_group_dfs[source_version].copy()
+    print(
+        f"[registry] Upsert source: version={source_version} ({len(source_df)} rows). "
+        f"Replacing hash fields only — all crosswalk data preserved."
+    )
+
+    upserted_df = source_df.copy()
+    upserted_df["canonical_network_version"] = canonical_current
+    upserted_df["network_net_sha256"] = fingerprint["network_net_sha256"]
+    upserted_df["netconvert_options_sha256"] = fingerprint["netconvert_options_sha256"]
+
+    # Safety assertion: upserted registry must have no duplicate crosswalk_ids.
+    upserted_df["crosswalk_id"] = upserted_df["crosswalk_id"].astype(str)
+    _unique_cw = upserted_df["crosswalk_id"].nunique()
+    _total_rows = len(upserted_df)
+    if _unique_cw != _total_rows:
+        raise ValueError(
+            f"런타임 레지스트리에 중복 crosswalk_id가 감지되었습니다: "
+            f"unique={_unique_cw}, total={_total_rows}. "
+            f"Source version={source_version}. 소스 블록이 이미 중복 행을 포함합니다."
+        )
+    print(f"[registry] Safety check OK: unique crosswalk_id={_unique_cw}, total rows={_total_rows}.")
+
+    # Topological spot-check: warn when runnable tls_ids are absent from runtime net.xml.
+    base_net = integrated_dir / "network.net.xml"
+    if base_net.exists():
+        try:
+            runtime_root = ET.parse(str(base_net)).getroot()
+            runtime_tls_ids = {tl.get("id") for tl in runtime_root.findall("tlLogic")}
+            sig_ext_mask = (
+                upserted_df["runnable_for_signal_extension"]
+                .astype(str).str.lower().isin(["true", "1", "yes"])
+            )
+            sig_ext_rows = upserted_df[sig_ext_mask]
+            missing_tls_rows = sig_ext_rows[
+                sig_ext_rows["tls_id"].astype(str).str.strip().apply(
+                    lambda t: bool(t) and t not in runtime_tls_ids
+                )
+            ]
+            if not missing_tls_rows.empty:
+                print(
+                    f"[registry] WARNING: {len(missing_tls_rows)} runnable crosswalk(s) have "
+                    f"tls_id not present in runtime net.xml tlLogic. Network topology may differ "
+                    f"from registry build. First affected: "
+                    f"{missing_tls_rows['tls_id'].unique().tolist()[:5]}"
+                )
+            else:
+                print(
+                    "[registry] Topology spot-check OK: all runnable tls_ids found in runtime net.xml."
+                )
+        except Exception as _exc:
+            print(f"[registry] Topology spot-check skipped: {_exc}")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    write_csv_utf8_sig(upserted_df, output_path)
+    print(
+        f"[registry] Run-local registry written: {output_path} "
+        f"({len(upserted_df)} rows, version={canonical_current})"
+    )
+    return canonical_current
+
+
+def _inject_selected_synthetic_tls(
+    manifest_rows: list[dict[str, Any]],
+    base_net: Path,
+    signal_net: Path,
+) -> tuple[Path, list[dict[str, Any]]]:
+    """Inject synthetic TLS only for selected crosswalks that require it.
+
+    Reads installation_assumption from each manifest row.  Only rows with
+    installation_assumption == "synthetic_pedestrian_signal" trigger injection.
+    If no selected crosswalk needs synthetic TLS (e.g. 119055-only run where
+    the existing TLS joinedS_11252413259_11252413260 is used), returns base_net
+    unchanged and network_with_signal.net.xml is NOT created for this run.
+
+    Returns (net_file_to_use, updated_manifest_rows).
+    """
+    try:
+        from .synthetic_tls_injector import inject_synthetic_tls
+    except ImportError:
+        from synthetic_tls_injector import inject_synthetic_tls  # type: ignore[no-redef]
+
+    selected_tier2_ces: list[str] = []
+    for row in manifest_rows:
+        _raw_assumption = row.get("installation_assumption")
+        # pandas CSV round-trip may produce float('nan') for empty cells
+        assumption = (
+            ""
+            if _raw_assumption is None or pd.isna(_raw_assumption)  # type: ignore[arg-type]
+            else str(_raw_assumption).strip()
+        )
+        if assumption == "synthetic_pedestrian_signal":
+            ce = str(row.get("crossing_edge") or "").strip()
+            if ce and ce not in selected_tier2_ces:
+                selected_tier2_ces.append(ce)
+
+    if not selected_tier2_ces:
+        print(
+            "[net] Selected crosswalks require no synthetic TLS injection. "
+            "Using network.net.xml as runtime net."
+        )
+        return base_net, list(manifest_rows)
+
+    print(
+        f"[net] Injecting synthetic TLS for {len(selected_tier2_ces)} selected "
+        f"crossing edge(s): {selected_tier2_ces}"
+    )
+    injection_result: dict[str, dict[str, Any]] = inject_synthetic_tls(
+        net_xml_path=base_net,
+        tier2_crossing_edges=selected_tier2_ces,
+        output_path=signal_net,
+    )
+
+    # Patch manifest rows with the injected tls_id / ped_link_indices
+    updated_rows: list[dict[str, Any]] = []
+    for row in manifest_rows:
+        row = dict(row)
+        ce = str(row.get("crossing_edge") or "").strip()
+        if ce in injection_result:
+            synth = injection_result[ce]
+            if "tls_id" in synth:
+                row["tls_id"] = synth["tls_id"]
+            if "ped_link_indices" in synth:
+                row["ped_link_indices"] = synth["ped_link_indices"]
+        updated_rows.append(row)
+
+    return signal_net, updated_rows
+
+
+def _validate_no_sumo_manifest(
+    integrated_dir: Path,
+    runtime_registry_path: Path | None,
+    manifest_path: Path,
+    selected_ids: list[str],
+) -> None:
+    """No-SUMO pre-flight validation.
+
+    Checks registry row counts, crosswalk field values, net.xml TLS coverage,
+    and prints which synthetic TLS IDs are present in network_with_signal.net.xml.
+    Warns on inconsistencies but does not abort (callers can add assertions).
+    """
+    print("\n" + "=" * 60)
+    print("[no-SUMO validate] Manifest / registry consistency check")
+    print("=" * 60)
+
+    # 1. Registry checks
+    if runtime_registry_path and runtime_registry_path.exists():
+        try:
+            reg_df = pd.read_csv(runtime_registry_path)
+            reg_df["crosswalk_id"] = reg_df["crosswalk_id"].astype(str)
+            print(f"  registry total rows : {len(reg_df)}")
+
+            sig_ext = (
+                reg_df["runnable_for_signal_extension"]
+                .astype(str).str.lower().isin(["true", "1", "yes"])
+            )
+            print(f"  runnable_for_signal_extension=True : {sig_ext.sum()}")
+
+            missing_tls = reg_df[
+                sig_ext & (reg_df["tls_id"].astype(str).str.strip() == "")
+            ]
+            print(f"  missing tls_id (signal-ext runnable) : {len(missing_tls)}")
+
+            missing_pli = reg_df[
+                sig_ext &
+                reg_df["ped_link_indices"].astype(str).str.strip().isin(["", "nan"])
+            ]
+            print(f"  missing ped_link_indices (signal-ext runnable) : {len(missing_pli)}")
+
+            for cw_id in selected_ids:
+                rows = reg_df[reg_df["crosswalk_id"] == str(cw_id)]
+                if rows.empty:
+                    print(f"  [WARN] crosswalk_id={cw_id} not found in run-local registry")
+                else:
+                    r = rows.iloc[0]
+                    print(
+                        f"  [{cw_id}] crossing_edge={r.get('crossing_edge')}, "
+                        f"tls_id={r.get('tls_id')}, "
+                        f"ped_link_indices={r.get('ped_link_indices')}, "
+                        f"installation_assumption={r.get('installation_assumption','')!r}"
+                    )
+        except Exception as _exc:
+            print(f"  [WARN] registry read failed: {_exc}")
+    else:
+        print("  [INFO] run-local registry not available for validation.")
+
+    # 2. net.xml TLS coverage check
+    base_net = integrated_dir / "network.net.xml"
+    signal_net = integrated_dir / "network_with_signal.net.xml"
+
+    if base_net.exists():
+        try:
+            base_root = ET.parse(str(base_net)).getroot()
+            base_tls_ids: set[str] = {
+                tl.get("id", "") for tl in base_root.findall("tlLogic")
+            }
+
+            if signal_net.exists():
+                signal_root = ET.parse(str(signal_net)).getroot()
+                signal_tls_ids: set[str] = {
+                    tl.get("id", "") for tl in signal_root.findall("tlLogic")
+                }
+                injected = sorted(signal_tls_ids - base_tls_ids)
+                print(
+                    f"  synthetic TLS injected into network_with_signal.net.xml: "
+                    f"{injected if injected else '(none)'}"
+                )
+                if "1945254658" in signal_tls_ids:
+                    known_1945 = {"125786", "125787", "74154", "8166"}
+                    if not known_1945.intersection(set(selected_ids)):
+                        print(
+                            "  [WARN] tlLogic id=1945254658 present in network_with_signal.net.xml "
+                            "but no selected crosswalk is known to require it. "
+                            "Check _inject_selected_synthetic_tls() filtering."
+                        )
+            else:
+                print("  network_with_signal.net.xml : not created (no synthetic TLS needed).")
+        except Exception as _exc:
+            print(f"  [WARN] net.xml TLS check failed: {_exc}")
+
+    # 3. Manifest JSON summary
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            print(f"  manifest net_file       : {manifest.get('net_file', '')}")
+            print(f"  manifest crosswalks     : {len(manifest.get('crosswalks', []))}")
+            print(f"  manifest excluded       : {len(manifest.get('excluded_crosswalks', []))}")
+        except Exception as _exc:
+            print(f"  [WARN] manifest JSON read failed: {_exc}")
+
+    print("=" * 60 + "\n")
 
 
 def _geojson_polygons(geojson_path: str | Path) -> list[list[list[tuple[float, float]]]]:
@@ -1008,6 +1334,7 @@ def build_integrated_network_manifest(
     registry_path: str | Path | None = None,
     registry_mode: str = "required",
     registry_network_version: str | None = None,
+    t2_path: str | Path | None = None,
 ) -> tuple[Path, Path, pd.DataFrame]:
     nets_dir = Path(nets_dir)
     output_dir = Path(output_dir)
@@ -1029,20 +1356,42 @@ def build_integrated_network_manifest(
     if warnings:
         write_csv_utf8_sig(pd.DataFrame(warnings), output_dir / "network_mode_warnings.csv")
 
-    # synthetic TLS가 주입된 enhanced network이 있으면 우선 사용한다.
-    # crossing_patch_v2.py final-registry --net_xml 실행 시 생성된다.
-    _signal_net_file = integrated_dir / "network_with_signal.net.xml"
-    net_file = _signal_net_file if _signal_net_file.exists() else integrated_dir / "network.net.xml"
+    # Base network (SHA256 anchor for canonical_network_version — always network.net.xml).
+    # Runtime net_file may become network_with_signal.net.xml later if selected
+    # crosswalks require synthetic TLS injection.
+    base_net = integrated_dir / "network.net.xml"
+    signal_net = integrated_dir / "network_with_signal.net.xml"
+
     manifest_rows: list[dict[str, Any]] = []
     excluded_rows: list[dict[str, Any]] = []
     recovered_source_path = ""
     registry_enabled = from_registry and registry_mode != "off" and registry_path
 
+    # Build a run-local registry whose canonical_network_version matches the
+    # just-generated runtime network.  This resolves the mismatch caused by
+    # netconvert non-determinism producing a different net hash each run.
+    runtime_registry_path: Path | None = None
     if registry_enabled:
+        runtime_registry_path = output_dir / "runtime_registry.csv"
+        try:
+            _build_runtime_registry(
+                integrated_dir=integrated_dir,
+                global_registry_path=Path(registry_path),  # type: ignore[arg-type]
+                network_mode=network_mode,
+                buffer_m=buffer_m,
+                output_path=runtime_registry_path,
+            )
+        except Exception as exc:
+            if registry_mode == "required":
+                raise
+            print(f"[registry] run-local registry build failed: {exc}")
+            runtime_registry_path = None
+
+    if registry_enabled and runtime_registry_path and runtime_registry_path.exists():
         try:
             manifest_rows, excluded_rows, recovered_source_path = _build_manifest_rows_from_registry(
                 selected_df=selected_df,
-                registry_path=registry_path,
+                registry_path=runtime_registry_path,
                 integrated_dir=integrated_dir,
                 network_mode=network_mode,
                 buffer_m=buffer_m,
@@ -1053,6 +1402,22 @@ def build_integrated_network_manifest(
                 raise
             if registry_mode == "prefer":
                 print(f"[registry] fallback to dynamic rematch: {exc}")
+
+    # For registry path: inject synthetic TLS only for the selected crosswalks
+    # that require it (installation_assumption == "synthetic_pedestrian_signal").
+    # For a 119055-only run the existing TLS joinedS_11252413259_11252413260
+    # is used, so selected_tier2_ces will be empty and network_with_signal.net.xml
+    # is NOT created / overwritten for this run.
+    if manifest_rows and registry_enabled:
+        net_file, manifest_rows = _inject_selected_synthetic_tls(
+            manifest_rows=manifest_rows,
+            base_net=base_net,
+            signal_net=signal_net,
+        )
+    else:
+        # Dynamic fallback: preserve legacy behaviour — use pre-existing global
+        # network_with_signal.net.xml if present, otherwise base network.
+        net_file = signal_net if signal_net.exists() else base_net
 
     allow_dynamic_fallback = (not registry_enabled) or (registry_mode == "prefer")
     if not manifest_rows and allow_dynamic_fallback:
@@ -1171,6 +1536,15 @@ def build_integrated_network_manifest(
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     write_csv_utf8_sig(pd.DataFrame(manifest_rows), output_dir / "smart_crosswalk_manifest.csv")
     write_csv_utf8_sig(pd.DataFrame(excluded_rows), output_dir / "excluded_integrated_candidates_precheck.csv")
+
+    # No-SUMO pre-flight: verify registry/net.xml/manifest consistency before simulation.
+    _validate_no_sumo_manifest(
+        integrated_dir=integrated_dir,
+        runtime_registry_path=runtime_registry_path,
+        manifest_path=manifest_path,
+        selected_ids=[str(r["crosswalk_id"]) for r in manifest_rows],
+    )
+
     return manifest_path, integrated_dir, pd.DataFrame(manifest_rows)
 
 def check_valid_smart_crosswalks(
@@ -1458,6 +1832,7 @@ def generate_integrated_demand(
     model_params = load_model_parameters(model_parameters_path)
     integrated_dir = Path(manifest_path).parent
     net_file = Path(manifest["net_file"])
+    print(f"[generate_demand] runtime net: {net_file}")
     demand_rows: list[dict[str, Any]] = []
     audit_rows: list[dict[str, Any]] = []
     invalid_ped_rows: list[dict[str, Any]] = []
@@ -1627,6 +2002,7 @@ def collect_integrated_metrics(
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     integrated_dir = Path(manifest_path).parent
     net_file = Path(manifest["net_file"])
+    print(f"[collect_integrated_metrics] runtime net: {net_file}")
     crosswalk_contexts = manifest.get("crosswalks", [])
     pre_excluded_rows = list(manifest.get("excluded_crosswalks", []))
     smart_target_ids = {str(crosswalk_id) for crosswalk_id in manifest.get("smart_crosswalk_ids", [])}

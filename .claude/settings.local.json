@@ -32,7 +32,8 @@
       "Bash(git branch *)",
       "Bash(xargs ls -lh)",
       "Bash(awk -F',' '$17==\"patched_unsignalized\" {print $2\":\"$4\":\"$5}' /Users/junlee/Desktop/2026-1/js/result/registry_patch_v4_residual/junggu_crosswalk_sumo_registry_final.csv)",
-      "Bash(awk *)"
+      "Bash(awk *)",
+      "Bash(read f *)"
     ]
   }
 }

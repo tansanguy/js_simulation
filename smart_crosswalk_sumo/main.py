@@ -187,6 +187,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 registry_path=getattr(args, "registry_path", None),
                 registry_mode=getattr(args, "registry_mode", "required"),
                 registry_network_version=getattr(args, "registry_network_version", None),
+                t2_path=getattr(args, "t2", None),
             )
             valid_ids = {str(crosswalk_id) for crosswalk_id in manifest_df["crosswalk_id"].astype(str)}
             selected = selected[selected["crosswalk_id"].astype(str).isin(valid_ids)].reset_index(drop=True)
