@@ -22,3 +22,19 @@ traci_commands_*.log
 summary.xml
 tripinfo.xml
 statistics.xml
+
+# SUMO generated outputs
+result/
+result_old/
+*.sumocfg
+*.rou.xml
+*.trips.xml
+*.net.xml
+*.osm
+*.log
+edge_data_*.xml
+lane_data_*.xml
+traci_commands_*.log
+summary.xml
+tripinfo.xml
+statistics.xml
