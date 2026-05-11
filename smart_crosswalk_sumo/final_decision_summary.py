@@ -12,8 +12,10 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 try:
+    from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from .model_config import get_parameter_value, load_model_parameters
 except ImportError:
+    from mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from model_config import get_parameter_value, load_model_parameters
 
 
@@ -690,9 +692,7 @@ def build_raw_index(result_dir: Path) -> pd.DataFrame:
 
 
 def ensure_matplotlib(output_dir: Path) -> None:
-    cache_dir = Path("/private/tmp/codex_mpl_cache")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
+    ensure_matplotlib_env(output_dir / ".mpl_cache")
 
 
 def save_placeholder(path: Path, title: str, body: str) -> None:
@@ -700,6 +700,7 @@ def save_placeholder(path: Path, title: str, body: str) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
+    configure_matplotlib(matplotlib)
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
@@ -718,6 +719,7 @@ def write_figures(summary: pd.DataFrame, output_dir: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
+    configure_matplotlib(matplotlib)
     import matplotlib.pyplot as plt
 
     total_delay_cost = float(summary["vehicle_delay_cost"].fillna(0).sum()) if not summary.empty else 0.0

@@ -210,9 +210,13 @@ def write_plots(
     plot_path: Path,
 ) -> None:
     try:
+        from smart_crosswalk_sumo.mpl_runtime import configure_matplotlib, ensure_matplotlib_env
+
+        ensure_matplotlib_env()
         import matplotlib
 
         matplotlib.use("Agg")
+        configure_matplotlib(matplotlib)
         import matplotlib.pyplot as plt
     except ImportError:
         return

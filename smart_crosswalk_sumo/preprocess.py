@@ -12,17 +12,7 @@ except ImportError:
     from output_schema import english_output_columns
 
 
-def preprocess_inputs(
-    t1_path: str | Path,
-    t2_path: str | Path,
-    output_dir: str | Path,
-    top_n: int = 20,
-    target_crosswalk_ids: list[str] | tuple[str, ...] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    t1 = pd.read_csv(t1_path)
+def load_crosswalk_features(t2_path: str | Path) -> pd.DataFrame:
     t2 = english_output_columns(pd.read_csv(t2_path))
 
     required = {"crosswalk_id", "longitude", "latitude"}
@@ -63,6 +53,21 @@ def preprocess_inputs(
         + t2["lane_count"] * 0.3
         + (t2["max_speed_kph"] / 50) * 0.2
     )
+    return t2
+
+
+def preprocess_inputs(
+    t1_path: str | Path,
+    t2_path: str | Path,
+    output_dir: str | Path,
+    top_n: int = 20,
+    target_crosswalk_ids: list[str] | tuple[str, ...] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    t1 = pd.read_csv(t1_path)
+    t2 = load_crosswalk_features(t2_path)
 
     if target_crosswalk_ids:
         wanted = {str(cw_id) for cw_id in target_crosswalk_ids}

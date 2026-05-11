@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -84,6 +85,35 @@ def filtered_netconvert_options(raw_options: list[str], supported: set[str]) -> 
             kept.append(token)
         i += 1
     return kept, skipped
+
+
+def _sha256_text(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _tool_version(name: str) -> str:
+    try:
+        proc = subprocess.run(
+            [sumo_tool(name), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=sumo_env(),
+        )
+    except Exception:
+        return ""
+    text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    return text.splitlines()[0] if text else ""
 
 
 def sanitize_vclass_string(value: str) -> tuple[str, bool]:
@@ -221,11 +251,44 @@ def remove_invalid_walkingarea_connections(net_file: Path) -> dict[str, Any]:
     }
 
 
+def remove_invalid_tls_references(net_file: Path) -> dict[str, Any]:
+    tree = ET.parse(net_file)
+    root = tree.getroot()
+    valid_tls_ids = {tl.attrib.get("id", "") for tl in root.findall("tlLogic")}
+    removed_rows: list[dict[str, Any]] = []
+    changed = 0
+    for conn in root.findall("connection"):
+        tl_id = conn.attrib.get("tl", "")
+        if not tl_id or tl_id in valid_tls_ids:
+            continue
+        removed_rows.append(
+            {
+                "from_edge": conn.attrib.get("from", ""),
+                "to_edge": conn.attrib.get("to", ""),
+                "from_lane": conn.attrib.get("fromLane", ""),
+                "to_lane": conn.attrib.get("toLane", ""),
+                "invalid_tl_id": tl_id,
+                "link_index": conn.attrib.get("linkIndex", ""),
+            }
+        )
+        conn.attrib.pop("tl", None)
+        conn.attrib.pop("linkIndex", None)
+        changed += 1
+    if changed:
+        tree.write(net_file, encoding="utf-8", xml_declaration=True)
+    return {
+        "net_file": str(net_file),
+        "removed_count": int(changed),
+        "removed_tls_references": removed_rows,
+    }
+
+
 def download_osm_bbox(bbox: str, osm_file: Path) -> None:
     endpoints = [
         "https://overpass-api.de/api/map?bbox={bbox}",
+        "https://lz4.overpass-api.de/api/map?bbox={bbox}",
+        "https://z.overpass-api.de/api/map?bbox={bbox}",
         "https://overpass.kumi.systems/api/map?bbox={bbox}",
-        "https://overpass.openstreetmap.ru/api/map?bbox={bbox}",
     ]
     last_error = None
     for attempt in range(3):
@@ -417,6 +480,7 @@ def build_network(
     osm_file = output_dir / "map.osm"
     net_file = output_dir / "network.net.xml"
     metadata_file = output_dir / "metadata.json"
+    provenance_file = output_dir / "network_build_provenance.json"
 
     normalized_mode = normalize_network_mode(network_mode)
     bbox, bbox_tuple = resolve_network_bbox(
@@ -447,12 +511,13 @@ def build_network(
 
     sanitize_report: dict[str, Any] | None = None
     connection_sanitize_report: dict[str, Any] | None = None
+    tls_sanitize_report: dict[str, Any] | None = None
     supported = netconvert_supported_options()
     desired_options = [
         "--geometry.remove",
         "--roundabouts.guess",
         "--ramps.guess",
-        "--junctions.join",
+        # "--junctions.join", # 👈 너무 공격적인 병합으로 인해 신호등/횡단보도가 사라지는 것 방지
         "--tls.guess",
         "--tls.guess-signals",
         "--tls.discard-simple",
@@ -462,10 +527,18 @@ def build_network(
         "--osm.lane-access",
         "--osm.turn-lanes",
         "--osm.sidewalks",
+        "--osm.all-attributes",
+        # --crossings.guess는 OSM 데이터 상의 교차로 등에 횡단보도를 유추해서 생성해주는 옵션이지만,
+        # 사용자가 원하는 T2 좌표에 정확히 횡단보도를 만들어준다는 보장은 없습니다.
+        # 따라서 매칭 단계에서 반드시 50m 이내 매칭 여부를 검증해야 합니다.
         "--crossings.guess",
+        "--crossings.guess.all",
+        "--crossings.guess.speed-threshold",
+        "-1",
         "--walkingareas",
         "--no-turnarounds.except-deadend",
         "--sidewalks.guess",
+        "--sidewalks.guess.from-permissions",
         "--sidewalks.guess.max-speed",
         "13.89",
         "--keep-edges.by-vclass",
@@ -498,46 +571,87 @@ def build_network(
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
             )
-    if net_file.exists():
-        sanitize_report = sanitize_network_vclasses(net_file)
-        connection_sanitize_report = remove_invalid_walkingarea_connections(net_file)
-        (output_dir / "network_vclass_sanitize_report.json").write_text(
-            json.dumps(sanitize_report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        (output_dir / "network_vclass_sanitize_report.md").write_text(
-            "\n".join(
-                [
-                    "# Network vClass Sanitize Report",
-                    "",
-                    f"- net_file: `{sanitize_report['net_file']}`",
-                    f"- scanned_attrs: {sanitize_report['scanned_attrs']}",
-                    f"- changed_attrs: {sanitize_report['changed_attrs']}",
-                    "",
-                    "## Removed Counts",
-                    json.dumps(sanitize_report["removed_counts"], ensure_ascii=False, indent=2),
-                    "",
-                    "## Replaced Counts",
-                    json.dumps(sanitize_report["replaced_counts"], ensure_ascii=False, indent=2),
-                ]
-            ),
-            encoding="utf-8",
-        )
-        (output_dir / "invalid_walkingarea_connections.json").write_text(
-            json.dumps(connection_sanitize_report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        if connection_sanitize_report and connection_sanitize_report.get("removed_count", 0):
-            pd.DataFrame(connection_sanitize_report.get("removed_connections", [])).to_csv(
-                output_dir / "invalid_walkingarea_connections.csv",
-                index=False,
+        if net_file.exists():
+            sanitize_report = sanitize_network_vclasses(net_file)
+            connection_sanitize_report = remove_invalid_walkingarea_connections(net_file)
+            tls_sanitize_report = remove_invalid_tls_references(net_file)
+            (output_dir / "network_vclass_sanitize_report.json").write_text(
+                json.dumps(sanitize_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
+            (output_dir / "network_vclass_sanitize_report.md").write_text(
+                "\n".join(
+                    [
+                        "# Network vClass Sanitize Report",
+                        "",
+                        f"- net_file: `{sanitize_report['net_file']}`",
+                        f"- scanned_attrs: {sanitize_report['scanned_attrs']}",
+                        f"- changed_attrs: {sanitize_report['changed_attrs']}",
+                        "",
+                        "## Removed Counts",
+                        json.dumps(sanitize_report["removed_counts"], ensure_ascii=False, indent=2),
+                        "",
+                        "## Replaced Counts",
+                        json.dumps(sanitize_report["replaced_counts"], ensure_ascii=False, indent=2),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (output_dir / "invalid_walkingarea_connections.json").write_text(
+                json.dumps(connection_sanitize_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (output_dir / "invalid_tls_references.json").write_text(
+                json.dumps(tls_sanitize_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            if connection_sanitize_report and connection_sanitize_report.get("removed_count", 0):
+                pd.DataFrame(connection_sanitize_report.get("removed_connections", [])).to_csv(
+                    output_dir / "invalid_walkingarea_connections.csv",
+                    index=False,
+                )
+            if tls_sanitize_report and tls_sanitize_report.get("removed_count", 0):
+                pd.DataFrame(tls_sanitize_report.get("removed_tls_references", [])).to_csv(
+                    output_dir / "invalid_tls_references.csv",
+                    index=False,
+                )
 
     metadata = discover_network_metadata(net_file, lon=lon, lat=lat, cw_id=cw_id)
     metadata["network_mode"] = normalized_mode
     metadata["network_bbox"] = bbox
     metadata["buffer_m"] = float(buffer_m)
     save_metadata(metadata_file, metadata)
+    net_sha = _sha256_file(net_file)
+    filtered_hash = _sha256_text(
+        json.dumps(filtered_options, ensure_ascii=False, separators=(",", ":"))
+    )
+    netconvert_version = _tool_version("netconvert")
+    sumo_version = _tool_version("sumo")
+    option_fingerprint_payload = {
+        "filtered_options": filtered_options,
+        "skipped_options": skipped_options,
+        "netconvert_version": netconvert_version,
+    }
+    option_fingerprint_sha = _sha256_text(
+        json.dumps(option_fingerprint_payload, ensure_ascii=False, separators=(",", ":"))
+    )
+    provenance = {
+        "cw_id": str(cw_id),
+        "network_mode": normalized_mode,
+        "buffer_m": float(buffer_m),
+        "network_bbox": bbox,
+        "network_net_sha256": net_sha,
+        "netconvert_options_sha256": filtered_hash,
+        "netconvert_option_fingerprint_sha256": option_fingerprint_sha,
+        "filtered_netconvert_options": filtered_options,
+        "skipped_netconvert_options": skipped_options,
+        "netconvert_version": netconvert_version,
+        "sumo_version": sumo_version,
+    }
+    provenance_file.write_text(
+        json.dumps(provenance, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return metadata, warnings
 
 

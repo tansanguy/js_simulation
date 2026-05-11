@@ -8,6 +8,14 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
+from smart_crosswalk_sumo.mpl_runtime import configure_matplotlib, ensure_matplotlib_env
+
+ensure_matplotlib_env()
+
+import matplotlib
+
+matplotlib.use("Agg")
+configure_matplotlib(matplotlib)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

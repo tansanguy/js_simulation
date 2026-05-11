@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/crossing_patch_v2.py)",
+      "Bash(git -C /Users/junlee/Desktop/2026-1/js status)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/run_simulations.py)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/calibration/extract_taas_calibration_targets.py)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/calibration/calibrate_baseline_to_taas.py)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/safety/injury_severity_model.py)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/safety/risk_event_detector.py)",
+      "Bash(python3 -m py_compile smart_crosswalk_sumo/safety/apply_taas_calibrated_severity.py)",
+      "Bash(xxd smart_crosswalk_sumo/calibration/__init__.py)",
+      "Bash(xxd smart_crosswalk_sumo/safety/__init__.py)",
+      "Bash(python3 *)",
+      "Bash(awk 'NR>=849 && NR<=885' smart_crosswalk_sumo/run_simulations.py)",
+      "Bash(awk NR>=849 && NR<=883 *)",
+      "Bash(awk NR>=935 && NR<=948 *)",
+      "Bash(awk 'NR>=849 && NR<=1600' smart_crosswalk_sumo/run_simulations.py)",
+      "Bash(awk NR>=540 && NR<=600 *)",
+      "Bash(awk NR>=470 && NR<=530 *)",
+      "Bash(awk NR>=1078 && NR<=1105 *)",
+      "Bash(wait)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(git rebase *)",
+      "Bash(git checkout *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git branch *)",
+      "Bash(xargs ls -lh)",
+      "Bash(awk -F',' '$17==\"patched_unsignalized\" {print $2\":\"$4\":\"$5}' /Users/junlee/Desktop/2026-1/js/result/registry_patch_v4_residual/junggu_crosswalk_sumo_registry_final.csv)",
+      "Bash(awk *)"
+    ]
+  }
+}

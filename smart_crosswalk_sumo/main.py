@@ -29,6 +29,7 @@ try:
         check_valid_smart_crosswalks,
     )
     from .implementation_diagnostics import generate_implementation_diagnostics
+    from .c_recovery_pipeline import generate_c_recovery_reports
     from .model_config import dump_parameter_table
     from .preprocess import preprocess_inputs
     from .visualization_exports import export_visual_assets
@@ -47,6 +48,7 @@ except ImportError:
         check_valid_smart_crosswalks,
     )
     from implementation_diagnostics import generate_implementation_diagnostics
+    from c_recovery_pipeline import generate_c_recovery_reports
     from model_config import dump_parameter_table
     from preprocess import preprocess_inputs
     from visualization_exports import export_visual_assets
@@ -113,6 +115,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
             network_mode=getattr(args, "network_mode", "expanded"),
         )
         generate_implementation_diagnostics(output_dir, nets_dir)
+        if getattr(args, "generate_c_recovery_reports", False):
+            generate_c_recovery_reports(
+                output_dir=output_dir,
+                nets_dir=nets_dir,
+                seed=getattr(args, "c_recovery_seed", 42),
+            )
+        if getattr(args, "c_recovery_only", False):
+            return
         if getattr(args, "implementation_diagnostics_only", False):
             return
 
@@ -132,6 +142,22 @@ def run_pipeline(args: argparse.Namespace) -> None:
         )
         if getattr(args, "generate_implementation_diagnostics", False):
             generate_implementation_diagnostics(output_dir, nets_dir)
+        if getattr(args, "generate_c_recovery_reports", False):
+            generate_c_recovery_reports(
+                output_dir=output_dir,
+                nets_dir=nets_dir,
+                seed=getattr(args, "c_recovery_seed", 42),
+            )
+        if getattr(args, "c_recovery_only", False):
+            return
+        return
+
+    if getattr(args, "generate_c_recovery_reports", False) and getattr(args, "c_recovery_only", False):
+        generate_c_recovery_reports(
+            output_dir=output_dir,
+            nets_dir=nets_dir,
+            seed=getattr(args, "c_recovery_seed", 42),
+        )
         return
 
     if simulation_mode == "integrated_selected":
@@ -157,6 +183,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 buffer_m=getattr(args, "buffer_m", 1000.0),
                 corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
                 network_mode=getattr(args, "network_mode", "expanded"),
+                from_registry=getattr(args, "registry_mode", "off") != "off",
+                registry_path=getattr(args, "registry_path", None),
+                registry_mode=getattr(args, "registry_mode", "required"),
+                registry_network_version=getattr(args, "registry_network_version", None),
             )
             valid_ids = {str(crosswalk_id) for crosswalk_id in manifest_df["crosswalk_id"].astype(str)}
             selected = selected[selected["crosswalk_id"].astype(str).isin(valid_ids)].reset_index(drop=True)
@@ -207,6 +237,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 assumptions_path,
                 getattr(args, "export_fcd", False),
                 getattr(args, "vehicle_only", False),
+                enable_risk_event_collection=getattr(args, "enable_risk_event_collection", False),
+                risk_event_sample_interval_s=getattr(args, "risk_event_sample_interval_s", 1.0),
             )
         dump_parameter_table(
             load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
@@ -363,6 +395,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--admin_polygon_path", default=str(DEFAULT_JUNGGU_ADMIN_POLYGON_PATH))
     parser.add_argument("--buffer_m", type=float, default=1000.0)
     parser.add_argument("--corridor_road_whitelist", nargs="*", default=None)
+    parser.add_argument(
+        "--registry_path",
+        default=str(BASE_DIR / "registry" / "junggu_crosswalk_sumo_registry.csv"),
+    )
+    parser.add_argument(
+        "--registry_mode",
+        choices=["required", "prefer", "off"],
+        default="required",
+    )
+    parser.add_argument("--registry_network_version", default=None)
 
     parser.add_argument("--demand_profile", default="average")
     parser.add_argument("--traffic_counts", default=None)
@@ -409,6 +451,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--export_fcd", action="store_true")
     parser.add_argument("--vehicle_only", action="store_true")
 
+    parser.add_argument(
+        "--enable_risk_event_collection",
+        action="store_true",
+        help="integrated_selected 모드에서 차량-보행자 위험 이벤트 수집 활성화 (기본: 비활성)",
+    )
+    parser.add_argument(
+        "--risk_event_sample_interval_s",
+        type=float,
+        default=1.0,
+        help="위험 이벤트 프레임 수집 간격 (초). --enable_risk_event_collection 활성 시만 사용 (기본: 1.0)",
+    )
+
     parser.add_argument("--result_root", default=str(DEFAULT_RESULT_ROOT))
     parser.add_argument("--run_name", default=None)
     parser.add_argument("--run_dir", default=None)
@@ -425,6 +479,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list_valid_smart_crosswalks", action="store_true")
     parser.add_argument("--generate_implementation_diagnostics", action="store_true")
     parser.add_argument("--implementation_diagnostics_only", action="store_true")
+    parser.add_argument("--generate_c_recovery_reports", action="store_true")
+    parser.add_argument("--c_recovery_only", action="store_true")
+    parser.add_argument("--c_recovery_seed", type=int, default=42)
     parser.add_argument("--num_valid_crosswalks", type=int, default=30)
     parser.add_argument("--max_match_distance_m", type=float, default=50.0)
     parser.add_argument("--require_tls", type=lambda x: str(x).lower() == 'true', default=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import xml.etree.ElementTree as ET
@@ -21,10 +22,11 @@ try:
     from .model_config import load_model_parameters
     from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from .network_utils import (
-    attempt_route_repair,
+        attempt_route_repair,
         discover_network_metadata,
         discover_network_metadata_from_net,
         distance_to_edge_shape,
+        pedestrian_link_indices,
         read_net,
         validate_pedestrian_connectivity,
     )
@@ -34,6 +36,7 @@ try:
         compute_signal_timing,
         generate_incident_schedule,
         run_simulation_integrated,
+        _runtime_log_append,
         snapshot_traci_trafficlight_ids,
         serialize_incident_event,
     )
@@ -62,6 +65,7 @@ except ImportError:
         compute_signal_timing,
         generate_incident_schedule,
         run_simulation_integrated,
+        _runtime_log_append,
         snapshot_traci_trafficlight_ids,
         serialize_incident_event,
     )
@@ -70,6 +74,114 @@ except ImportError:
 INTEGRATED_DIRNAME = "integrated_selected"
 MANIFEST_FILENAME = "smart_crosswalk_manifest.json"
 MATCH_DISTANCE_THRESHOLD_M = 50.0
+REGISTRY_RUNNABLE_STATUSES = {"A", "recovered"}
+
+
+def _sha256_text(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: str | Path) -> str:
+    hasher = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _canonical_network_version(
+    network_mode: str,
+    buffer_m: float,
+    network_net_sha256: str,
+    netconvert_options_sha256: str,
+) -> str:
+    buffer_token = f"{float(buffer_m):g}".replace(".", "p")
+    mode_token = str(network_mode or "expanded").strip().lower()
+    return (
+        f"junggu_{mode_token}_b{buffer_token}"
+        f"_net{str(network_net_sha256)[:12]}_opt{str(netconvert_options_sha256)[:12]}"
+    )
+
+
+def _to_int_list(value: Any) -> list[int]:
+    if isinstance(value, list):
+        out: list[int] = []
+        for item in value:
+            try:
+                out.append(int(item))
+            except Exception:
+                continue
+        return out
+    text = str(value or "").strip()
+    if not text:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = json.loads(text)
+            return _to_int_list(parsed)
+        except Exception:
+            pass
+    out: list[int] = []
+    for token in text.split("|"):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            out.append(int(token))
+        except Exception:
+            continue
+    return out
+
+
+def _to_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = json.loads(text)
+            return _to_str_list(parsed)
+        except Exception:
+            pass
+    return [tok.strip() for tok in text.split("|") if tok.strip()]
+
+
+def _load_integrated_network_fingerprint(integrated_dir: Path) -> dict[str, Any]:
+    net_file = integrated_dir / "network.net.xml"
+    if not net_file.exists():
+        raise FileNotFoundError(f"통합 네트워크 파일이 없습니다: {net_file}")
+    provenance_path = integrated_dir / "network_build_provenance.json"
+    if provenance_path.exists():
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    else:
+        provenance = {}
+    filtered_options = list(provenance.get("filtered_netconvert_options") or [])
+    skipped_options = list(provenance.get("skipped_netconvert_options") or [])
+    netconvert_version = str(provenance.get("netconvert_version") or "")
+    option_fingerprint = _sha256_text(
+        json.dumps(
+            {
+                "filtered_options": filtered_options,
+                "skipped_options": skipped_options,
+                "netconvert_version": netconvert_version,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+    return {
+        "net_file": net_file,
+        "network_net_sha256": str(provenance.get("network_net_sha256") or _sha256_file(net_file)),
+        "netconvert_options_sha256": str(
+            provenance.get("netconvert_option_fingerprint_sha256")
+            or provenance.get("netconvert_options_sha256")
+            or option_fingerprint
+        ),
+    }
 
 
 def _geojson_polygons(geojson_path: str | Path) -> list[list[list[tuple[float, float]]]]:
@@ -156,6 +268,379 @@ def _net_tllogic_ids(net_file: str | Path) -> set[str]:
         for node in root.findall("tlLogic")
         if str(node.attrib.get("id") or "").strip()
     }
+
+
+def _net_connection_tl_ids(net_file: str | Path) -> set[str]:
+    root = ET.parse(net_file).getroot()
+    return {
+        str(node.attrib.get("tl"))
+        for node in root.findall("connection")
+        if str(node.attrib.get("tl") or "").strip()
+    }
+
+
+def _probe_traci_tls_ids_for_net(net_file: str | Path, seed: int = 42, step_length: float = 0.1) -> set[str]:
+    net_file = Path(net_file)
+    probe_sumocfg = net_file.parent / f"_precheck_tls_probe_seed{seed}.sumocfg"
+    probe_sumocfg.write_text(
+        "\n".join(
+            [
+                "<configuration>",
+                "    <input>",
+                f'        <net-file value="{net_file.name}"/>',
+                "    </input>",
+                "    <time>",
+                "        <begin value=\"0\"/>",
+                "        <end value=\"1\"/>",
+                f'        <step-length value="{step_length}"/>',
+                "    </time>",
+                "</configuration>",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        return snapshot_traci_trafficlight_ids(probe_sumocfg, seed=seed, step_length=step_length)
+    except Exception:
+        return set()
+    finally:
+        try:
+            probe_sumocfg.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y"}
+
+
+def _candidate_recovery_dirs(output_dir: Path) -> list[Path]:
+    candidates: list[Path] = [output_dir]
+    result_root = output_dir.parent.parent if output_dir.parent.parent.exists() else output_dir.parent
+    fallback = result_root / "integrated_implementation_audit" / "outputs"
+    if fallback not in candidates:
+        candidates.append(fallback)
+    uniq: list[Path] = []
+    for path in candidates:
+        if path not in uniq:
+            uniq.append(path)
+    return uniq
+
+
+def load_recovered_candidates(output_dir: str | Path) -> tuple[dict[str, dict[str, Any]], str]:
+    out_dir = Path(output_dir)
+    for candidate_dir in _candidate_recovery_dirs(out_dir):
+        recovered_path = candidate_dir / "recovered_simulation_target_list.csv"
+        attempts_path = candidate_dir / "c_recovery_attempts.csv"
+        tls_remap_path = candidate_dir / "tls_remap_candidates.csv"
+        if not recovered_path.exists() or not attempts_path.exists():
+            continue
+        recovered_df = pd.read_csv(recovered_path)
+        attempts_df = pd.read_csv(attempts_path)
+        tls_remap_df = pd.read_csv(tls_remap_path) if tls_remap_path.exists() else pd.DataFrame()
+        recovered_df["smart_crosswalk_id"] = recovered_df["smart_crosswalk_id"].astype(str)
+        attempts_df["smart_crosswalk_id"] = attempts_df["smart_crosswalk_id"].astype(str)
+        if not tls_remap_df.empty:
+            tls_remap_df["smart_crosswalk_id"] = tls_remap_df["smart_crosswalk_id"].astype(str)
+        merged = recovered_df.merge(
+            attempts_df[
+                [
+                    "smart_crosswalk_id",
+                    "path_uses_crossing",
+                    "path_uses_walkingarea",
+                    "matched_crossing_edge",
+                    "resolved_tllogic_id",
+                    "recovery_distance_m",
+                    "matched_radius_m",
+                    "recovery_status",
+                    "simulation_usable",
+                ]
+            ],
+            on="smart_crosswalk_id",
+            how="left",
+            suffixes=("", "_attempt"),
+        )
+        if not tls_remap_df.empty:
+            merged = merged.merge(
+                tls_remap_df[
+                    [
+                        "smart_crosswalk_id",
+                        "resolved_exists_in_traci",
+                    ]
+                ],
+                on="smart_crosswalk_id",
+                how="left",
+            )
+        rows = {
+            str(row.get("smart_crosswalk_id")): dict(row)
+            for row in merged.to_dict(orient="records")
+        }
+        return rows, str(recovered_path)
+    return {}, ""
+
+
+def _build_manifest_rows_from_registry(
+    selected_df: pd.DataFrame,
+    registry_path: str | Path,
+    integrated_dir: Path,
+    network_mode: str,
+    buffer_m: float,
+    target_network_version: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    registry_path = Path(registry_path)
+    if not registry_path.exists():
+        raise FileNotFoundError(f"registry 파일이 없습니다: {registry_path}")
+
+    fingerprint = _load_integrated_network_fingerprint(integrated_dir)
+    canonical_current = _canonical_network_version(
+        network_mode=network_mode,
+        buffer_m=buffer_m,
+        network_net_sha256=fingerprint["network_net_sha256"],
+        netconvert_options_sha256=fingerprint["netconvert_options_sha256"],
+    )
+    target_version = target_network_version or canonical_current
+
+    registry_df = pd.read_csv(registry_path)
+    if registry_df.empty:
+        raise ValueError(f"registry가 비어 있습니다: {registry_path}")
+    registry_df["crosswalk_id"] = registry_df["crosswalk_id"].astype(str)
+    registry_df["canonical_network_version"] = registry_df["canonical_network_version"].astype(str)
+    scoped_df = registry_df[registry_df["canonical_network_version"] == str(target_version)].copy()
+    if scoped_df.empty:
+        raise ValueError(
+            f"registry에 canonical_network_version={target_version} 데이터가 없습니다. "
+            "registry build/validate를 먼저 실행하세요."
+        )
+
+    hashes = scoped_df[["network_net_sha256", "netconvert_options_sha256"]].drop_duplicates()
+    if len(hashes) != 1:
+        raise ValueError(
+            f"registry 버전 {target_version} 에 해시가 복수 존재합니다. registry 정합성 확인이 필요합니다."
+        )
+    row_hash = hashes.iloc[0].to_dict()
+    row_net_sha = str(row_hash.get("network_net_sha256") or "")
+    row_opt_sha = str(row_hash.get("netconvert_options_sha256") or "")
+    if row_net_sha != fingerprint["network_net_sha256"] or row_opt_sha != fingerprint["netconvert_options_sha256"]:
+        raise ValueError(
+            "registry 네트워크 해시가 현재 integrated network와 다릅니다. "
+            "registry validate/build를 다시 실행하세요."
+        )
+
+    row_map = {
+        str(row.get("crosswalk_id")): row
+        for row in scoped_df.to_dict(orient="records")
+    }
+    manifest_rows: list[dict[str, Any]] = []
+    excluded_rows: list[dict[str, Any]] = []
+    for row in selected_df.itertuples(index=False):
+        cw_id = str(getattr(row, "crosswalk_id"))
+        reg = row_map.get(cw_id)
+        if reg is None:
+            excluded_rows.append(
+                {
+                    "smart_crosswalk_id": cw_id,
+                    "original_tls_id": "",
+                    "rejected_reason": "registry_missing_crosswalk_id",
+                    "tlLogic_exists_in_net_xml": False,
+                    "exists_in_traci_getIDList": False,
+                    "action_taken": "excluded_from_manifest_precheck",
+                    "implementation_status": "",
+                    "failure_reason": "registry_missing_crosswalk_id",
+                    "recovery_status": "",
+                    "recovery_source": "canonical_registry",
+                    "recovery_distance_m": None,
+                    "matched_radius_m": None,
+                    "original_failure_reason": "",
+                    "override_reason": "",
+                }
+            )
+            continue
+        registry_status = str(reg.get("registry_status") or "")
+        if registry_status not in REGISTRY_RUNNABLE_STATUSES:
+            tls_id = str(reg.get("tls_id") or "")
+            excluded_rows.append(
+                {
+                    "smart_crosswalk_id": cw_id,
+                    "original_tls_id": tls_id,
+                    "rejected_reason": f"registry_status_not_runnable:{registry_status or 'empty'}",
+                    "tlLogic_exists_in_net_xml": _to_bool(reg.get("tlLogic_exists_in_net_xml", False)),
+                    "exists_in_traci_getIDList": False,
+                    "action_taken": "excluded_from_manifest_precheck",
+                    "implementation_status": str(reg.get("implementation_status") or ""),
+                    "failure_reason": str(reg.get("notes") or ""),
+                    "recovery_status": str(reg.get("recovery_status") or ""),
+                    "recovery_source": "canonical_registry",
+                    "recovery_distance_m": reg.get("match_distance_m"),
+                    "matched_radius_m": reg.get("matched_radius_m"),
+                    "original_failure_reason": str(reg.get("notes") or ""),
+                    "override_reason": "registry_status_gate",
+                }
+            )
+            continue
+
+        ped_route = {
+            "from_edge": str(reg.get("from_edge") or ""),
+            "to_edge": str(reg.get("to_edge") or ""),
+        }
+        cw_metadata = {
+            "cw_id": cw_id,
+            "net_file": str(fingerprint["net_file"]),
+            "crossing_edge": str(reg.get("crossing_edge") or ""),
+            "crossing_lon": float(reg.get("crossing_lon")) if str(reg.get("crossing_lon") or "").strip() else None,
+            "crossing_lat": float(reg.get("crossing_lat")) if str(reg.get("crossing_lat") or "").strip() else None,
+            "tls_id": str(reg.get("tls_id") or ""),
+            "ped_link_indices": _to_int_list(reg.get("ped_link_indices")),
+            "ped_route": ped_route,
+            "vehicle_conflict_edges": _to_str_list(reg.get("vehicle_conflict_edges")),
+            "approach_lanes": _to_str_list(reg.get("approach_lanes")),
+        }
+
+        manifest_rows.append(
+            {
+                "crosswalk_id": cw_id,
+                "admin_dong": getattr(row, "admin_dong"),
+                "dong_name": getattr(row, "dong_name"),
+                "longitude": float(getattr(row, "longitude")),
+                "latitude": float(getattr(row, "latitude")),
+                "lane_count": float(getattr(row, "lane_count")),
+                "max_speed_kph": float(getattr(row, "max_speed_kph")),
+                "elderly_ratio": float(getattr(row, "elderly_ratio")),
+                "accident_count": float(getattr(row, "accident_count")),
+                "estimated_aadt": getattr(row, "estimated_aadt", 0.0),
+                "crossing_length_m": getattr(row, "crossing_length_m", getattr(row, "crosswalk_length", 0.0)),
+                "ped_green_base": getattr(row, "ped_green_base", 0.0),
+                "ped_green_elderly": getattr(row, "ped_green_elderly", 0.0),
+                "risk_score": getattr(row, "risk_score", getattr(row, "priority_score", 0.0)),
+                "inside_junggu_boundary": True,
+                "inside_analysis_area": True,
+                "inside_smart_target_area": True,
+                "match_distance_m": reg.get("match_distance_m"),
+                "implementation_status": str(reg.get("implementation_status") or "ready_for_simulation"),
+                "repair_attempted": False,
+                "repair_success": bool(registry_status == "recovered"),
+                "reconstruction_needed": False,
+                "final_usable_for_simulation": True,
+                "original_from_edge": ped_route["from_edge"],
+                "original_to_edge": ped_route["to_edge"],
+                "repaired_from_edge": ped_route["from_edge"] if registry_status == "recovered" else "",
+                "repaired_to_edge": ped_route["to_edge"] if registry_status == "recovered" else "",
+                "path_uses_crossing": _to_bool(reg.get("path_uses_crossing", True)),
+                "validation_status": "valid" if _to_bool(reg.get("path_uses_crossing", True)) else "registry_invalid",
+                "recovery_status": str(reg.get("recovery_status") or ""),
+                "recovery_source": "canonical_registry",
+                "recovery_distance_m": reg.get("match_distance_m"),
+                "matched_radius_m": reg.get("matched_radius_m"),
+                "original_failure_reason": str(reg.get("notes") or ""),
+                "override_reason": "registry_promoted",
+                **cw_metadata,
+            }
+        )
+
+    return manifest_rows, excluded_rows, str(registry_path)
+
+
+def apply_recovered_candidate_override(
+    assessment: dict[str, Any],
+    recovered_row: dict[str, Any] | None,
+    net: Any,
+    tl_logic_ids: set[str],
+    connection_tl_ids: set[str],
+) -> tuple[dict[str, Any], bool, str]:
+    if not recovered_row:
+        return assessment, False, "recovered_override_not_applicable"
+
+    original_failure_reason = str(assessment.get("failure_reason") or "")
+    status = str(assessment.get("implementation_status") or "")
+    if status not in {"crossing_reconstruction_required", "route_repair_failed"}:
+        return assessment, False, "recovered_override_not_applicable"
+    if "distance_exceeded" not in original_failure_reason and "missing_tls" not in original_failure_reason:
+        return assessment, False, "recovered_override_not_applicable"
+
+    recovery_status = str(recovered_row.get("recovery_status") or "")
+    simulation_usable = _to_bool(recovered_row.get("simulation_usable", False))
+    matched_crossing_edge = str(recovered_row.get("matched_crossing_edge") or "")
+    resolved_tllogic_id = str(recovered_row.get("resolved_tllogic_id") or "")
+    path_uses_crossing = _to_bool(recovered_row.get("path_uses_crossing", False))
+    path_uses_walkingarea = _to_bool(recovered_row.get("path_uses_walkingarea", False))
+    recovery_distance_m = float(recovered_row.get("recovery_distance_m"))
+    matched_radius_m = int(float(recovered_row.get("matched_radius_m")))
+
+    if recovery_status != "auto_recovered_distance_rematch":
+        return assessment, False, "recovered_override_failed_invalid_recovery_status"
+    if not simulation_usable:
+        return assessment, False, "recovered_override_failed_simulation_usable_false"
+    if not matched_crossing_edge:
+        return assessment, False, "recovered_override_failed_missing_crossing_edge"
+    if not path_uses_crossing:
+        return assessment, False, "recovered_override_failed_route_not_using_crossing"
+    if not path_uses_walkingarea:
+        return assessment, False, "recovered_override_failed_route_not_using_walkingarea"
+    if not resolved_tllogic_id:
+        return assessment, False, "recovered_override_failed_missing_resolved_tllogic"
+    if resolved_tllogic_id not in tl_logic_ids:
+        return assessment, False, "recovered_override_failed_missing_tllogic"
+    if resolved_tllogic_id not in connection_tl_ids:
+        return assessment, False, "recovered_override_failed_missing_connection_tl"
+    if not _to_bool(recovered_row.get("resolved_exists_in_traci", False)):
+        return assessment, False, "recovered_override_failed_not_in_traci"
+    if recovery_distance_m > 100.0:
+        return assessment, False, "recovered_override_failed_distance_over_100m"
+    if matched_radius_m not in {75, 100}:
+        return assessment, False, "recovered_override_failed_invalid_radius"
+
+    cw_metadata = dict(assessment.get("cw_metadata", {}))
+    ped_val = dict(assessment.get("ped_val", {}))
+    cw_metadata["crossing_edge"] = matched_crossing_edge
+    cw_metadata["tls_id"] = resolved_tllogic_id
+    try:
+        edge = net.getEdge(matched_crossing_edge)
+        shape = edge.getShape()
+        if shape:
+            mid = shape[len(shape) // 2]
+            crossing_lon, crossing_lat = net.convertXY2LonLat(mid[0], mid[1])
+            cw_metadata["crossing_lon"] = float(crossing_lon)
+            cw_metadata["crossing_lat"] = float(crossing_lat)
+    except Exception:
+        pass
+    # Recompute ped_link_indices with the corrected crossing_edge and tls_id.
+    # The original assessment failed with tls_id=None so ped_link_indices was [],
+    # and that empty value is otherwise silently inherited after recovery.
+    net_file_path = cw_metadata.get("net_file")
+    if net_file_path:
+        recomputed = pedestrian_link_indices(net_file_path, resolved_tllogic_id, matched_crossing_edge)
+        cw_metadata["ped_link_indices"] = recomputed
+        cw_metadata["ped_link_indices_source"] = "recomputed_after_recovery"
+    ped_val["path_uses_crossing"] = True
+    ped_val["path_uses_walkingarea"] = True
+    ped_val["path_exists"] = True
+    ped_val["validation_status"] = "valid"
+
+    patched = dict(assessment)
+    patched.update(
+        {
+            "implementation_status": "auto_recovered_distance_rematch",
+            "final_usable_for_simulation": True,
+            "failure_reason": "",
+            "repair_suggestion": "",
+            "tls_id": resolved_tllogic_id,
+            "crossing_edge": matched_crossing_edge,
+            "initial_match_distance_m": recovery_distance_m,
+            "repaired_match_distance_m": recovery_distance_m,
+            "cw_metadata": cw_metadata,
+            "ped_val": ped_val,
+            "recovery_status": recovery_status,
+            "recovery_source": "recovered_simulation_target_list.csv",
+            "recovery_distance_m": recovery_distance_m,
+            "matched_radius_m": matched_radius_m,
+            "original_failure_reason": original_failure_reason,
+            "override_reason": "verified_recovered_candidate",
+        }
+    )
+    return patched, True, ""
 
 
 def _validate_integrated_tls_candidates(
@@ -519,6 +1004,10 @@ def build_integrated_network_manifest(
     corridor_whitelist: list[str] | None = None,
     network_mode: str = "expanded",
     match_distance_threshold_m: float = MATCH_DISTANCE_THRESHOLD_M,
+    from_registry: bool = False,
+    registry_path: str | Path | None = None,
+    registry_mode: str = "required",
+    registry_network_version: str | None = None,
 ) -> tuple[Path, Path, pd.DataFrame]:
     nets_dir = Path(nets_dir)
     output_dir = Path(output_dir)
@@ -540,81 +1029,129 @@ def build_integrated_network_manifest(
     if warnings:
         write_csv_utf8_sig(pd.DataFrame(warnings), output_dir / "network_mode_warnings.csv")
 
-    net_file = integrated_dir / "network.net.xml"
-    net = read_net(net_file)
-    xml_root = ET.parse(net_file).getroot()
-    tl_logic_ids = _net_tllogic_ids(net_file)
+    # synthetic TLS가 주입된 enhanced network이 있으면 우선 사용한다.
+    # crossing_patch_v2.py final-registry --net_xml 실행 시 생성된다.
+    _signal_net_file = integrated_dir / "network_with_signal.net.xml"
+    net_file = _signal_net_file if _signal_net_file.exists() else integrated_dir / "network.net.xml"
     manifest_rows: list[dict[str, Any]] = []
     excluded_rows: list[dict[str, Any]] = []
-    
-    for row in selected_df.itertuples(index=False):
-        cw_id = str(getattr(row, "crosswalk_id"))
-        
-        assessment = assess_candidate_implementation(net, net_file, row, xml_root, match_distance_threshold_m, True)
-        
-        status = str(assessment.get("implementation_status") or "")
-        if not bool(assessment.get("final_usable_for_simulation", False)):
-            original_tls_id = str(assessment.get("tls_id") or assessment.get("cw_metadata", {}).get("tls_id") or "")
-            if status == "crossing_reconstruction_required":
-                if original_tls_id and original_tls_id not in tl_logic_ids:
-                    rejected_reason = "ghost_tls_no_tlLogic"
-                elif not original_tls_id:
-                    rejected_reason = "missing_tls_id_or_controlled_tl"
+    recovered_source_path = ""
+    registry_enabled = from_registry and registry_mode != "off" and registry_path
+
+    if registry_enabled:
+        try:
+            manifest_rows, excluded_rows, recovered_source_path = _build_manifest_rows_from_registry(
+                selected_df=selected_df,
+                registry_path=registry_path,
+                integrated_dir=integrated_dir,
+                network_mode=network_mode,
+                buffer_m=buffer_m,
+                target_network_version=registry_network_version,
+            )
+        except Exception as exc:
+            if registry_mode == "required":
+                raise
+            if registry_mode == "prefer":
+                print(f"[registry] fallback to dynamic rematch: {exc}")
+
+    allow_dynamic_fallback = (not registry_enabled) or (registry_mode == "prefer")
+    if not manifest_rows and allow_dynamic_fallback:
+        net = read_net(net_file)
+        xml_root = ET.parse(net_file).getroot()
+        tl_logic_ids = _net_tllogic_ids(net_file)
+        connection_tl_ids = _net_connection_tl_ids(net_file)
+        recovered_candidates, recovered_source_path = load_recovered_candidates(output_dir)
+
+        for row in selected_df.itertuples(index=False):
+            cw_id = str(getattr(row, "crosswalk_id"))
+
+            assessment = assess_candidate_implementation(net, net_file, row, xml_root, match_distance_threshold_m, True)
+            recovered_row = recovered_candidates.get(cw_id)
+            assessment, override_applied, override_failure_reason = apply_recovered_candidate_override(
+                assessment=assessment,
+                recovered_row=recovered_row,
+                net=net,
+                tl_logic_ids=tl_logic_ids,
+                connection_tl_ids=connection_tl_ids,
+            )
+
+            status = str(assessment.get("implementation_status") or "")
+            if not bool(assessment.get("final_usable_for_simulation", False)):
+                original_tls_id = str(assessment.get("tls_id") or assessment.get("cw_metadata", {}).get("tls_id") or "")
+                if recovered_row and override_failure_reason.startswith("recovered_override_failed_"):
+                    rejected_reason = override_failure_reason
+                elif status == "crossing_reconstruction_required":
+                    if original_tls_id and original_tls_id not in tl_logic_ids:
+                        rejected_reason = "ghost_tls_no_tlLogic"
+                    elif not original_tls_id:
+                        rejected_reason = "missing_tls_id_or_controlled_tl"
+                    else:
+                        rejected_reason = str(assessment.get("failure_reason") or "crossing_reconstruction_required")
+                elif status == "route_repair_failed":
+                    rejected_reason = "route_repair_failed"
                 else:
-                    rejected_reason = str(assessment.get("failure_reason") or "crossing_reconstruction_required")
-            elif status == "route_repair_failed":
-                rejected_reason = "route_repair_failed"
-            else:
-                rejected_reason = str(assessment.get("failure_reason") or status or "excluded_precheck")
-            excluded_rows.append(
+                    rejected_reason = str(assessment.get("failure_reason") or status or "excluded_precheck")
+                excluded_rows.append(
+                    {
+                        "smart_crosswalk_id": cw_id,
+                        "original_tls_id": original_tls_id,
+                        "rejected_reason": rejected_reason,
+                        "tlLogic_exists_in_net_xml": bool(original_tls_id and original_tls_id in tl_logic_ids),
+                        "exists_in_traci_getIDList": _to_bool(recovered_row.get("resolved_exists_in_traci", False)) if recovered_row else False,
+                        "action_taken": "excluded_from_manifest_precheck",
+                        "implementation_status": status,
+                        "failure_reason": str(assessment.get("failure_reason") or ""),
+                        "recovery_status": str(assessment.get("recovery_status") or ""),
+                        "recovery_source": str(assessment.get("recovery_source") or ""),
+                        "recovery_distance_m": assessment.get("recovery_distance_m"),
+                        "matched_radius_m": assessment.get("matched_radius_m"),
+                        "original_failure_reason": str(assessment.get("original_failure_reason") or assessment.get("failure_reason") or ""),
+                        "override_reason": str(assessment.get("override_reason") or ""),
+                    }
+                )
+                continue
+
+            cw_metadata = assessment["cw_metadata"]
+            manifest_rows.append(
                 {
-                    "smart_crosswalk_id": cw_id,
-                    "original_tls_id": original_tls_id,
-                    "rejected_reason": rejected_reason,
-                    "tlLogic_exists_in_net_xml": bool(original_tls_id and original_tls_id in tl_logic_ids),
-                    "exists_in_traci_getIDList": False,
-                    "action_taken": "excluded_from_manifest_precheck",
-                    "implementation_status": status,
-                    "failure_reason": str(assessment.get("failure_reason") or ""),
+                    "crosswalk_id": cw_id,
+                    "admin_dong": getattr(row, "admin_dong"),
+                    "dong_name": getattr(row, "dong_name"),
+                    "longitude": float(getattr(row, "longitude")),
+                    "latitude": float(getattr(row, "latitude")),
+                    "lane_count": float(getattr(row, "lane_count")),
+                    "max_speed_kph": float(getattr(row, "max_speed_kph")),
+                    "elderly_ratio": float(getattr(row, "elderly_ratio")),
+                    "accident_count": float(getattr(row, "accident_count")),
+                    "estimated_aadt": getattr(row, "estimated_aadt", 0.0),
+                    "crossing_length_m": getattr(row, "crossing_length_m", getattr(row, "crosswalk_length", 0.0)),
+                    "ped_green_base": getattr(row, "ped_green_base", 0.0),
+                    "ped_green_elderly": getattr(row, "ped_green_elderly", 0.0),
+                    "risk_score": getattr(row, "risk_score", getattr(row, "priority_score", 0.0)),
+                    "inside_junggu_boundary": True,
+                    "inside_analysis_area": True,
+                    "inside_smart_target_area": True,
+                    "match_distance_m": assessment["initial_match_distance_m"],
+                    "implementation_status": assessment["implementation_status"],
+                    "repair_attempted": assessment["repair_attempted"],
+                    "repair_success": assessment["repair_success"],
+                    "reconstruction_needed": assessment["reconstruction_needed"],
+                    "final_usable_for_simulation": assessment["final_usable_for_simulation"],
+                    "original_from_edge": assessment["original_from_edge"],
+                    "original_to_edge": assessment["original_to_edge"],
+                    "repaired_from_edge": assessment["repaired_from_edge"],
+                    "repaired_to_edge": assessment["repaired_to_edge"],
+                    "path_uses_crossing": assessment["ped_val"].get("path_uses_crossing", False),
+                    "validation_status": assessment["validation_status"],
+                    "recovery_status": assessment.get("recovery_status", ""),
+                    "recovery_source": assessment.get("recovery_source", ""),
+                    "recovery_distance_m": assessment.get("recovery_distance_m"),
+                    "matched_radius_m": assessment.get("matched_radius_m"),
+                    "original_failure_reason": assessment.get("original_failure_reason", ""),
+                    "override_reason": assessment.get("override_reason", ""),
+                    **cw_metadata,
                 }
             )
-            continue
-
-        cw_metadata = assessment["cw_metadata"]
-        manifest_rows.append(
-            {
-                "crosswalk_id": cw_id,
-                "admin_dong": getattr(row, "admin_dong"),
-                "dong_name": getattr(row, "dong_name"),
-                "longitude": float(getattr(row, "longitude")),
-                "latitude": float(getattr(row, "latitude")),
-                "lane_count": float(getattr(row, "lane_count")),
-                "max_speed_kph": float(getattr(row, "max_speed_kph")),
-                "elderly_ratio": float(getattr(row, "elderly_ratio")),
-                "accident_count": float(getattr(row, "accident_count")),
-                "estimated_aadt": getattr(row, "estimated_aadt", 0.0),
-                "crossing_length_m": getattr(row, "crossing_length_m", getattr(row, "crosswalk_length", 0.0)),
-                "ped_green_base": getattr(row, "ped_green_base", 0.0),
-                "ped_green_elderly": getattr(row, "ped_green_elderly", 0.0),
-                "risk_score": getattr(row, "risk_score", getattr(row, "priority_score", 0.0)),
-                "inside_junggu_boundary": True,
-                "inside_analysis_area": True,
-                "inside_smart_target_area": True,
-                "match_distance_m": assessment["initial_match_distance_m"],
-                "implementation_status": assessment["implementation_status"],
-                "repair_attempted": assessment["repair_attempted"],
-                "repair_success": assessment["repair_success"],
-                "reconstruction_needed": assessment["reconstruction_needed"],
-                "final_usable_for_simulation": assessment["final_usable_for_simulation"],
-                "original_from_edge": assessment["original_from_edge"],
-                "original_to_edge": assessment["original_to_edge"],
-                "repaired_from_edge": assessment["repaired_from_edge"],
-                "repaired_to_edge": assessment["repaired_to_edge"],
-                "path_uses_crossing": assessment["ped_val"].get("path_uses_crossing", False),
-                "validation_status": assessment["validation_status"],
-                **cw_metadata,
-            }
-        )
 
     if not manifest_rows:
         raise ValueError(
@@ -628,6 +1165,7 @@ def build_integrated_network_manifest(
         "smart_crosswalk_ids": [str(row["crosswalk_id"]) for row in manifest_rows],
         "crosswalks": manifest_rows,
         "excluded_crosswalks": excluded_rows,
+        "recovered_source_path": recovered_source_path,
     }
     manifest_path = integrated_dir / MANIFEST_FILENAME
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -689,13 +1227,14 @@ def check_valid_smart_crosswalks(
         corridor_whitelist=corridor_whitelist,
     )
     
-    net_file = integrated_dir / "network.net.xml"
+    _signal_net_file2 = integrated_dir / "network_with_signal.net.xml"
+    net_file = _signal_net_file2 if _signal_net_file2.exists() else integrated_dir / "network.net.xml"
     if not net_file.exists():
         raise FileNotFoundError(f"네트워크 파일이 없습니다: {net_file}")
-    
+
     net = read_net(net_file)
     xml_root = ET.parse(net_file).getroot()
-    
+
     audit_results = []
     
     for row in junggu_candidates.itertuples(index=False):
@@ -1077,8 +1616,14 @@ def collect_integrated_metrics(
     export_fcd: bool = False,
     vehicle_only: bool = False,
     sensitivity_config: dict[str, Any] | None = None,
+    enable_risk_event_collection: bool = False,
+    risk_event_sample_interval_s: float = 1.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     output_dir = Path(output_dir)
+    run_name = output_dir.parent.name if output_dir.parent.name else output_dir.name
+    seed_for_trace = int(seeds[0]) if seeds else 42
+    runtime_trace_path = output_dir / f"runtime_trace_seed{seed_for_trace}.log"
+    failure_context_path = output_dir / f"traci_failure_context_seed{seed_for_trace}.json"
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     integrated_dir = Path(manifest_path).parent
     net_file = Path(manifest["net_file"])
@@ -1167,7 +1712,13 @@ def collect_integrated_metrics(
     incident_event_rows: list[dict[str, Any]] = []
     incident_impact_rows: list[dict[str, Any]] = []
 
+    def trace(event: str, **fields: Any) -> None:
+        _runtime_log_append(runtime_trace_path, {"event": event, "run_name": run_name, **fields})
+
+    trace("collect_integrated_metrics_enter", seed=seed_for_trace, run_name=run_name)
+
     for seed in seeds:
+        trace("seed_begin", seed=int(seed), run_name=run_name)
         schedule_events = generate_incident_schedule(
             disruption_scenario,
             sim_duration,
@@ -1205,38 +1756,54 @@ def collect_integrated_metrics(
             route_file = integrated_dir / f"routes_seed{seed}.rou.xml"
             ped_file = integrated_dir / f"peds_seed{seed}.rou.xml"
             sumocfg = integrated_dir / f"{scenario}_seed{seed}.sumocfg"
-            per_metrics, network_metrics, ext_events, _, incident_impacts, _ = run_simulation_integrated(
-                manifest["net_file"],
-                route_file,
-                ped_file,
-                sumocfg,
-                scenario,
-                crosswalk_contexts,
-                smart_target_ids,
-                sim_duration,
-                warmup,
-                seed,
-                traci_step_length,
-                traffic_measure_radius_m,
-                extension_increment,
-                max_extensions,
-                vehicle_arrival_rate_per_hour,
-                saturation_flow_rate_per_hour,
-                max(1, int(np.nanmean(selected_df["lane_count"]))),
-                vehicle_arrival_model,
-                disruption_scenario,
-                enable_random_disruptions,
-                bus_stop_rate_per_hour,
-                illegal_parking_rate_per_hour,
-                minor_incident_rate_per_hour,
-                accident_rate_per_hour,
-                schedule_payload,
-                model_parameters_path,
-                export_fcd,
-                output_dir,
-                vehicle_only,
-                sensitivity_config,
-            )
+            trace("scenario_begin", scenario=scenario, seed=int(seed), run_name=run_name, sumocfg=str(sumocfg))
+            try:
+                per_metrics, network_metrics, ext_events, _, incident_impacts, _ = run_simulation_integrated(
+                    manifest["net_file"],
+                    route_file,
+                    ped_file,
+                    sumocfg,
+                    scenario,
+                    crosswalk_contexts,
+                    smart_target_ids,
+                    sim_duration,
+                    warmup,
+                    seed,
+                    traci_step_length,
+                    traffic_measure_radius_m,
+                    extension_increment,
+                    max_extensions,
+                    vehicle_arrival_rate_per_hour,
+                    saturation_flow_rate_per_hour,
+                    max(1, int(np.nanmean(selected_df["lane_count"]))),
+                    vehicle_arrival_model,
+                    disruption_scenario,
+                    enable_random_disruptions,
+                    bus_stop_rate_per_hour,
+                    illegal_parking_rate_per_hour,
+                    minor_incident_rate_per_hour,
+                    accident_rate_per_hour,
+                    schedule_payload,
+                    model_parameters_path,
+                    export_fcd,
+                    output_dir,
+                    runtime_trace_path,
+                    failure_context_path,
+                    vehicle_only,
+                    sensitivity_config,
+                    enable_risk_event_collection=enable_risk_event_collection,
+                    risk_event_sample_interval_s=risk_event_sample_interval_s,
+                )
+            except Exception as exc:
+                trace(
+                    "scenario_exception",
+                    scenario=scenario,
+                    seed=int(seed),
+                    run_name=run_name,
+                    exception_type=type(exc).__name__,
+                    exception_message=str(exc),
+                )
+                raise
             for row in per_metrics:
                 cw_id = str(row["crosswalk_id"])
                 selected_row = selected_map[cw_id]
@@ -1261,6 +1828,7 @@ def collect_integrated_metrics(
             network_seed_rows.append(network_metrics)
             extension_rows.extend(ext_events)
             incident_impact_rows.extend(incident_impacts)
+            trace("scenario_end", scenario=scenario, seed=int(seed), run_name=run_name)
 
     for cw_id, cw_rows in pd.DataFrame(per_seed_rows).groupby("crosswalk_id"):
         for scenario, scenario_rows in cw_rows.groupby("scenario"):
@@ -1308,6 +1876,7 @@ def collect_integrated_metrics(
         pd.DataFrame(incident_event_rows).drop_duplicates(), output_dir / "incident_events_seed.csv"
     )
     write_csv_utf8_sig(pd.DataFrame(incident_impact_rows), output_dir / "incident_impact_seed.csv")
+    trace("collect_integrated_metrics_exit", seed=seed_for_trace, run_name=run_name)
     return per_seed_df, per_avg_df, network_seed_df, network_avg_df
 
 

@@ -281,6 +281,13 @@ def _write_simple_svg(net_info: dict[str, Any], out_svg: Path, highlight_edges: 
 
 def _write_network_png(net_info: dict[str, Any], out_png: Path, crossing_edge: str | None = None) -> None:
     try:
+        from smart_crosswalk_sumo.mpl_runtime import configure_matplotlib, ensure_matplotlib_env
+
+        ensure_matplotlib_env()
+        import matplotlib
+
+        matplotlib.use("Agg")
+        configure_matplotlib(matplotlib)
         import matplotlib.pyplot as plt
     except Exception:
         return

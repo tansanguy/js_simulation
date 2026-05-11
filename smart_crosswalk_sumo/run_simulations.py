@@ -2138,6 +2138,23 @@ def run_simulation_integrated(
 
     extension_events_log: list[dict[str, Any]] = []
     incident_impacts: list[dict[str, Any]] = []
+    diag: dict[str, int] = {
+        "smart_extension_eval_count": 0,
+        "smart_extension_ped_green_count": 0,
+        "smart_extension_remaining_trigger_window_count": 0,
+        "smart_extension_detected_peds_count": 0,
+        "smart_extension_sensor_pass_count": 0,
+        "smart_extension_decision_true_count": 0,
+        "smart_extension_block_missing_tls_id_count": 0,
+        "smart_extension_block_missing_ped_link_indices_count": 0,
+        "smart_extension_block_ped_signal_not_green_count": 0,
+        "smart_extension_block_remaining_time_sufficient_count": 0,
+        "smart_extension_block_max_extension_reached_count": 0,
+        "smart_extension_block_already_extended_in_cycle_count": 0,
+        "smart_extension_block_no_pedestrians_detected_count": 0,
+        "smart_extension_block_sensor_false_negative_count": 0,
+    }
+    diag_rows: list[dict[str, Any]] = []
     incident_events_log = [
         serialize_incident_event(event, "integrated_selected", seed, "shared")
         for event in incident_events
@@ -2433,9 +2450,20 @@ def run_simulation_integrated(
                 if (
                     scenario == "smart_selected"
                     and tl_id
+                    and ped_link_indices_union
+                    and group["target_context_ids"]
+                    and not current_phase_is_ped_green
+                ):
+                    diag["smart_extension_block_ped_signal_not_green_count"] += 1
+
+                if (
+                    scenario == "smart_selected"
+                    and tl_id
                     and current_phase_is_ped_green
                     and group["target_context_ids"]
                 ):
+                    diag["smart_extension_eval_count"] += 1
+                    diag["smart_extension_ped_green_count"] += 1
                     extension_t0 = time.perf_counter()
                     try:
                         debug_state.update(
@@ -2450,11 +2478,13 @@ def run_simulation_integrated(
                     # Fetch peds only when pre-conditions pass (preserves original TraCI call timing).
                     triggered_context_ids: list[str] = []
                     ped_on_crossing_total = 0
+                    _ctx_ped_counts: dict[str, tuple[int, int]] = {}
                     if (
                         remaining <= signal_params["trigger_remaining"]
                         and group["extension_count_in_cycle"] < signal_params["max_extensions"]
                         and not group["extended_in_cycle"]
                     ):
+                        diag["smart_extension_remaining_trigger_window_count"] += 1
                         for context_state in context_states:
                             crosswalk_id = context_state["crosswalk_id"]
                             if crosswalk_id not in group["target_context_ids"]:
@@ -2473,11 +2503,16 @@ def run_simulation_integrated(
                                 except Exception:
                                     continue
                             detected_peds = ped_on_crossing | ped_on_detectors
+                            _ctx_ped_counts[crosswalk_id] = (len(ped_on_crossing), len(ped_on_detectors))
                             if detected_peds:
                                 triggered_context_ids.append(crosswalk_id)
                                 ped_on_crossing_total += len(ped_on_crossing)
                     # random.random() called only when triggered_context_ids non-empty — same timing as before.
                     sensor_pass = random.random() > signal_params["sensor_fn_rate"] if triggered_context_ids else False
+                    if triggered_context_ids:
+                        diag["smart_extension_detected_peds_count"] += 1
+                    if triggered_context_ids and sensor_pass:
+                        diag["smart_extension_sensor_pass_count"] += 1
                     decision = evaluate_smart_extension_decision(
                         tls_id=tl_id,
                         ped_link_indices=ped_link_indices_union,
@@ -2489,6 +2524,47 @@ def run_simulation_integrated(
                         signal_params=signal_params,
                         sensor_pass=sensor_pass,
                     )
+                    _reason_key = f"smart_extension_block_{decision['reason']}_count"
+                    if _reason_key in diag:
+                        diag[_reason_key] += 1
+                    if decision["should_extend"]:
+                        diag["smart_extension_decision_true_count"] += 1
+                    _should_log_diag = (
+                        current_phase_is_ped_green
+                        or remaining <= signal_params["trigger_remaining"]
+                        or bool(triggered_context_ids)
+                        or decision["reason"] != "ped_signal_not_green"
+                    )
+                    if _should_log_diag:
+                        for _ctx in context_states:
+                            if _ctx["crosswalk_id"] not in group["target_context_ids"]:
+                                continue
+                            _cid = _ctx["crosswalk_id"]
+                            _pl = [int(i) for i in _ctx["metadata"].get("ped_link_indices", [])]
+                            _cross_cnt, _det_cnt = _ctx_ped_counts.get(_cid, (0, 0))
+                            diag_rows.append({
+                                "time_s": t,
+                                "scenario": scenario,
+                                "seed": seed,
+                                "crosswalk_id": _cid,
+                                "tls_id": tl_id,
+                                "phase_index": int(current_phase),
+                                "tls_state": state_str,
+                                "ped_link_indices": json.dumps(_pl),
+                                "is_ped_green": is_ped_green_state(state_str, _pl),
+                                "remaining_s": remaining,
+                                "trigger_remaining": signal_params["trigger_remaining"],
+                                "crossing_edge": str(_ctx["metadata"].get("crossing_edge", "")),
+                                "ped_detector_edges": json.dumps(_ctx.get("ped_detector_edges", [])),
+                                "ped_on_crossing_count": _cross_cnt,
+                                "ped_on_detector_count": _det_cnt,
+                                "detected_peds_count": _cross_cnt + _det_cnt,
+                                "context_triggered": int(_cid in triggered_context_ids),
+                                "sensor_pass": sensor_pass,
+                                "decision_should_extend": decision["should_extend"],
+                                "decision_reason": decision["reason"],
+                                "extension_sec": decision["extension_sec"],
+                            })
                     if decision["should_extend"]:
                         try:
                             debug_state.update(
@@ -2920,12 +2996,20 @@ def run_simulation_integrated(
         "network_spillback_rate": float(network_spillback_steps / max(network_measure_steps, 1)),
         "network_spillback_step_count": int(network_spillback_steps),
         "selected_crosswalk_count": int(len(crosswalk_contexts)),
+        **diag,
     }
 
     file_exports: dict[str, Any] = {}
     if output_dir:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        if diag_rows:
+            import pandas as _pd_diag
+            _pd_diag.DataFrame(diag_rows).to_csv(
+                out_dir / f"smart_extension_diagnostics_{scenario}_seed{seed}.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
         edge_data_path = out_dir / f"edge_data_{scenario}_seed{seed}.xml"
         lane_data_path = out_dir / f"lane_data_{scenario}_seed{seed}.xml"
         file_exports["edge_data_path"] = str(edge_data_path)

@@ -12,9 +12,13 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 try:
+    from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from .model_config import load_model_parameters
+    from .output_schema import write_csv_utf8_sig
 except ImportError:
+    from mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from model_config import load_model_parameters
+    from output_schema import write_csv_utf8_sig
 
 
 SIMULATION_SUMMARY_COLUMNS = [
@@ -262,7 +266,7 @@ def comparison_table(avg_df: pd.DataFrame) -> pd.DataFrame:
 
 def report_1(avg_df: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     report = avg_df.copy()
-    report.to_csv(output_dir / "report_1_simulation_results.csv", index=False)
+    write_csv_utf8_sig(report, output_dir / "report_1_simulation_results.csv")
     return report
 
 
@@ -347,9 +351,11 @@ def write_figures(
 ) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
     try:
+        ensure_matplotlib_env()
         import matplotlib
 
         matplotlib.use("Agg")
+        configure_matplotlib(matplotlib)
         import matplotlib.pyplot as plt
     except ImportError:
         return
@@ -532,7 +538,7 @@ def write_required_outputs(
     figs_dir.mkdir(parents=True, exist_ok=True)
 
     seed_tradeoff = build_seed_level_tradeoff(seed_df)
-    seed_tradeoff.to_csv(results_dir / "baseline_smart_seed_results.csv", index=False)
+    write_csv_utf8_sig(seed_tradeoff, results_dir / "baseline_smart_seed_results.csv")
 
     summary = (
         seed_tradeoff.groupby("candidate_id", as_index=False)
@@ -552,21 +558,23 @@ def write_required_outputs(
         if not seed_tradeoff.empty
         else pd.DataFrame()
     )
-    summary.to_csv(results_dir / "baseline_smart_summary.csv", index=False)
+    write_csv_utf8_sig(summary, results_dir / "baseline_smart_summary.csv")
 
     quality = pd.DataFrame()
     if candidates_csv and candidates_csv.exists() and nets_dir and nets_dir.exists():
         candidates = pd.read_csv(candidates_csv)
         quality = build_candidate_quality_report(candidates, nets_dir, seed_tradeoff)
-    quality.to_csv(results_dir / "candidate_quality_report.csv", index=False)
+    write_csv_utf8_sig(quality, results_dir / "candidate_quality_report.csv")
 
     tradeoff_summary = summary.copy()
-    tradeoff_summary.to_csv(results_dir / "tradeoff_summary.csv", index=False)
+    write_csv_utf8_sig(tradeoff_summary, results_dir / "tradeoff_summary.csv")
 
     try:
+        ensure_matplotlib_env()
         import matplotlib
 
         matplotlib.use("Agg")
+        configure_matplotlib(matplotlib)
         import matplotlib.pyplot as plt
 
         if not summary.empty:
@@ -668,8 +676,8 @@ def generate_all_reports(
     model_params = load_model_parameters(model_parameters_path)
     simulation_summary = build_simulation_summary(avg_df, seed_df)
     delta_summary = build_baseline_vs_smart_summary(simulation_summary)
-    simulation_summary.to_csv(output_dir / "simulation_summary.csv", index=False)
-    delta_summary.to_csv(output_dir / "baseline_vs_smart_summary.csv", index=False)
+    write_csv_utf8_sig(simulation_summary, output_dir / "simulation_summary.csv")
+    write_csv_utf8_sig(delta_summary, output_dir / "baseline_vs_smart_summary.csv")
     write_methodology_report(output_dir, model_params, simulation_summary, delta_summary)
     write_figures(delta_summary, figures_dir)
     write_required_outputs(

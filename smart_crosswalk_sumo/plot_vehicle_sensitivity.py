@@ -3,9 +3,17 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+try:
+    from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
+except ImportError:
+    from mpl_runtime import configure_matplotlib, ensure_matplotlib_env
+
+ensure_matplotlib_env()
+
 import matplotlib
 
 matplotlib.use("Agg")
+configure_matplotlib(matplotlib)
 import matplotlib.pyplot as plt
 import pandas as pd
 

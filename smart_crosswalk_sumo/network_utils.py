@@ -141,12 +141,23 @@ def choose_crossing_edge(net: Any, lon: float, lat: float) -> Any:
     try:
         target_xy = net.convertLonLat2XY(float(lon), float(lat))
     except Exception:
-        # Some local SUMO builds need pyproj for lon/lat conversion.  The OSM
-        # bbox is already centered on the candidate, so the network bbox center
-        # is a reasonable fallback for selecting the nearest crossing.
         (xmin, ymin), (xmax, ymax) = net.getBBoxXY()
         target_xy = ((xmin + xmax) / 2, (ymin + ymax) / 2)
-    return min(crossings, key=lambda edge: distance_to_edge_shape(edge, target_xy))
+    
+    # Prioritize crossings that have at least some connectivity to normal edges
+    def connectivity_score(edge: Any) -> int:
+        wa_in = [e for e in edge.getIncoming().keys() if edge_function(e) == "walkingarea"]
+        wa_out = [e for e in edge.getOutgoing().keys() if edge_function(e) == "walkingarea"]
+        if not wa_in or not wa_out:
+            return 0
+        has_in = any(any(edge_function(ee) == "normal" for ee in w.getIncoming().keys()) for w in wa_in)
+        has_out = any(any(edge_function(ee) == "normal" for ee in w.getOutgoing().keys()) for w in wa_out)
+        if has_in and has_out:
+            return 2
+        return 1
+
+    sorted_crossings = sorted(crossings, key=lambda edge: (connectivity_score(edge) * -1, distance_to_edge_shape(edge, target_xy)))
+    return sorted_crossings[0]
 
 
 def normal_edges_at_node(node: Any, vclass: str | None = None) -> list[Any]:
@@ -201,6 +212,76 @@ def pedestrian_route_from_crossing(crossing_edge: Any) -> dict[str, str]:
     }
 
 
+def attempt_route_repair(net: Any, crossing_edge_id: str) -> dict[str, Any] | None:
+    crossing_edge = _safe_get_edge(net, crossing_edge_id)
+    if not crossing_edge:
+        return None
+
+    candidates: set[Any] = set()
+    node = crossing_edge.getFromNode()
+
+    # Add from incoming/outgoing walkingareas
+    for wa in list(crossing_edge.getIncoming().keys()):
+        if edge_function(wa) == "walkingarea":
+            for e in list(wa.getIncoming().keys()):
+                if edge_function(e) == "normal" and edge_allows(e, "pedestrian"):
+                    candidates.add(e)
+    for wa in list(crossing_edge.getOutgoing().keys()):
+        if edge_function(wa) == "walkingarea":
+            for e in list(wa.getOutgoing().keys()):
+                if edge_function(e) == "normal" and edge_allows(e, "pedestrian"):
+                    candidates.add(e)
+
+    # Also add normal edges at the node
+    for e in list(node.getIncoming()) + list(node.getOutgoing()):
+        if edge_function(e) == "normal" and edge_allows(e, "pedestrian"):
+            candidates.add(e)
+
+    # Also look at neighbors of vehicle conflict edges
+    for veh_e in list(node.getIncoming()):
+        if edge_function(veh_e) == "normal" and edge_allows(veh_e, "passenger"):
+            veh_node = veh_e.getFromNode()
+            for ped_e in list(veh_node.getIncoming()) + list(veh_node.getOutgoing()):
+                if edge_function(ped_e) == "normal" and edge_allows(ped_e, "pedestrian"):
+                    candidates.add(ped_e)
+    for veh_e in list(node.getOutgoing()):
+        if edge_function(veh_e) == "normal" and edge_allows(veh_e, "passenger"):
+            veh_node = veh_e.getToNode()
+            for ped_e in list(veh_node.getIncoming()) + list(veh_node.getOutgoing()):
+                if edge_function(ped_e) == "normal" and edge_allows(ped_e, "pedestrian"):
+                    candidates.add(ped_e)
+
+    best_cost = float("inf")
+    best_path: list[str] | None = None
+    best_pair: tuple[str, str] | None = None
+
+    for f in list(candidates):
+        for t in list(candidates):
+            if f.getID() == t.getID():
+                continue
+            try:
+                path_edges, path_cost = net.getShortestPath(f, t, vClass="pedestrian", withInternal=True)
+                if path_edges:
+                    path_ids = _edge_id_list(path_edges)
+                    if crossing_edge_id in path_ids:
+                        if path_cost < best_cost and len(path_ids) <= 15:
+                            best_cost = path_cost
+                            best_path = path_ids
+                            best_pair = (f.getID(), t.getID())
+            except Exception:
+                pass
+
+    if best_pair and best_path is not None:
+        return {
+            "from_edge": best_pair[0],
+            "to_edge": best_pair[1],
+            "path_cost": best_cost,
+            "path_edge_count": len(best_path),
+            "path_edge_sequence": "|".join(best_path),
+        }
+    return None
+
+
 def _safe_get_edge(net: Any, edge_id: str | None) -> Any | None:
     if not edge_id:
         return None
@@ -220,8 +301,10 @@ def validate_pedestrian_connectivity(
     net_file: str | Path,
     metadata: dict[str, Any],
     cw_id: str | int | None = None,
+    net: Any | None = None,
 ) -> dict[str, Any]:
-    net = read_net(net_file)
+    if net is None:
+        net = read_net(net_file)
     ped_route = metadata.get("ped_route") or {}
     crossing_edge_id = str(metadata.get("crossing_edge", "") or "")
     from_edge_id = str(ped_route.get("from_edge", "") or "")
@@ -358,29 +441,57 @@ def approach_lanes_at_crossing(crossing_edge: Any) -> list[str]:
     return lanes
 
 
-def find_tls_id(net: Any, crossing_edge: Any) -> str | None:
+def find_tls_id(net: Any, crossing_edge: Any, xml_root: ET.Element | None = None) -> str | None:
     node = crossing_edge.getFromNode()
     node_id = node.getID()
-    if node.getType() == "traffic_light":
-        return node_id
-    tls_ids = [tls.getID() for tls in net.getTrafficLights()]
-    if node_id in tls_ids:
+    # verify if the node is actually a traffic light with logic
+    tls_ids = {tls.getID() for tls in net.getTrafficLights()}
+    if node.getType() == "traffic_light" and node_id in tls_ids:
         return node_id
     if not tls_ids:
         return None
+    # joined TLS fallback: scan connections for from/to/via referencing this node's internal edges.
+    # joinedS_A_B TLS IDs don't match node IDs directly, and net.hasNode("joinedS_...") returns False,
+    # so the distance fallback below cannot reach them. XML scan is the only reliable path.
+    if xml_root is not None:
+        node_prefix = f":{node_id}_"
+        for conn in xml_root.findall("connection"):
+            tl = conn.attrib.get("tl")
+            if not tl or tl not in tls_ids:
+                continue
+            from_edge = conn.attrib.get("from", "")
+            to_edge = conn.attrib.get("to", "")
+            via_edge = conn.attrib.get("via", "")
+            if (
+                from_edge.startswith(node_prefix)
+                or to_edge.startswith(node_prefix)
+                or via_edge.startswith(node_prefix)
+            ):
+                return tl
     node_xy = node.getCoord()
-    return min(
+    closest_id = min(
         tls_ids,
         key=lambda tls_id: math.dist(node_xy, net.getNode(tls_id).getCoord())
         if net.hasNode(tls_id)
         else float("inf"),
     )
+    # also check distance for the fallback closest TL
+    if closest_id and net.hasNode(closest_id):
+        dist = math.dist(node_xy, net.getNode(closest_id).getCoord())
+        if dist < 50: # Only fallback if within 50m
+            return closest_id
+    return None
 
 
-def pedestrian_link_indices(net_file: str | Path, tl_id: str | None, crossing_edge_id: str) -> list[int]:
+def pedestrian_link_indices(
+    net_file: str | Path,
+    tl_id: str | None,
+    crossing_edge_id: str,
+    xml_root: ET.Element | None = None,
+) -> list[int]:
     if not tl_id:
         return []
-    root = ET.parse(net_file).getroot()
+    root = xml_root if xml_root is not None else ET.parse(net_file).getroot()
     edge_functions = {
         edge.attrib["id"]: edge.attrib.get("function", "normal")
         for edge in root.findall("edge")
@@ -389,29 +500,40 @@ def pedestrian_link_indices(net_file: str | Path, tl_id: str | None, crossing_ed
     for conn in root.findall("connection"):
         if conn.attrib.get("tl") != tl_id:
             continue
-        from_edge = conn.attrib.get("from")
-        to_edge = conn.attrib.get("to")
-        if (
-            from_edge == crossing_edge_id
-            or to_edge == crossing_edge_id
-            or edge_functions.get(from_edge) == "crossing"
-            or edge_functions.get(to_edge) == "crossing"
-        ):
-            link_index = conn.attrib.get("linkIndex")
-            if link_index is not None:
-                indices.append(int(link_index))
+        from_edge = conn.attrib.get("from", "")
+        to_edge = conn.attrib.get("to", "")
+        # Only include connections that directly involve this specific crossing_edge
+        # (walkingarea→crossing or crossing→walkingarea). The old broad condition
+        # edge_functions.get(from/to) == "crossing" captured all crossings under the
+        # TLS, not just the target one, and silently returned [] when edge_functions
+        # lookup missed internal edges.
+        if to_edge != crossing_edge_id and from_edge != crossing_edge_id:
+            continue
+        from_fn = edge_functions.get(from_edge, "normal")
+        to_fn = edge_functions.get(to_edge, "normal")
+        if from_fn not in {"walkingarea", "crossing"} and to_fn not in {"walkingarea", "crossing"}:
+            continue
+        link_index = conn.attrib.get("linkIndex")
+        if link_index is not None:
+            indices.append(int(link_index))
     return sorted(set(indices))
 
 
-def discover_network_metadata(net_file: str | Path, lon: float, lat: float, cw_id: str | int | None = None) -> dict[str, Any]:
-    net = read_net(net_file)
+def discover_network_metadata_from_net(
+    net: Any,
+    net_file: str | Path,
+    lon: float,
+    lat: float,
+    cw_id: str | int | None = None,
+    xml_root: ET.Element | None = None,
+) -> dict[str, Any]:
     crossing_edge = choose_crossing_edge(net, float(lon), float(lat))
     crossing_xy = edge_center(crossing_edge)
     try:
         crossing_lon, crossing_lat = net.convertXY2LonLat(*crossing_xy)
     except Exception:
         crossing_lon, crossing_lat = None, None
-    tl_id = find_tls_id(net, crossing_edge)
+    tl_id = find_tls_id(net, crossing_edge, xml_root=xml_root)
     ped_route = pedestrian_route_from_crossing(crossing_edge)
     vehicle_edges = vehicle_edges_at_crossing(crossing_edge)
     approach_lanes = approach_lanes_at_crossing(crossing_edge)
@@ -428,11 +550,16 @@ def discover_network_metadata(net_file: str | Path, lon: float, lat: float, cw_i
         "crossing_lon": float(crossing_lon) if crossing_lon is not None else None,
         "crossing_lat": float(crossing_lat) if crossing_lat is not None else None,
         "tls_id": tl_id,
-        "ped_link_indices": pedestrian_link_indices(net_file, tl_id, crossing_edge.getID()),
+        "ped_link_indices": pedestrian_link_indices(net_file, tl_id, crossing_edge.getID(), xml_root=xml_root),
         "ped_route": ped_route,
         "vehicle_conflict_edges": vehicle_edges,
         "approach_lanes": approach_lanes,
     }
+
+
+def discover_network_metadata(net_file: str | Path, lon: float, lat: float, cw_id: str | int | None = None) -> dict[str, Any]:
+    net = read_net(net_file)
+    return discover_network_metadata_from_net(net, net_file, lon, lat, cw_id=cw_id)
 
 
 def load_metadata(path: str | Path) -> dict[str, Any]:
