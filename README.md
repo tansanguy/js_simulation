@@ -1,6 +1,8 @@
 # Simulation Process Explanation
 ## 스마트 횡단보도 SUMO 시뮬레이션 — 연구 프로세스 설명
 
+Repo guardrails: [`AGENTS.md`](./AGENTS.md)
+
 ---
 
 ## 1. 연구 질문

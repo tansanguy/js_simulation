@@ -6,9 +6,12 @@ __pycache__/
 data/
 logs/
 .cache/
+.agents/
+.codex-plugins/
+caveman/
 
 # SUMO generated outputs
-result/
+result/**
 result_old/
 *.sumocfg
 *.rou.xml
@@ -22,19 +25,11 @@ traci_commands_*.log
 summary.xml
 tripinfo.xml
 statistics.xml
+*_debug_trace.csv
 
-# SUMO generated outputs
-result/
-result_old/
-*.sumocfg
-*.rou.xml
-*.trips.xml
-*.net.xml
-*.osm
-*.log
-edge_data_*.xml
-lane_data_*.xml
-traci_commands_*.log
-summary.xml
-tripinfo.xml
-statistics.xml
+# Keep a narrow path for explicit result evidence files if new ones are created later.
+!result/**/phase6_smoke_baseline_vs_smart_compare_BATCH03_5SEC_SORTED_FINAL.csv
+!result/**/phase6_mini_experiment_candidates_batch03_only.csv
+!result/**/phase6_smoke_baseline_results.csv
+!result/**/phase6_smoke_smart_results.csv
+!result/**/phase6_smoke_smart_extension_events.csv

@@ -21,7 +21,6 @@
       "Bash(awk NR>=470 && NR<=530 *)",
       "Bash(awk NR>=1078 && NR<=1105 *)",
       "Bash(wait)",
-      "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git push *)",
       "Bash(git pull *)",
@@ -33,7 +32,20 @@
       "Bash(xargs ls -lh)",
       "Bash(awk -F',' '$17==\"patched_unsignalized\" {print $2\":\"$4\":\"$5}' /Users/junlee/Desktop/2026-1/js/result/registry_patch_v4_residual/junggu_crosswalk_sumo_registry_final.csv)",
       "Bash(awk *)",
-      "Bash(read f *)"
+      "Bash(read f *)",
+      "Bash(pip3 list *)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(pip install *)",
+      "Bash(find result/matching_visual_audit* -name \"*.csv\")",
+      "Bash(netconvert --help)",
+      "Bash(export SUMO_HOME=/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/share/sumo)",
+      "Bash(netconvert --osm-files result/junggu_osm_network_20260513_184106/downloaded_junggu.osm.xml --output-file /tmp/test_junggu.net.xml)",
+      "Bash([ -f result/junggu_osm_network_*/network_validation_summary.md ])",
+      "Bash([ -f result/junggu_osm_network_*/junggu_generated.net.xml ])",
+      "Bash(grep -v \"^Warning\\\\|^pj_obj\\\\|^$\" result/phase6_smoke_119055_20260514_013857/smoke_run.log)",
+      "Bash(tee result/phase6_smoke_119055_20260514_013857/smoke_run2.log)",
+      "Bash(tee result/phase_next_multi_crosswalk_recovery_20260514_015058/recovery_run.log)"
     ]
   }
 }
