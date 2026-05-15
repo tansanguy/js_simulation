@@ -5,6 +5,7 @@ import argparse
 import json
 import random
 import shutil
+import socket
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -993,7 +994,11 @@ def _run_scenario(
     cfg_path = _write_sumocfg(out_dir / f"phase6_smoke_{scenario}.sumocfg", net_file, ped_file, veh_file, duration, step_length)
 
     cmd = [_sumo_binary(), "-c", str(cfg_path), "--no-step-log", "--collision.action", "warn", "--time-to-teleport", "-1"]
-    traci.start(cmd)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    traci.start(cmd, port=port)
 
     candidate_meta = _person_routes_crossing(candidate_df)
     route_path_by_cid = {
