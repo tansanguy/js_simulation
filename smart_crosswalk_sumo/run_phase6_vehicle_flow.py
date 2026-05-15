@@ -132,6 +132,7 @@ def _resolved_candidate_df(
             "crosswalk_id": str(row["crosswalk_id"]),
             "nearest_junction_id": str(row["nearest_junction_id"]),
             "tls_id_used": str(row["tls_id_used"]),
+            "ped_link_indices": [int(v) for v in ped_indices],
             "ped_link_index": int(ped_indices[0]),
             "ped_depart_offset_sec": float(row.get("ped_depart_offset_sec", 0.0) or 0.0),
             "ped_repeat_count": int(row.get("ped_repeat_count", 1) or 1),
@@ -174,6 +175,54 @@ def _candidate_crossing_roads_simple(row: Any) -> set[str]:
         f":{getattr(row, 'tls_id_used', '')}_w2",
     }
     return {road for road in roads if road and road not in {"nan", "None"}}
+
+
+def _parse_int_list(value: Any) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        out: list[int] = []
+        for item in value:
+            try:
+                out.append(int(item))
+            except Exception:
+                continue
+        return out
+    text = str(value).strip()
+    if not text or text in {"nan", "None"}:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        text = text.strip("[]")
+    text = text.replace(",", " ").replace("|", " ")
+    out: list[int] = []
+    for token in text.split():
+        try:
+            out.append(int(float(token)))
+        except Exception:
+            continue
+    return out
+
+
+def _phase_link_audit(state: str, ped_link_indices: list[int]) -> dict[str, Any]:
+    green_indices_in_phase = [idx for idx, ch in enumerate(str(state)) if ch in {"G", "g"}]
+    ped_set = set(int(v) for v in ped_link_indices)
+    non_ped_green_indices_in_phase = [idx for idx in green_indices_in_phase if idx not in ped_set]
+    ped_green_ok = bool(ped_set) and all(idx in green_indices_in_phase for idx in ped_set)
+    if not ped_green_ok:
+        extension_phase_type = "not_ped_green"
+    elif non_ped_green_indices_in_phase:
+        extension_phase_type = "mixed"
+    else:
+        extension_phase_type = "pedestrian_only"
+    return {
+        "ped_link_indices": "|".join(str(v) for v in sorted(ped_set)),
+        "green_indices_in_phase": "|".join(str(v) for v in green_indices_in_phase),
+        "non_ped_green_indices_in_phase": "|".join(str(v) for v in non_ped_green_indices_in_phase),
+        "non_ped_green_count": int(len(non_ped_green_indices_in_phase)),
+        "extension_phase_type": extension_phase_type,
+        "phase_extension_affects_non_ped_green": bool(non_ped_green_indices_in_phase),
+        "ped_green_ok": ped_green_ok,
+    }
 
 
 def _parse_float_list(raw_value: str | None) -> list[float]:
@@ -947,6 +996,7 @@ def _person_routes_crossing(candidate_df: pd.DataFrame) -> dict[str, dict[str, A
             "route_from_edge": str(row.route_from_edge),
             "route_to_edge": str(row.route_to_edge),
             "tls_id": str(row.tls_id_used),
+            "ped_link_indices": _parse_int_list(getattr(row, "ped_link_indices", [])),
             "ped_link_index": int(row.ped_link_index),
             "batch_network_file": str(row.batch_network_file),
             "candidate_index": int(row.candidate_index),
@@ -976,6 +1026,8 @@ def _collect_vehicle_metrics(
     impact_radii_m: list[float],
     include_global_scope: bool,
     ped_repeat_count_override: int | None,
+    require_pedestrian_only_extension: bool,
+    write_extension_skip_events: bool,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     if traci is None:
         raise RuntimeError("traci not importable")
@@ -1013,9 +1065,11 @@ def _collect_vehicle_metrics(
     veh_debug_rows: list[dict[str, Any]] = []
     extension_condition_rows: list[dict[str, Any]] = []
     extension_events: list[dict[str, Any]] = []
+    extension_skip_events: list[dict[str, Any]] = []
     sim_error: str | None = None
     sim_error_trace: str | None = None
     completed = False
+    enforce_pedestrian_only_extension = scenario == "smart" or bool(require_pedestrian_only_extension)
 
     candidate_meta = _person_routes_crossing(candidate_df)
     expected_repeat_counts = {
@@ -1130,6 +1184,7 @@ def _collect_vehicle_metrics(
                 meta = candidate_meta[cid]
                 tls_id = str(meta["tls_id"])
                 ped_link_index = int(meta["ped_link_index"])
+                ped_link_indices = list(meta.get("ped_link_indices", [ped_link_index]))
                 crossing_edge_id = str(meta["crossing_edge_id"])
                 route_from_edge = str(meta["route_from_edge"])
                 route_to_edge = str(meta["route_to_edge"])
@@ -1168,6 +1223,7 @@ def _collect_vehicle_metrics(
                 extension_triggered = False
                 state_at_ped_link = state[ped_link_index] if ped_link_index < len(state) else ""
                 already_extended = (tls_id, cid, phase_segment) in extended_segments
+                phase_audit = _phase_link_audit(state, ped_link_indices)
                 extension_condition_met = (
                     scenario == "smart"
                     and ped_link_index < len(state)
@@ -1175,6 +1231,9 @@ def _collect_vehicle_metrics(
                     and ped_near > 0
                     and remaining <= 12.0
                     and not already_extended
+                )
+                extension_allowed = (not enforce_pedestrian_only_extension) or (
+                    phase_audit["ped_green_ok"] and phase_audit["extension_phase_type"] == "pedestrian_only"
                 )
                 extension_condition_rows.append(
                     {
@@ -1192,50 +1251,81 @@ def _collect_vehicle_metrics(
                         "ped_near": ped_near,
                         "already_extended": already_extended,
                         "extension_condition_met": extension_condition_met,
+                        "extension_allowed": extension_allowed,
+                        "phase_extension_affects_non_ped_green": phase_audit["phase_extension_affects_non_ped_green"],
+                        "extension_phase_type": phase_audit["extension_phase_type"],
                         "extension_triggered": False,
                     }
                 )
                 if extension_condition_met:
                     segment_key = (tls_id, cid, phase_segment)
-                    try:
-                        traci.trafficlight.setPhaseDuration(tls_id, max(0.0, remaining) + float(extension_sec))
-                        extension_events.append(
+                    if enforce_pedestrian_only_extension and not extension_allowed:
+                        extension_skip_events.append(
                             {
                                 "time": round(t, 1),
                                 "crosswalk_id": cid,
-                                "candidate_index": int(meta["candidate_index"]),
-                                "original_candidate_index": int(meta["original_candidate_index"]),
                                 "tls_id": tls_id,
                                 "linkIndex": ped_link_index,
                                 "phase": phase,
-                                "phase_segment": phase_segment,
                                 "state": state,
-                                "remaining_before": round(remaining, 1),
-                                "extension_sec": float(extension_sec),
-                                "ped_near": ped_near,
+                                "ped_link_indices": phase_audit["ped_link_indices"],
+                                "green_indices_in_phase": phase_audit["green_indices_in_phase"],
+                                "non_ped_green_indices_in_phase": phase_audit["non_ped_green_indices_in_phase"],
+                                "skip_reason": "mixed_phase",
                             }
                         )
-                        extended_segments.add(segment_key)
-                        extension_triggered = True
-                    except Exception as exc:
-                        extension_events.append(
-                            {
-                                "time": round(t, 1),
-                                "crosswalk_id": cid,
-                                "candidate_index": int(meta["candidate_index"]),
-                                "original_candidate_index": int(meta["original_candidate_index"]),
-                                "tls_id": tls_id,
-                                "linkIndex": ped_link_index,
-                                "phase": phase,
-                                "phase_segment": phase_segment,
-                                "state": state,
-                                "remaining_before": round(remaining, 1),
-                                "extension_sec": float(extension_sec),
-                                "ped_near": ped_near,
-                                "error": str(exc),
-                            }
-                        )
-                        extended_segments.add(segment_key)
+                    else:
+                        try:
+                            traci.trafficlight.setPhaseDuration(tls_id, max(0.0, remaining) + float(extension_sec))
+                            extension_events.append(
+                                {
+                                    "time": round(t, 1),
+                                    "crosswalk_id": cid,
+                                    "candidate_index": int(meta["candidate_index"]),
+                                    "original_candidate_index": int(meta["original_candidate_index"]),
+                                    "tls_id": tls_id,
+                                    "linkIndex": ped_link_index,
+                                    "phase": phase,
+                                    "phase_segment": phase_segment,
+                                    "state": state,
+                                    "remaining_before": round(remaining, 1),
+                                    "extension_sec": float(extension_sec),
+                                    "ped_near": ped_near,
+                                    "ped_link_indices": phase_audit["ped_link_indices"],
+                                    "green_indices_in_phase": phase_audit["green_indices_in_phase"],
+                                    "non_ped_green_indices_in_phase": phase_audit["non_ped_green_indices_in_phase"],
+                                    "non_ped_green_count": phase_audit["non_ped_green_count"],
+                                    "extension_phase_type": phase_audit["extension_phase_type"],
+                                    "phase_extension_affects_non_ped_green": phase_audit["phase_extension_affects_non_ped_green"],
+                                }
+                            )
+                            extended_segments.add(segment_key)
+                            extension_triggered = True
+                        except Exception as exc:
+                            extension_events.append(
+                                {
+                                    "time": round(t, 1),
+                                    "crosswalk_id": cid,
+                                    "candidate_index": int(meta["candidate_index"]),
+                                    "original_candidate_index": int(meta["original_candidate_index"]),
+                                    "tls_id": tls_id,
+                                    "linkIndex": ped_link_index,
+                                    "phase": phase,
+                                    "phase_segment": phase_segment,
+                                    "state": state,
+                                    "remaining_before": round(remaining, 1),
+                                    "extension_sec": float(extension_sec),
+                                    "ped_near": ped_near,
+                                    "ped_link_indices": phase_audit["ped_link_indices"],
+                                    "green_indices_in_phase": phase_audit["green_indices_in_phase"],
+                                    "non_ped_green_indices_in_phase": phase_audit["non_ped_green_indices_in_phase"],
+                                    "non_ped_green_count": phase_audit["non_ped_green_count"],
+                                    "extension_phase_type": phase_audit["extension_phase_type"],
+                                    "phase_extension_affects_non_ped_green": phase_audit["phase_extension_affects_non_ped_green"],
+                                    "error": str(exc),
+                                }
+                            )
+                            extended_segments.add(segment_key)
                 if extension_condition_rows:
                     extension_condition_rows[-1]["extension_triggered"] = extension_triggered
 
@@ -1387,7 +1477,25 @@ def _collect_vehicle_metrics(
         "remaining_before",
         "extension_sec",
         "ped_near",
+        "ped_link_indices",
+        "green_indices_in_phase",
+        "non_ped_green_indices_in_phase",
+        "non_ped_green_count",
+        "extension_phase_type",
+        "phase_extension_affects_non_ped_green",
         "error",
+    ]
+    skip_cols = [
+        "time",
+        "crosswalk_id",
+        "tls_id",
+        "linkIndex",
+        "phase",
+        "state",
+        "ped_link_indices",
+        "green_indices_in_phase",
+        "non_ped_green_indices_in_phase",
+        "skip_reason",
     ]
     ext_cond_cols = [
         "time",
@@ -1404,11 +1512,15 @@ def _collect_vehicle_metrics(
         "ped_near",
         "already_extended",
         "extension_condition_met",
+        "extension_allowed",
+        "phase_extension_affects_non_ped_green",
+        "extension_phase_type",
         "extension_triggered",
     ]
     ped_cols = ["time", "scenario", "crosswalk_id", "candidate_index", "original_candidate_index", "tls_id", "phase", "phase_segment", "state", "remaining_time", "ped_near", "active_crossing_people", "extension_triggered"]
     veh_cols = ["time", "scenario", "crosswalk_id", "candidate_index", "original_candidate_index", "tls_id", "active_vehicle_count", "departed_count_cum", "arrived_count_cum", "veh_waiting_time_mean_step", "veh_waiting_time_max_step", "veh_time_loss_mean_step", "veh_time_loss_max_step"]
     pd.DataFrame(extension_events, columns=ext_cols).to_csv(out_dir / f"phase6_vehicle_flow_{scenario}_extension_events.csv", index=False)
+    pd.DataFrame(extension_skip_events, columns=skip_cols).to_csv(out_dir / f"phase6_vehicle_flow_{scenario}_extension_skip_events.csv", index=False)
     pd.DataFrame(extension_condition_rows, columns=ext_cond_cols).to_csv(out_dir / f"phase6_vehicle_flow_{scenario}_extension_condition_debug.csv", index=False)
     pd.DataFrame(ped_debug_rows, columns=ped_cols).to_csv(out_dir / f"phase6_vehicle_flow_{scenario}_pedestrian_debug_trace.csv", index=False)
     pd.DataFrame(veh_debug_rows, columns=veh_cols).to_csv(out_dir / f"phase6_vehicle_flow_{scenario}_vehicle_debug_trace.csv", index=False)
@@ -1538,6 +1650,8 @@ def main() -> None:
     parser.add_argument("--include-global-scope", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--limit-crosswalk-ids", nargs="*")
     parser.add_argument("--ped-repeat-count-override", type=int)
+    parser.add_argument("--require-pedestrian-only-extension", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--write-extension-skip-events", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args()
 
     apply_sumo_environment()
@@ -1578,6 +1692,8 @@ def main() -> None:
         impact_radii_m,
         bool(args.include_global_scope),
         args.ped_repeat_count_override,
+        bool(args.require_pedestrian_only_extension),
+        bool(args.write_extension_skip_events),
     )
 
     results_df.to_csv(out_dir / f"phase6_vehicle_flow_{args.scenario}_results.csv", index=False)
