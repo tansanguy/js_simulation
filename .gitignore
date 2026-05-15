@@ -33,3 +33,6 @@ statistics.xml
 !result/**/phase6_smoke_baseline_results.csv
 !result/**/phase6_smoke_smart_results.csv
 !result/**/phase6_smoke_smart_extension_events.csv
+
+# local archived results
+result old/

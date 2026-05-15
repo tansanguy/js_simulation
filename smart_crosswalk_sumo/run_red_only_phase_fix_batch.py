@@ -56,6 +56,17 @@ def main() -> None:
         bad = red_only[red_only["recovery_outcome"] != "RED_ONLY_PHASE_FIX_NEEDED"]
         if not bad.empty:
             raise ValueError("input csv contains non RED_ONLY_PHASE_FIX_NEEDED rows")
+    if "ped_link_indices" not in red_only.columns:
+        red_only = red_only.copy()
+        if "ped_link_index" in red_only.columns:
+            red_only["ped_link_indices"] = red_only["ped_link_index"].apply(
+                lambda value: f"[{int(value)}]" if pd.notna(value) and str(value).strip() not in {"", "nan", "None"} else ""
+            )
+        else:
+            red_only["ped_link_indices"] = ""
+    else:
+        red_only = red_only.copy()
+        red_only["ped_link_indices"] = red_only["ped_link_indices"].fillna("").astype(str)
 
     prev_confirmed = _load_csv(previous_ready) if previous_ready.exists() else pd.DataFrame()
     if not prev_confirmed.empty and "promotion_source" not in prev_confirmed.columns:

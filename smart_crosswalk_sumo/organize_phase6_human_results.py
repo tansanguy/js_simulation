@@ -18,6 +18,11 @@ try:  # optional
 except Exception:  # pragma: no cover
     stats = None
 
+try:
+    from .phase6_result_standardizer import _standardize_extension_scope_audit_df
+except ImportError:  # pragma: no cover
+    from phase6_result_standardizer import _standardize_extension_scope_audit_df
+
 
 RESULT_COLUMNS = [
     "seed",
@@ -122,6 +127,7 @@ EXPECTED_PHASE6_RESULT_CSVS = [
     "02_baseline_smart_paired_delta.csv",
     "03_paired_summary_by_crosswalk.csv",
     "04_extension_events_all.csv",
+    "phase6_extension_scope_audit.csv",
     "05_signal_phase_audit.csv",
     "06_impact_scope_edge_counts.csv",
     "07_source_file_inventory.csv",
@@ -949,6 +955,7 @@ def write_phase6_results_readme(output_dir: Path) -> Path:
     paired_delta = frames["02_baseline_smart_paired_delta.csv"]
     paired_summary = frames["03_paired_summary_by_crosswalk.csv"]
     extension_events = frames["04_extension_events_all.csv"]
+    scope_audit = frames["phase6_extension_scope_audit.csv"]
     signal_audit = frames["05_signal_phase_audit.csv"]
     impact_scope = frames["06_impact_scope_edge_counts.csv"]
     inventory = frames["07_source_file_inventory.csv"]
@@ -1007,13 +1014,24 @@ def write_phase6_results_readme(output_dir: Path) -> Path:
     if mixed_event_count == 0 and event_total > 0:
         mixed_candidate_note = "현재 extension event에서 mixed phase는 발견되지 않았다. 그래도 재실행으로 final guard 검증은 필요하다."
 
+    smart_scope = scope_audit[scope_audit["scenario"].astype(str) == "smart"] if not scope_audit.empty and "scenario" in scope_audit.columns else scope_audit
+    baseline_scope = scope_audit[scope_audit["scenario"].astype(str) == "baseline"] if not scope_audit.empty and "scenario" in scope_audit.columns else pd.DataFrame()
+    smart_scope_total = int(len(smart_scope))
+    smart_scope_ped_only = int((smart_scope["scope_verdict"].astype(str) == "pedestrian_only").sum()) if smart_scope_total and "scope_verdict" in smart_scope.columns else 0
+    smart_scope_mixed = int((smart_scope["scope_verdict"].astype(str) == "mixed_non_ped_green").sum()) if smart_scope_total and "scope_verdict" in smart_scope.columns else 0
+    baseline_scope_error = int((baseline_scope["baseline_extension_event_error"].astype(str).str.lower() == "true").sum()) if not baseline_scope.empty and "baseline_extension_event_error" in baseline_scope.columns else 0
+    smart_scope_all_ped_only = smart_scope_total > 0 and smart_scope_ped_only == smart_scope_total and smart_scope_mixed == 0
+    vehicle_delay = pd.to_numeric(run_summary.get("avg_vehicle_delay_sec", pd.Series(dtype=float)), errors="coerce") if not run_summary.empty else pd.Series(dtype=float)
+    network_travel = pd.to_numeric(run_summary.get("network_avg_travel_time_sec", pd.Series(dtype=float)), errors="coerce") if not run_summary.empty else pd.Series(dtype=float)
+    vehicle_flow_not_evaluated = vehicle_delay.dropna().empty and network_travel.dropna().empty
+
     lines: list[str] = []
     lines.append("# Phase 6 Results README")
     lines.append("")
     lines.append(f"읽은 CSV 위치: `{csv_dir}`" if csv_dir is not None else "읽은 CSV 위치: 파일 없음")
     lines.append(f"읽은 CSV 수: {len(EXPECTED_PHASE6_RESULT_CSVS) - len(missing)}")
     lines.append(f"누락 CSV 수: {len(missing)}")
-    lines.append(f"csv 폴더에는 8개 CSV 옆에 8개 README md 파일도 같이 생성된다.")
+    lines.append(f"csv 폴더에는 표준 CSV와 README md 파일이 같이 생성된다.")
     if missing:
         lines.append(f"누락 파일: {', '.join(missing)}")
     lines.append("")
@@ -1034,6 +1052,12 @@ def write_phase6_results_readme(output_dir: Path) -> Path:
     lines.append(f"- error run 수: `{error_runs}`")
     lines.append(f"- 이 폴더의 grouped `300 veh/h` 결과는 smoke/초안 구조 검증용이다.")
     lines.append(f"- 현재 결과는 mixed phase issue를 포함한 이전 반복 결과이므로 최종 정책 효과 검증으로 해석하면 안 된다.")
+    lines.append(f"- smart extension event all pedestrian-only: {'yes' if smart_scope_all_ped_only else 'no'}")
+    lines.append(f"- smart pedestrian-only event count: `{smart_scope_ped_only}` / `{smart_scope_total}`")
+    lines.append(f"- smart mixed non-ped green event count: `{smart_scope_mixed}`")
+    lines.append(f"- baseline extension event error count: `{baseline_scope_error}`")
+    if vehicle_flow_not_evaluated:
+        lines.append("vehicle flow impact not evaluated in this smoke")
     lines.append("")
     lines.append("## 한눈에 보는 숫자")
     lines.append("")
@@ -1105,6 +1129,17 @@ def write_phase6_results_readme(output_dir: Path) -> Path:
             f"실제 결과: event `{event_total}`개. `NODE_7240` `{event_by_crosswalk.get('NODE_7240', 0)}`개 / `{seed_by_crosswalk.get('NODE_7240', 0)}` seed, `LINK_52248` `{event_by_crosswalk.get('LINK_52248', 0)}`개 / `{seed_by_crosswalk.get('LINK_52248', 0)}` seed, `LINK_43439` 0개. 현재 이벤트는 state 문자열 기준으로 모두 mixed phase와 겹친다(`mixed` `{mixed_event_count}`개).",
             "이 파일은 실제 extension 발생만 보여준다. mixed phase 여부는 05와 함께 봐야 한다.",
             "extension이 0인 후보는 정책 효과 후보로 해석하면 안 된다. 현재 데이터는 mixed phase 때문에 smoke/구조 검증용이다.",
+        ),
+        (
+            "phase6_extension_scope_audit.csv",
+            "extension event가 ped-only phase인지, 차량 green이 같이 늘었는지 event별로 검사하는 audit",
+            "행 1개 = 1회 extension event",
+            "`scenario`, `ped_link_index`, `ped_link_state`, `ped_link_is_green`, `non_ped_green_link_indices`, `phase_extension_affects_non_ped_green`, `baseline_extension_event_error`",
+            "ped_link_index만 G/g인지 확인하고, ped link 외 다른 link가 G/g면 차량 green 동시 연장으로 표시한다.",
+            "좋음: `ped_link_is_green=True`이고 `phase_extension_affects_non_ped_green=False`. 나쁨: ped link가 green이 아니거나, ped link 외 다른 link도 green이다.",
+            f"실제 결과: smart extension event `{smart_scope_total}`개 중 `{smart_scope_ped_only}`개가 pedestrian-only였고 `{smart_scope_mixed}`개는 mixed였다. baseline extension event error는 `{baseline_scope_error}`개다.",
+            "baseline extension event이 있으면 정책 오류로 봐야 한다. smart event는 ped-only phase에서만 일어나야 한다.",
+            "차량 지표가 NaN이면 vehicle flow impact not evaluated in this smoke 라고 별도 표기해야 한다.",
         ),
         (
             "05_signal_phase_audit.csv",
@@ -1278,7 +1313,8 @@ def _write_readme(output_dir: Path, volume: int) -> str:
 2. `csv/02_baseline_smart_paired_delta.csv`
 3. `csv/03_paired_summary_by_crosswalk.csv`
 4. `csv/04_extension_events_all.csv`
-5. `csv/05_signal_phase_audit.csv`
+5. `csv/phase6_extension_scope_audit.csv`
+6. `csv/05_signal_phase_audit.csv`
 
 ## CSV 의미
 
@@ -1287,6 +1323,7 @@ def _write_readme(output_dir: Path, volume: int) -> str:
 - `csv/02_baseline_smart_paired_delta.csv`: baseline vs smart paired merge와 차이.
 - `csv/03_paired_summary_by_crosswalk.csv`: 횡단보도별 delta 평균, 표준편차, 표준오차, 95% CI.
 - `csv/04_extension_events_all.csv`: baseline/smart extension event 합본.
+- `csv/phase6_extension_scope_audit.csv`: extension event별 ped link green 여부와 non-ped green 동시 연장 여부를 검사하는 audit.
 - `csv/05_signal_phase_audit.csv`: 대상 후보 3개의 ped_link_index가 red/green phase를 모두 갖는지 검증한 파일. `audit_ok=True`면 대상 신호는 실험 사용 가능.
 - `csv/06_impact_scope_edge_counts.csv`: impact radius별 edge 수 요약.
 - `csv/07_source_file_inventory.csv`: transition-root 바로 아래 파일과 디렉터리의 사람 검토 우선순위 표.
@@ -1366,11 +1403,21 @@ def main() -> None:
     else:
         pd.DataFrame().to_csv(audit_dst, index=False)
 
+    signal_audit_df = pd.read_csv(audit_dst) if audit_dst.exists() else pd.DataFrame()
+    scope_audit = _standardize_extension_scope_audit_df(
+        extension_events,
+        experiment_root,
+        csv_dir / "04_extension_events_all.csv",
+        audit_dst,
+        signal_audit_df,
+    )
+
     _write_csv(run_summary, csv_dir / "00_run_completion_summary.csv")
     _write_csv(long_results, csv_dir / "01_all_results_long.csv")
     _write_csv(paired_delta, csv_dir / "02_baseline_smart_paired_delta.csv")
     _write_csv(paired_summary, csv_dir / "03_paired_summary_by_crosswalk.csv")
     _write_csv(extension_events, csv_dir / "04_extension_events_all.csv")
+    _write_csv(scope_audit, csv_dir / "phase6_extension_scope_audit.csv")
     _write_csv(impact_scope_counts, csv_dir / "06_impact_scope_edge_counts.csv")
     _write_csv(source_inventory, csv_dir / "07_source_file_inventory.csv")
 

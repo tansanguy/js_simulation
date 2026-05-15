@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -410,7 +411,7 @@ def _validate_no_sumo_manifest(
     integrated_dir: Path,
     runtime_registry_path: Path | None,
     manifest_path: Path,
-    selected_ids: list[str],
+    selected_rows: list[dict[str, Any]],
 ) -> None:
     """No-SUMO pre-flight validation.
 
@@ -426,7 +427,7 @@ def _validate_no_sumo_manifest(
     if runtime_registry_path and runtime_registry_path.exists():
         try:
             reg_df = pd.read_csv(runtime_registry_path)
-            reg_df["crosswalk_id"] = reg_df["crosswalk_id"].astype(str)
+            reg_df = _prepare_crosswalk_id_columns(reg_df)
             print(f"  registry total rows : {len(reg_df)}")
 
             sig_ext = (
@@ -446,16 +447,27 @@ def _validate_no_sumo_manifest(
             ]
             print(f"  missing ped_link_indices (signal-ext runnable) : {len(missing_pli)}")
 
-            for cw_id in selected_ids:
-                rows = reg_df[reg_df["crosswalk_id"] == str(cw_id)]
+            for row in selected_rows:
+                requested_id = str(row.get("requested_crosswalk_id") or row.get("crosswalk_id") or "")
+                source_id = str(row.get("source_crosswalk_id") or row.get("crosswalk_id") or "")
+                canonical_id = _normalize_crosswalk_id(
+                    row.get("canonical_crosswalk_id") or row.get("crosswalk_id") or ""
+                )
+                rows = reg_df[reg_df["canonical_crosswalk_id"] == canonical_id]
                 if rows.empty:
-                    print(f"  [WARN] crosswalk_id={cw_id} not found in run-local registry")
+                    print(
+                        f"  [WARN] requested={requested_id} source={source_id} canonical={canonical_id} "
+                        "not found in run-local registry"
+                    )
                 else:
                     r = rows.iloc[0]
                     print(
-                        f"  [{cw_id}] crossing_edge={r.get('crossing_edge')}, "
+                        f"  [requested={requested_id} source={source_id} canonical={canonical_id}] "
+                        f"registry_crosswalk_id={r.get('registry_crosswalk_id', r.get('crosswalk_id', ''))}, "
+                        f"crossing_edge={r.get('crossing_edge')}, "
                         f"tls_id={r.get('tls_id')}, "
                         f"ped_link_indices={r.get('ped_link_indices')}, "
+                        f"runnable_for_signal_extension={r.get('runnable_for_signal_extension')}, "
                         f"installation_assumption={r.get('installation_assumption','')!r}"
                     )
         except Exception as _exc:
@@ -486,7 +498,11 @@ def _validate_no_sumo_manifest(
                 )
                 if "1945254658" in signal_tls_ids:
                     known_1945 = {"125786", "125787", "74154", "8166"}
-                    if not known_1945.intersection(set(selected_ids)):
+                    selected_canonical_ids = {
+                        _normalize_crosswalk_id(row.get("canonical_crosswalk_id") or row.get("crosswalk_id") or "")
+                        for row in selected_rows
+                    }
+                    if not known_1945.intersection(selected_canonical_ids):
                         print(
                             "  [WARN] tlLogic id=1945254658 present in network_with_signal.net.xml "
                             "but no selected crosswalk is known to require it. "
@@ -644,6 +660,43 @@ def _to_bool(value: Any) -> bool:
     return text in {"1", "true", "yes", "y"}
 
 
+def _normalize_crosswalk_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        numeric = float(text)
+    except Exception:
+        numeric = None
+    if numeric is not None and numeric.is_integer():
+        return str(int(numeric))
+    match = re.search(r"(\d+)(?:\.0+)?$", text)
+    if match:
+        return str(int(match.group(1)))
+    return text
+
+
+def _prepare_crosswalk_id_columns(df: pd.DataFrame, id_column: str = "crosswalk_id") -> pd.DataFrame:
+    prepared = df.copy()
+    if id_column in prepared.columns:
+        prepared[id_column] = prepared[id_column].astype(str).str.strip()
+        prepared["source_crosswalk_id"] = prepared[id_column]
+        prepared["canonical_crosswalk_id"] = prepared[id_column].map(_normalize_crosswalk_id)
+    return prepared
+
+
+def _stable_crosswalk_seed_offset(value: Any) -> int:
+    canonical = _normalize_crosswalk_id(value)
+    seed_text = canonical if canonical else str(value or "").strip()
+    if not seed_text:
+        seed_text = "unknown_crosswalk"
+    try:
+        return int(seed_text)
+    except Exception:
+        digest = hashlib.sha1(seed_text.encode("utf-8")).hexdigest()
+        return int(digest[:12], 16)
+
+
 def _candidate_recovery_dirs(output_dir: Path) -> list[Path]:
     candidates: list[Path] = [output_dir]
     result_root = output_dir.parent.parent if output_dir.parent.parent.exists() else output_dir.parent
@@ -716,7 +769,8 @@ def _build_manifest_rows_from_registry(
     network_mode: str,
     buffer_m: float,
     target_network_version: str | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    output_dir: Path | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, list[dict[str, Any]]]:
     registry_path = Path(registry_path)
     if not registry_path.exists():
         raise FileNotFoundError(f"registry 파일이 없습니다: {registry_path}")
@@ -733,7 +787,7 @@ def _build_manifest_rows_from_registry(
     registry_df = pd.read_csv(registry_path)
     if registry_df.empty:
         raise ValueError(f"registry가 비어 있습니다: {registry_path}")
-    registry_df["crosswalk_id"] = registry_df["crosswalk_id"].astype(str)
+    registry_df = _prepare_crosswalk_id_columns(registry_df)
     registry_df["canonical_network_version"] = registry_df["canonical_network_version"].astype(str)
     scoped_df = registry_df[registry_df["canonical_network_version"] == str(target_version)].copy()
     if scoped_df.empty:
@@ -757,18 +811,57 @@ def _build_manifest_rows_from_registry(
         )
 
     row_map = {
-        str(row.get("crosswalk_id")): row
+        str(row.get("canonical_crosswalk_id")): row
         for row in scoped_df.to_dict(orient="records")
     }
     manifest_rows: list[dict[str, Any]] = []
     excluded_rows: list[dict[str, Any]] = []
+    mapping_rows: list[dict[str, Any]] = []
     for row in selected_df.itertuples(index=False):
-        cw_id = str(getattr(row, "crosswalk_id"))
-        reg = row_map.get(cw_id)
+        requested_cw_id = str(getattr(row, "requested_crosswalk_id", getattr(row, "crosswalk_id")))
+        source_cw_id = str(getattr(row, "source_crosswalk_id", getattr(row, "crosswalk_id")))
+        canonical_cw_id = _normalize_crosswalk_id(
+            getattr(row, "canonical_crosswalk_id", getattr(row, "crosswalk_id"))
+        )
+        reg = row_map.get(canonical_cw_id)
+        registry_cw_id = str(reg.get("registry_crosswalk_id") or reg.get("crosswalk_id") or "") if reg else ""
+        runnable_flag = _to_bool(reg.get("runnable_for_signal_extension", False)) if reg else False
+        if reg is None:
+            mapping_status = "registry_missing_crosswalk_id"
+            mapping_reason = "registry_missing_crosswalk_id"
+            mapping_method = "canonical_crosswalk_id"
+        else:
+            registry_status = str(reg.get("registry_status") or "")
+            if registry_status not in REGISTRY_RUNNABLE_STATUSES:
+                mapping_status = f"registry_status_not_runnable:{registry_status or 'empty'}"
+                mapping_reason = f"registry_status_not_runnable:{registry_status or 'empty'}"
+                mapping_method = "canonical_crosswalk_id"
+            elif not runnable_flag:
+                mapping_status = "registry_not_runnable_for_signal_extension"
+                mapping_reason = "runnable_for_signal_extension_false"
+                mapping_method = "canonical_crosswalk_id"
+            else:
+                mapping_status = "matched"
+                mapping_reason = ""
+                mapping_method = "canonical_crosswalk_id"
+        mapping_rows.append(
+            {
+                "requested_crosswalk_id": requested_cw_id,
+                "source_crosswalk_id": source_cw_id,
+                "canonical_crosswalk_id": canonical_cw_id,
+                "registry_crosswalk_id": registry_cw_id,
+                "mapping_status": mapping_status,
+                "mapping_method": mapping_method,
+                "runnable_for_signal_extension": runnable_flag,
+                "mapping_reason": mapping_reason,
+            }
+        )
         if reg is None:
             excluded_rows.append(
                 {
-                    "smart_crosswalk_id": cw_id,
+                    "smart_crosswalk_id": source_cw_id,
+                    "requested_crosswalk_id": requested_cw_id,
+                    "canonical_crosswalk_id": canonical_cw_id,
                     "original_tls_id": "",
                     "rejected_reason": "registry_missing_crosswalk_id",
                     "tlLogic_exists_in_net_xml": False,
@@ -790,7 +883,9 @@ def _build_manifest_rows_from_registry(
             tls_id = str(reg.get("tls_id") or "")
             excluded_rows.append(
                 {
-                    "smart_crosswalk_id": cw_id,
+                    "smart_crosswalk_id": source_cw_id,
+                    "requested_crosswalk_id": requested_cw_id,
+                    "canonical_crosswalk_id": canonical_cw_id,
                     "original_tls_id": tls_id,
                     "rejected_reason": f"registry_status_not_runnable:{registry_status or 'empty'}",
                     "tlLogic_exists_in_net_xml": _to_bool(reg.get("tlLogic_exists_in_net_xml", False)),
@@ -813,7 +908,7 @@ def _build_manifest_rows_from_registry(
             "to_edge": str(reg.get("to_edge") or ""),
         }
         cw_metadata = {
-            "cw_id": cw_id,
+            "cw_id": source_cw_id,
             "net_file": str(fingerprint["net_file"]),
             "crossing_edge": str(reg.get("crossing_edge") or ""),
             "crossing_lon": float(reg.get("crossing_lon")) if str(reg.get("crossing_lon") or "").strip() else None,
@@ -827,7 +922,11 @@ def _build_manifest_rows_from_registry(
 
         manifest_rows.append(
             {
-                "crosswalk_id": cw_id,
+                "crosswalk_id": source_cw_id,
+                "requested_crosswalk_id": requested_cw_id,
+                "source_crosswalk_id": source_cw_id,
+                "canonical_crosswalk_id": canonical_cw_id,
+                "registry_crosswalk_id": registry_cw_id,
                 "admin_dong": getattr(row, "admin_dong"),
                 "dong_name": getattr(row, "dong_name"),
                 "longitude": float(getattr(row, "longitude")),
@@ -866,7 +965,10 @@ def _build_manifest_rows_from_registry(
             }
         )
 
-    return manifest_rows, excluded_rows, str(registry_path)
+    mapping_df = pd.DataFrame(mapping_rows)
+    if output_dir is not None:
+        write_csv_utf8_sig(mapping_df, output_dir / "crosswalk_id_mapping.csv")
+    return manifest_rows, excluded_rows, str(registry_path), mapping_rows
 
 
 def apply_recovered_candidate_override(
@@ -1146,13 +1248,29 @@ def select_smart_crosswalks(
 ) -> pd.DataFrame:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    all_features = load_crosswalk_features(t2_path)
-    wanted = [str(crosswalk_id) for crosswalk_id in smart_crosswalk_ids]
-    matched = all_features[all_features["crosswalk_id"].astype(str).isin(wanted)].copy()
-    found = set(matched["crosswalk_id"].astype(str))
-    missing = [crosswalk_id for crosswalk_id in wanted if crosswalk_id not in found]
+    all_features = _prepare_crosswalk_id_columns(load_crosswalk_features(t2_path))
+    requested_ids = [str(crosswalk_id).strip() for crosswalk_id in smart_crosswalk_ids]
+    canonical_requested_ids = [_normalize_crosswalk_id(crosswalk_id) for crosswalk_id in requested_ids]
+    all_features["requested_crosswalk_id"] = ""
+    matched = all_features[all_features["canonical_crosswalk_id"].isin(canonical_requested_ids)].copy()
+    found = set(matched["canonical_crosswalk_id"].astype(str))
+    missing = [
+        requested_id
+        for requested_id, canonical_id in zip(requested_ids, canonical_requested_ids)
+        if canonical_id not in found
+    ]
     if missing:
-        raise ValueError(f"smart_crosswalk_ids를 찾지 못했습니다: {missing}")
+        available_preview = (
+            all_features[["source_crosswalk_id", "canonical_crosswalk_id"]]
+            .drop_duplicates()
+            .head(20)
+            .to_dict(orient="records")
+        )
+        raise ValueError(
+            "smart_crosswalk_ids를 찾지 못했습니다: "
+            f"requested={missing}, canonical={[_normalize_crosswalk_id(x) for x in missing]}, "
+            f"available_preview={available_preview}"
+        )
     matched["inside_junggu_boundary"] = matched.apply(
         lambda row: point_in_geojson(float(row["longitude"]), float(row["latitude"]), admin_polygon_path),
         axis=1,
@@ -1160,23 +1278,32 @@ def select_smart_crosswalks(
     selected_rows: list[pd.Series] = []
     outside: list[str] = []
     duplicate_inside: list[str] = []
-    for cw_id in wanted:
-        rows = matched[matched["crosswalk_id"].astype(str) == cw_id].copy()
+    for requested_id, canonical_id in zip(requested_ids, canonical_requested_ids):
+        rows = matched[matched["canonical_crosswalk_id"].astype(str) == canonical_id].copy()
         inside_rows = rows[rows["inside_junggu_boundary"]].copy()
         if inside_rows.empty:
-            outside.append(cw_id)
+            outside.append(requested_id)
             continue
         if len(inside_rows) > 1:
-            duplicate_inside.append(cw_id)
+            duplicate_inside.append(requested_id)
             continue
-        selected_rows.append(inside_rows.iloc[0])
+        selected = inside_rows.iloc[0].copy()
+        selected["requested_crosswalk_id"] = requested_id
+        selected["canonical_requested_crosswalk_id"] = canonical_id
+        selected_rows.append(selected)
     if outside:
         raise ValueError(f"중구 경계 밖 횡단보도는 integrated_selected 모드에서 사용할 수 없습니다: {outside}")
     if duplicate_inside:
         raise ValueError(f"중구 내부에 중복 행이 있어 선택할 수 없는 crosswalk_id가 있습니다: {duplicate_inside}")
     filtered = pd.DataFrame(selected_rows)
-    filtered["_order"] = filtered["crosswalk_id"].astype(str).map({cw_id: idx for idx, cw_id in enumerate(wanted)})
+    filtered["_order"] = filtered["requested_crosswalk_id"].astype(str).map(
+        {cw_id: idx for idx, cw_id in enumerate(requested_ids)}
+    )
     filtered = filtered.sort_values("_order").drop(columns="_order")
+    filtered["source_crosswalk_id"] = filtered["source_crosswalk_id"].astype(str)
+    filtered["crosswalk_id"] = filtered["source_crosswalk_id"]
+    filtered["canonical_crosswalk_id"] = filtered["canonical_crosswalk_id"].astype(str)
+    filtered["requested_crosswalk_id"] = filtered["requested_crosswalk_id"].astype(str)
     write_csv_utf8_sig(filtered, output_dir / "candidates.csv")
     write_csv_utf8_sig(filtered, output_dir / "preprocessed_crosswalks.csv")
     return filtered.reset_index(drop=True)
@@ -1338,6 +1465,7 @@ def build_integrated_network_manifest(
 ) -> tuple[Path, Path, pd.DataFrame]:
     nets_dir = Path(nets_dir)
     output_dir = Path(output_dir)
+    selected_df = _prepare_crosswalk_id_columns(selected_df)
     integrated_dir = nets_dir / INTEGRATED_DIRNAME
     integrated_dir.mkdir(parents=True, exist_ok=True)
     mean_lat = float(selected_df["latitude"].mean())
@@ -1389,13 +1517,14 @@ def build_integrated_network_manifest(
 
     if registry_enabled and runtime_registry_path and runtime_registry_path.exists():
         try:
-            manifest_rows, excluded_rows, recovered_source_path = _build_manifest_rows_from_registry(
+            manifest_rows, excluded_rows, recovered_source_path, mapping_rows = _build_manifest_rows_from_registry(
                 selected_df=selected_df,
                 registry_path=runtime_registry_path,
                 integrated_dir=integrated_dir,
                 network_mode=network_mode,
                 buffer_m=buffer_m,
                 target_network_version=registry_network_version,
+                output_dir=output_dir,
             )
         except Exception as exc:
             if registry_mode == "required":
@@ -1459,6 +1588,8 @@ def build_integrated_network_manifest(
                 excluded_rows.append(
                     {
                         "smart_crosswalk_id": cw_id,
+                        "requested_crosswalk_id": str(getattr(row, "requested_crosswalk_id", cw_id)),
+                        "canonical_crosswalk_id": str(getattr(row, "canonical_crosswalk_id", _normalize_crosswalk_id(cw_id))),
                         "original_tls_id": original_tls_id,
                         "rejected_reason": rejected_reason,
                         "tlLogic_exists_in_net_xml": bool(original_tls_id and original_tls_id in tl_logic_ids),
@@ -1480,6 +1611,10 @@ def build_integrated_network_manifest(
             manifest_rows.append(
                 {
                     "crosswalk_id": cw_id,
+                    "requested_crosswalk_id": str(getattr(row, "requested_crosswalk_id", cw_id)),
+                    "source_crosswalk_id": str(getattr(row, "source_crosswalk_id", cw_id)),
+                    "canonical_crosswalk_id": str(getattr(row, "canonical_crosswalk_id", _normalize_crosswalk_id(cw_id))),
+                    "registry_crosswalk_id": str(getattr(row, "registry_crosswalk_id", cw_id)),
                     "admin_dong": getattr(row, "admin_dong"),
                     "dong_name": getattr(row, "dong_name"),
                     "longitude": float(getattr(row, "longitude")),
@@ -1519,8 +1654,14 @@ def build_integrated_network_manifest(
             )
 
     if not manifest_rows:
+        mapping_preview = []
+        if "mapping_rows" in locals() and mapping_rows:
+            mapping_preview = mapping_rows[:5]
         raise ValueError(
-            "실행 가능한 integrated_selected 후보가 없습니다. excluded_integrated_candidates.csv를 확인하세요."
+            "실행 가능한 integrated_selected 후보가 없습니다.\n"
+            f"- mapping_preview={mapping_preview}\n"
+            "- requested/source/canonical/registry 매핑과 runnable_for_signal_extension 값을 확인하세요.\n"
+            "- excluded_integrated_candidates.csv 및 crosswalk_id_mapping.csv 를 확인하세요."
         )
 
     manifest = {
@@ -1542,7 +1683,7 @@ def build_integrated_network_manifest(
         integrated_dir=integrated_dir,
         runtime_registry_path=runtime_registry_path,
         manifest_path=manifest_path,
-        selected_ids=[str(r["crosswalk_id"]) for r in manifest_rows],
+        selected_rows=manifest_rows,
     )
 
     return manifest_path, integrated_dir, pd.DataFrame(manifest_rows)
@@ -1722,10 +1863,16 @@ def generate_integrated_pedestrian_demand(
     count_by_crosswalk: dict[str, int] = {}
     for selected in selected_rows:
         cw_id = str(selected["crosswalk_id"])
+        source_cw_id = str(selected.get("source_crosswalk_id") or cw_id)
+        canonical_cw_id = _normalize_crosswalk_id(selected.get("canonical_crosswalk_id") or cw_id)
+        registry_cw_id = str(selected.get("registry_crosswalk_id") or "")
+        seed_offset = _stable_crosswalk_seed_offset(
+            canonical_cw_id or registry_cw_id or source_cw_id or cw_id
+        )
         params = selected["params"]
         manifest_row = manifest_by_id[cw_id]
         route = manifest_row["ped_route"]
-        rng = np.random.default_rng(seed + 1000 + int(cw_id))
+        rng = np.random.default_rng(seed + 1000 + seed_offset)
         elderly_ratio = float(params["elderly_ratio"])
         mean_gap = float(params["ped_mean_gap_sec"])
         t = float(rng.exponential(mean_gap))
@@ -1752,6 +1899,9 @@ def generate_integrated_pedestrian_demand(
             t += float(rng.exponential(mean_gap))
             ped_idx += 1
         count_by_crosswalk[cw_id] = ped_idx
+        selected["source_crosswalk_id"] = source_cw_id
+        selected["canonical_crosswalk_id"] = canonical_cw_id
+        selected["registry_crosswalk_id"] = registry_cw_id
     ET.indent(root, space="  ")
     ET.ElementTree(root).write(output_file, encoding="utf-8", xml_declaration=True)
     return count_by_crosswalk
@@ -1883,7 +2033,15 @@ def generate_integrated_demand(
                 per_crosswalk_observed[cw_id],
                 sensitivity_config,
             )
-            selected_with_params.append({"crosswalk_id": cw_id, "params": params})
+            selected_with_params.append(
+                {
+                    "crosswalk_id": cw_id,
+                    "source_crosswalk_id": str(row.get("source_crosswalk_id") or cw_id),
+                    "canonical_crosswalk_id": _normalize_crosswalk_id(row.get("canonical_crosswalk_id") or cw_id),
+                    "registry_crosswalk_id": str(row.get("registry_crosswalk_id") or ""),
+                    "params": params,
+                }
+            )
             shared_vehicle_rates.append(float(params["veh_per_hour"]))
         shared_veh_per_hour = float(np.nanmean(shared_vehicle_rates)) if shared_vehicle_rates else 1.0
         vehicle_file = integrated_dir / f"routes_seed{seed}.rou.xml"
@@ -1938,6 +2096,9 @@ def generate_integrated_demand(
             demand_rows.append(
                 {
                     "crosswalk_id": cw_id,
+                    "source_crosswalk_id": str(row.get("source_crosswalk_id") or cw_id),
+                    "canonical_crosswalk_id": _normalize_crosswalk_id(row.get("canonical_crosswalk_id") or cw_id),
+                    "registry_crosswalk_id": str(row.get("registry_crosswalk_id") or ""),
                     "seed": seed,
                     "demand_profile": params["demand_profile"],
                     "veh_per_hour": params["veh_per_hour"],

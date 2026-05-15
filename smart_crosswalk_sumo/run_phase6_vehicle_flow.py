@@ -7,8 +7,10 @@ import traceback
 import random
 import shutil
 import subprocess
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1102,6 +1104,9 @@ def _collect_vehicle_metrics(
     vehicle_wait_samples: dict[str, list[float]] = {cid: [] for cid in candidate_crosswalk_ids}
     vehicle_loss_samples: dict[str, list[float]] = {cid: [] for cid in candidate_crosswalk_ids}
     vehicle_debug_seen: set[tuple[str, str]] = set()
+    run_name = f"phase6_vehicle_flow_{scenario}_seed{seed}"
+    run_start_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    run_start_perf = time.perf_counter()
 
     scope_names = [scope_name for scope_name, _ in _impact_scope_names(impact_radii_m, include_global_scope)]
     scope_stats: dict[str, dict[str, dict[str, Any]]] = {}
@@ -1413,6 +1418,8 @@ def _collect_vehicle_metrics(
                 traci.close(False)
             except Exception:
                 pass
+    run_end_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    elapsed_sec = round(time.perf_counter() - run_start_perf, 3)
 
     result_rows: list[dict[str, Any]] = []
     for row in candidate_df.itertuples(index=False):
@@ -1421,9 +1428,17 @@ def _collect_vehicle_metrics(
         loss_samples = vehicle_loss_samples.get(cid, [])
         expected_repeat_count = int(expected_repeat_counts.get(cid, 1))
         result_row: dict[str, Any] = {
+            "run_name": run_name,
             "crosswalk_id": cid,
             "scenario": scenario,
             "completed": completed,
+            "output_dir": str(out_dir),
+            "run_start_time": run_start_time,
+            "run_end_time": run_end_time,
+            "elapsed_sec": elapsed_sec,
+            "sim_duration": int(sim_duration),
+            "warmup": int(warmup),
+            "step_length": float(step_length),
             "candidate_index": int(getattr(row, "candidate_index", 0)),
             "original_candidate_index": int(getattr(row, "original_candidate_index", getattr(row, "candidate_index", 0))),
             "expected_ped_repeat_count": expected_repeat_count,
@@ -1529,12 +1544,17 @@ def _collect_vehicle_metrics(
     vehicle_validation_df.to_csv(vehicle_validation_path, index=False)
 
     metadata = {
+        "run_name": run_name,
         "candidate_csv": str(candidate_df.attrs.get("candidate_csv", "")),
         "net_file": str(net_file),
         "scenario": scenario,
         "seed": seed,
         "sim_duration": sim_duration,
         "warmup": warmup,
+        "output_dir": str(out_dir),
+        "run_start_time": run_start_time,
+        "run_end_time": run_end_time,
+        "elapsed_sec": elapsed_sec,
         "extension_sec": float(extension_sec),
         "vehicle_demand_mode": demand_mode,
         "vehicle_arrival_process": arrival_process,
@@ -1606,6 +1626,14 @@ def _write_compare_if_ready(out_dir: Path, scenario: str) -> None:
     for cid in ordered_ids:
         cur = current_df.loc[cid] if cid in current_df.index else None
         oth = other_df.loc[cid] if cid in other_df.index else None
+        baseline_row = cur if scenario == "baseline" else oth
+        smart_row = cur if scenario == "smart" else oth
+        baseline_vehicle_delay = _safe_get(baseline_row, "veh_time_loss_mean")
+        if baseline_vehicle_delay is None:
+            baseline_vehicle_delay = _safe_get(baseline_row, "veh_waiting_time_mean")
+        smart_vehicle_delay = _safe_get(smart_row, "veh_time_loss_mean")
+        if smart_vehicle_delay is None:
+            smart_vehicle_delay = _safe_get(smart_row, "veh_waiting_time_mean")
         rows.append(
             {
                 "crosswalk_id": cid,
@@ -1623,6 +1651,21 @@ def _write_compare_if_ready(out_dir: Path, scenario: str) -> None:
                 "smart_extension_count": int(_safe_get(cur, "extension_count")) if scenario == "smart" else int(_safe_get(oth, "extension_count")),
                 "baseline_extension_sec": _safe_get(cur, "extension_sec") if scenario == "baseline" else _safe_get(oth, "extension_sec"),
                 "smart_extension_sec": _safe_get(cur, "extension_sec") if scenario == "smart" else _safe_get(oth, "extension_sec"),
+                "baseline_output_dir": _safe_get(baseline_row, "output_dir"),
+                "smart_output_dir": _safe_get(smart_row, "output_dir"),
+                "baseline_run_name": _safe_get(baseline_row, "run_name"),
+                "smart_run_name": _safe_get(smart_row, "run_name"),
+                "baseline_run_start_time": _safe_get(baseline_row, "run_start_time"),
+                "smart_run_start_time": _safe_get(smart_row, "run_start_time"),
+                "baseline_run_end_time": _safe_get(baseline_row, "run_end_time"),
+                "smart_run_end_time": _safe_get(smart_row, "run_end_time"),
+                "baseline_elapsed_sec": _safe_get(baseline_row, "elapsed_sec"),
+                "smart_elapsed_sec": _safe_get(smart_row, "elapsed_sec"),
+                "baseline_ped_count": _safe_get(baseline_row, "ped_crossing_person_count"),
+                "smart_ped_count": _safe_get(smart_row, "ped_crossing_person_count"),
+                "baseline_vehicle_delay_mean": baseline_vehicle_delay,
+                "smart_vehicle_delay_mean": smart_vehicle_delay,
+                "comparison_status": "ready" if bool(_safe_get(cur, "completed")) and bool(_safe_get(oth, "completed")) else "incomplete_run",
             }
         )
     pd.DataFrame(rows).to_csv(compare_path, index=False)

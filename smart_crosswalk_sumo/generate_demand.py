@@ -587,9 +587,9 @@ def generate_for_candidates(
     demand_df = pd.DataFrame(rows, columns=demand_cols)
     demand_df.to_csv(output_dir / "demand_params.csv", index=False)
     audit_cols = ["edge_id","demand_source","volume","confidence_level"]
-    pd.DataFrame(demand_audit_rows, columns=audit_cols).drop_duplicates().to_csv(
-        output_dir / "demand_source_audit.csv", index=False
-    )
+    demand_audit_df = pd.DataFrame(demand_audit_rows, columns=audit_cols).drop_duplicates()
+    demand_audit_df.to_csv(output_dir / "demand_source_audit.csv", index=False)
+    demand_audit_df.to_csv(output_dir / "route_generation_audit.csv", index=False)
 
     if failures:
         failed_path = output_dir / "failed_cases.csv"
@@ -603,12 +603,17 @@ def generate_for_candidates(
         output_dir / "pedestrian_connectivity_audit.csv",
         index=False,
     )
+    pd.DataFrame(ped_connectivity_rows).to_csv(
+        output_dir / "pedestrian_route_connectivity_audit.csv",
+        index=False,
+    )
     invalid_ped_df = pd.DataFrame(
         invalid_ped_rows,
         columns=["crosswalk_id", "seed", "reason", "detail"],
     ).drop_duplicates()
     invalid_ped_df.to_csv(output_dir / "invalid_pedestrian_candidates.csv", index=False)
     invalid_ped_df.to_csv(output_dir / "invalid_pedestrian_routes.csv", index=False)
+    invalid_ped_df.to_csv(output_dir / "skipped_pedestrian_routes.csv", index=False)
     return demand_df
 
 

@@ -8,6 +8,9 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+GLOBAL_NETWORK_SCOPE = "global_network"
+TARGET_CROSSWALK_SCOPE = "target_crosswalk_only"
+
 
 def normalized_sumo_home() -> str | None:
     """Return the SUMO data/tools root even when SUMO_HOME points at the app root."""
