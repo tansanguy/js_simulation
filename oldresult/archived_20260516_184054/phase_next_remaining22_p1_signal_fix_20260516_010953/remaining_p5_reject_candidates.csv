@@ -1,0 +1,5 @@
+crosswalk_id,original_rank,previous_status,final_recovery_status,location_grade,mapping_distance_m,crossing_exists,tls_connected,ped_link_index_available,pedestrian_only_phase_available,route_available,nearest_tls_id,nearest_tls_distance_m,failure_category,recovery_strategy,recovery_priority,reason
+LINK_266939,24,NOT_FINAL_CANDIDATE,REJECT,BAD,253.887,True,True,False,False,False,2457731125,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+NODE_6122,34,NOT_FINAL_CANDIDATE,REJECT,BAD,211.259,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+LINK_127869,44,NOT_FINAL_CANDIDATE,REJECT,BAD,322.428,True,True,False,False,False,2457731125,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+LINK_230879,45,NOT_FINAL_CANDIDATE,REJECT,BAD,220.067,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs

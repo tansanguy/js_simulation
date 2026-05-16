@@ -1,0 +1,57 @@
+[
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_10060",
+    "tls_id": "11203052964",
+    "linkIndex": 11,
+    "phase": 2,
+    "state": "rrrrrrrrrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_122781",
+    "tls_id": "11203041635",
+    "linkIndex": 4,
+    "phase": 2,
+    "state": "rrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_14937",
+    "tls_id": "11139418723",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_5647",
+    "tls_id": "10974501473",
+    "linkIndex": 4,
+    "phase": 2,
+    "state": "rrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_6342",
+    "tls_id": "11203041633",
+    "linkIndex": 9,
+    "phase": 2,
+    "state": "rrrrrrrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  }
+]

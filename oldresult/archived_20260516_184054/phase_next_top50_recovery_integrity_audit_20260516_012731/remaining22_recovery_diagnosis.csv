@@ -1,0 +1,23 @@
+crosswalk_id,original_rank,previous_status,final_recovery_status,location_grade,mapping_distance_m,crossing_exists,tls_connected,ped_link_index_available,pedestrian_only_phase_available,route_available,nearest_tls_id,nearest_tls_distance_m,failure_category,recovery_strategy,recovery_priority,reason
+NODE_5830,10,RESULT_OK_BUT_LOCATION_REVIEW,NEEDS_MANUAL_REVIEW,REVIEW,27.172,True,True,True,True,False,5593950698,,MANUAL_REVIEW_NEEDED,MANUAL_EDGE_PAIR_SELECTION,P4,signal ready but location review needed
+NODE_10060,14,NOT_FINAL_CANDIDATE,REJECT,REVIEW,22.812,True,True,False,False,False,11203052964,,PED_LINK_INDEX_MISSING,SIGNAL_PHASE_FIX,P1,not present in ready5 or mixed redesign promotion inputs
+NODE_6342,15,NOT_FINAL_CANDIDATE,REJECT,REVIEW,38.463,True,True,False,False,False,11203041633,,PED_LINK_INDEX_MISSING,SIGNAL_PHASE_FIX,P1,not present in ready5 or mixed redesign promotion inputs
+NODE_5647,16,NOT_FINAL_CANDIDATE,REJECT,REVIEW,30.207,True,True,False,False,False,10974501473,,PED_LINK_INDEX_MISSING,SIGNAL_PHASE_FIX,P1,not present in ready5 or mixed redesign promotion inputs
+LINK_153517,20,NOT_FINAL_CANDIDATE,REJECT,BAD,119.135,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+NODE_21869,21,NOT_FINAL_CANDIDATE,REJECT,BAD,172.809,True,True,False,False,False,11203052964,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+NODE_6425,22,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,BAD,298.1,True,True,True,False,False,436856276,,MANUAL_REVIEW_NEEDED,MANUAL_EDGE_PAIR_SELECTION,P4,location review needed before smoke
+NODE_10067,23,NOT_FINAL_CANDIDATE,REJECT,BAD,179.32,True,True,False,False,False,11203052960,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+LINK_266939,24,NOT_FINAL_CANDIDATE,REJECT,BAD,253.887,True,True,False,False,False,2457731125,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+LINK_107613,25,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,BAD,307.281,True,True,True,False,False,436856276,,MANUAL_REVIEW_NEEDED,MANUAL_EDGE_PAIR_SELECTION,P4,location review needed before smoke
+NODE_8382,26,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,BAD,98.998,True,True,True,False,False,1936511299,,MANUAL_REVIEW_NEEDED,MANUAL_EDGE_PAIR_SELECTION,P4,location review needed before smoke
+NODE_8431,27,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,BAD,143.24,True,True,True,False,False,1936511299,,MANUAL_REVIEW_NEEDED,MANUAL_EDGE_PAIR_SELECTION,P4,location review needed before smoke
+NODE_10333,29,NOT_FINAL_CANDIDATE,REJECT,BAD,125.39,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+NODE_14937,30,NOT_FINAL_CANDIDATE,REJECT,REVIEW,21.039,True,True,False,False,False,11139418723,,PED_LINK_INDEX_MISSING,SIGNAL_PHASE_FIX,P1,not present in ready5 or mixed redesign promotion inputs
+NODE_6153,32,NOT_FINAL_CANDIDATE,REJECT,BAD,113.0,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+NODE_6122,34,NOT_FINAL_CANDIDATE,REJECT,BAD,211.259,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+NODE_6212,40,NOT_FINAL_CANDIDATE,REJECT,BAD,130.275,True,True,False,False,False,2457731125,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+NODE_122781,42,NOT_FINAL_CANDIDATE,REJECT,REVIEW,37.354,True,True,False,False,False,11203041635,,PED_LINK_INDEX_MISSING,SIGNAL_PHASE_FIX,P1,not present in ready5 or mixed redesign promotion inputs
+LINK_127869,44,NOT_FINAL_CANDIDATE,REJECT,BAD,322.428,True,True,False,False,False,2457731125,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+LINK_230879,45,NOT_FINAL_CANDIDATE,REJECT,BAD,220.067,True,True,False,False,False,436856319,,LOCATION_TOO_FAR,REJECT,P5,not present in ready5 or mixed redesign promotion inputs
+LINK_22103,48,NOT_FINAL_CANDIDATE,REJECT,BAD,177.89,True,True,False,False,False,11203052960,,LOCATION_TOO_FAR,HOLD,P4,not present in ready5 or mixed redesign promotion inputs
+NODE_5938,49,RESULT_OK_BUT_LOCATION_REVIEW,NEEDS_MANUAL_REVIEW,REVIEW,23.468,True,True,True,False,False,5851251266,,MANUAL_REVIEW_NEEDED,MANUAL_EDGE_PAIR_SELECTION,P4,location review needed before smoke

@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<connections>
+  <crossing node="11449716078" edges="619147739#3 619147739#4" id="SIG_LINK_212169" width="4.0" />
+  <crossing node="3846603653" edges="-381458592#5 381458592#4" id="SIG_NODE_8452" width="4.0" />
+  <crossing node="7300992884" edges="619147739#6 781983103#1" id="SIG_NODE_6123" width="4.0" />
+  <crossing node="3849142980" edges="-381746313 -913722640" id="SIG_NODE_8426" width="4.0" />
+  <crossing node="436883130" edges="-384030401#0 224260190#0" id="SIG_NODE_74388" width="4.0" />
+  <crossing node="3846533030" edges="-218681380#0 -520307305#4" id="SIG_NODE_10273" width="4.0" />
+  <crossing node="1936511305" edges="218681380#7 218910324#0" id="SIG_NODE_8431" width="4.0" />
+</connections>

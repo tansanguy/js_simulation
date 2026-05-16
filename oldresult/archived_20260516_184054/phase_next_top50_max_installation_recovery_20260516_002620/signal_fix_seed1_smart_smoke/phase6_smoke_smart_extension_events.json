@@ -1,0 +1,101 @@
+[
+  {
+    "time": 86.0,
+    "crosswalk_id": "LINK_249048",
+    "tls_id": "5161705573",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 4
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "LINK_10218",
+    "tls_id": "11139418715",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 6
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_9634",
+    "tls_id": "10974501473",
+    "linkIndex": 4,
+    "phase": 2,
+    "state": "rrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "LINK_194891",
+    "tls_id": "11203052965",
+    "linkIndex": 11,
+    "phase": 2,
+    "state": "rrrrrrrrrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_5681",
+    "tls_id": "11139418723",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 86.0,
+    "crosswalk_id": "NODE_10262",
+    "tls_id": "11203041635",
+    "linkIndex": 4,
+    "phase": 2,
+    "state": "rrrrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 91.0,
+    "crosswalk_id": "NODE_5837",
+    "tls_id": "5161705573",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 10
+  },
+  {
+    "time": 91.0,
+    "crosswalk_id": "LINK_140740",
+    "tls_id": "11139418715",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 15
+  },
+  {
+    "time": 96.0,
+    "crosswalk_id": "NODE_10378",
+    "tls_id": "11139418715",
+    "linkIndex": 2,
+    "phase": 2,
+    "state": "rrG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 12
+  }
+]

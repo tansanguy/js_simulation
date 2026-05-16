@@ -1,0 +1,26 @@
+{
+  "candidate_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_6_exclude_node5830_20260516_025057/csv/p1_p4_recovery_6_candidate_table.csv",
+  "net_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_6_exclude_node5830_20260516_025057/p1_p4_recovery_6.net.xml",
+  "scenario": "smart",
+  "seed": 1,
+  "sim_duration": 300,
+  "warmup": 0,
+  "step_length": 0.5,
+  "extension_sec": 5.0,
+  "include_vehicles": false,
+  "output_dir": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_6_exclude_node5830_20260516_025057/patches/p1_p4_recovery_6_seed1_smart_smoke",
+  "candidate_rows": 6,
+  "candidate_ids": [
+    "NODE_10060",
+    "NODE_122781",
+    "NODE_14937",
+    "NODE_5647",
+    "NODE_6342",
+    "NODE_5938"
+  ],
+  "run_name": "phase6_smoke_smart_seed1",
+  "run_start_time": "2026-05-15T17:51:12+00:00",
+  "run_end_time": "2026-05-15T17:51:22+00:00",
+  "elapsed_sec": 10.385,
+  "completed": true
+}

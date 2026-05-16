@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
 try:
+    from .demand_scenarios import DEFAULT_DEMAND_SCENARIO_NAME
     from .model_config import load_model_parameters as load_model_parameters_file
     from .mpl_runtime import ensure_matplotlib_env
 except ImportError:
+    from demand_scenarios import DEFAULT_DEMAND_SCENARIO_NAME
     from model_config import load_model_parameters as load_model_parameters_file
     from mpl_runtime import ensure_matplotlib_env
 
@@ -18,6 +21,7 @@ try:
     from .build_networks import build_all_networks
     from .calibration import calibrate
     from .collect_metrics import collect_all
+    from .demand_validation import validate_demand_run
     from .generate_demand import generate_for_candidates
     from .generate_reports import generate_all_reports
     from .integrated_mode import (
@@ -37,6 +41,7 @@ except ImportError:
     from build_networks import build_all_networks
     from calibration import calibrate
     from collect_metrics import collect_all
+    from demand_validation import validate_demand_run
     from generate_demand import generate_for_candidates
     from generate_reports import generate_all_reports
     from integrated_mode import (
@@ -88,6 +93,19 @@ def write_run_metadata(args: argparse.Namespace, run_dir: Path, output_dir: Path
     )
 
 
+def write_benchmark_timing(run_dir: Path, timing: dict[str, object]) -> None:
+    (run_dir / "benchmark_timing.json").write_text(
+        json.dumps(timing, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _maybe_validate_demand(args: argparse.Namespace, run_dir: Path, output_dir: Path) -> None:
+    if not getattr(args, "validate_demand", False):
+        return
+    validate_demand_run(run_dir=run_dir, output_dir=output_dir)
+
+
 def run_pipeline(args: argparse.Namespace) -> None:
     run_dir, output_dir, nets_dir, figures_dir = resolve_run_paths(args)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -95,6 +113,15 @@ def run_pipeline(args: argparse.Namespace) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
     write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
     print(f"Result run directory: {run_dir}")
+    pipeline_t0 = time.perf_counter()
+    benchmark_timing: dict[str, object] = {
+        "network_build_sec": None,
+        "demand_generation_sec": None,
+        "simulation_baseline_sec": None,
+        "simulation_smart_sec": None,
+        "post_validation_sec": None,
+        "total_sec": None,
+    }
     assumptions_path = getattr(args, "model_assumptions", None) or getattr(args, "model_parameters", None)
     simulation_mode = getattr(args, "simulation_mode", "per_candidate")
 
@@ -174,6 +201,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             return
         manifest_path = Path(nets_dir) / "integrated_selected" / "smart_crosswalk_manifest.json"
         if not args.skip_networks:
+            network_t0 = time.perf_counter()
             manifest_path, _, manifest_df = build_integrated_network_manifest(
                 selected,
                 nets_dir,
@@ -189,6 +217,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 registry_network_version=getattr(args, "registry_network_version", None),
                 t2_path=getattr(args, "t2", None),
             )
+            benchmark_timing["network_build_sec"] = float(time.perf_counter() - network_t0)
             valid_ids = {str(crosswalk_id) for crosswalk_id in manifest_df["crosswalk_id"].astype(str)}
             selected = selected[selected["crosswalk_id"].astype(str).isin(valid_ids)].reset_index(drop=True)
             if selected.empty:
@@ -196,6 +225,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         if not manifest_path.exists():
             raise FileNotFoundError(f"통합망 manifest가 없습니다: {manifest_path}")
         if not args.skip_demand:
+            demand_t0 = time.perf_counter()
             generate_integrated_demand(
                 selected,
                 manifest_path,
@@ -204,17 +234,19 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 args.sim_duration,
                 args.warmup,
                 step_length=getattr(args, "sumo_step_length", 1.0),
-                demand_profile=getattr(args, "demand_profile", "average"),
+                scenario_name=getattr(args, "scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
                 traffic_counts_csv=getattr(args, "traffic_counts", None),
                 representative_day_id=getattr(args, "representative_day_id", None),
                 model_parameters_path=assumptions_path,
                 vehicle_only=getattr(args, "vehicle_only", False),
             )
+            benchmark_timing["demand_generation_sec"] = float(time.perf_counter() - demand_t0)
         if args.disruption_scenario is not None:
             args.incident_scenario = args.disruption_scenario
         if args.extension_increment is not None:
             args.smart_extension_sec = args.extension_increment
         if not args.skip_run:
+            simulation_t0 = time.perf_counter()
             collect_integrated_metrics(
                 selected,
                 manifest_path,
@@ -241,6 +273,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 enable_risk_event_collection=getattr(args, "enable_risk_event_collection", False),
                 risk_event_sample_interval_s=getattr(args, "risk_event_sample_interval_s", 1.0),
             )
+            benchmark_timing["simulation_baseline_sec"] = None
+            benchmark_timing["simulation_smart_sec"] = None
+            benchmark_timing["integrated_simulation_sec"] = float(time.perf_counter() - simulation_t0)
         dump_parameter_table(
             load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
             output_dir / "model_assumptions_used.csv",
@@ -254,6 +289,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 figures_dir,
                 assumptions_path,
             )
+        validation_t0 = time.perf_counter()
+        _maybe_validate_demand(args, run_dir, output_dir)
+        benchmark_timing["post_validation_sec"] = float(time.perf_counter() - validation_t0)
+        benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
+        write_benchmark_timing(run_dir, benchmark_timing)
         return
 
     candidates, _, _ = preprocess_inputs(
@@ -269,19 +309,23 @@ def run_pipeline(args: argparse.Namespace) -> None:
         return
 
     if not args.skip_networks:
+        network_t0 = time.perf_counter()
         build_all_networks(
             candidates_csv,
             nets_dir,
             output_dir,
             force=args.force_networks,
+            reuse_nets_dir=getattr(args, "reuse_nets_dir", None),
             network_radius_m=getattr(args, "network_radius_m", None),
             network_mode=getattr(args, "network_mode", "local_radius"),
             admin_polygon_path=getattr(args, "admin_polygon_path", None),
             buffer_m=getattr(args, "buffer_m", 1000.0),
             corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
         )
+        benchmark_timing["network_build_sec"] = float(time.perf_counter() - network_t0)
 
     if not args.skip_demand:
+        demand_t0 = time.perf_counter()
         generate_for_candidates(
             candidates_csv,
             nets_dir,
@@ -290,12 +334,15 @@ def run_pipeline(args: argparse.Namespace) -> None:
             args.sim_duration,
             args.warmup,
             step_length=getattr(args, "sumo_step_length", 1.0),
-            demand_profile=getattr(args, "demand_profile", "average"),
+            scenario_name=getattr(args, "scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
             traffic_counts_csv=getattr(args, "traffic_counts", None),
             representative_day_id=getattr(args, "representative_day_id", None),
             model_parameters_path=assumptions_path,
             vehicle_only=getattr(args, "vehicle_only", False),
+            reuse_demand_dir=getattr(args, "reuse_demand_dir", None),
+            force_demand=getattr(args, "force_demand", False),
         )
+        benchmark_timing["demand_generation_sec"] = float(time.perf_counter() - demand_t0)
 
     if args.disruption_scenario is not None:
         args.incident_scenario = args.disruption_scenario
@@ -303,7 +350,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
         args.smart_extension_sec = args.extension_increment
 
     if not args.skip_run:
-        collect_all(
+        simulation_t0 = time.perf_counter()
+        _, _, simulation_timing = collect_all(
             candidates_csv,
             output_dir,
             nets_dir,
@@ -326,7 +374,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
             assumptions_path,
             getattr(args, "export_fcd", False),
             getattr(args, "vehicle_only", False),
+            metric_sample_interval_s=getattr(args, "metric_sample_interval", 0.0),
         )
+        benchmark_timing["simulation_baseline_sec"] = simulation_timing.get("simulation_baseline_sec")
+        benchmark_timing["simulation_smart_sec"] = simulation_timing.get("simulation_smart_sec")
+        benchmark_timing["simulation_total_sec"] = float(time.perf_counter() - simulation_t0)
 
     dump_parameter_table(
         load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
@@ -367,6 +419,12 @@ def run_pipeline(args: argparse.Namespace) -> None:
             assumptions_path,
         )
 
+    validation_t0 = time.perf_counter()
+    _maybe_validate_demand(args, run_dir, output_dir)
+    benchmark_timing["post_validation_sec"] = float(time.perf_counter() - validation_t0)
+    benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
+    write_benchmark_timing(run_dir, benchmark_timing)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="서울 중구 스마트 횡단보도 SUMO 시뮬레이션")
@@ -396,6 +454,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--admin_polygon_path", default=str(DEFAULT_JUNGGU_ADMIN_POLYGON_PATH))
     parser.add_argument("--buffer_m", type=float, default=1000.0)
     parser.add_argument("--corridor_road_whitelist", nargs="*", default=None)
+    parser.add_argument("--reuse_nets_dir", default=None)
     parser.add_argument(
         "--registry_path",
         default=str(BASE_DIR / "registry" / "junggu_crosswalk_sumo_registry.csv"),
@@ -407,7 +466,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--registry_network_version", default=None)
 
-    parser.add_argument("--demand_profile", default="average")
+    parser.add_argument("--scenario_name", default=DEFAULT_DEMAND_SCENARIO_NAME)
+    parser.add_argument("--demand_profile", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--traffic_counts", default=None)
     parser.add_argument("--representative_day_id", default=None)
 
@@ -471,11 +531,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nets_dir", default=None)
     parser.add_argument("--figures_dir", default=None)
     parser.add_argument("--force_networks", action="store_true")
+    parser.add_argument("--reuse_demand_dir", default=None)
+    parser.add_argument("--force_demand", action="store_true")
+    parser.add_argument(
+        "--metric-sample-interval",
+        type=float,
+        default=0.0,
+        help="Lane-level heavy metrics sampling interval in seconds. 0 means every step.",
+    )
     parser.add_argument("--preprocess_only", action="store_true")
     parser.add_argument("--skip_networks", action="store_true")
     parser.add_argument("--skip_demand", action="store_true")
     parser.add_argument("--skip_run", action="store_true")
     parser.add_argument("--skip_reports", action="store_true")
+    parser.add_argument("--validate_demand", action="store_true")
 
     parser.add_argument("--list_valid_smart_crosswalks", action="store_true")
     parser.add_argument("--generate_implementation_diagnostics", action="store_true")

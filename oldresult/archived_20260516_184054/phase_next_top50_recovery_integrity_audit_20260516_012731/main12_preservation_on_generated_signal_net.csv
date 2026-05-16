@@ -1,0 +1,13 @@
+crosswalk_id,original_rank,net_group,crossing_edge_id,tls_id_used,crossing_exists,tls_connected,ped_link_index_available,pedestrian_only_phase_available,route_from_edge,route_to_edge,preservation_status,preservation_reason
+NODE_10335,2,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_8369,3,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_167173,6,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+LINK_239754,7,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_5846,9,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_5831,11,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_10377,31,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_10376,35,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_150723,37,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_125895,39,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+NODE_10381,43,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"
+LINK_120139,50,generated_signal_net_v1,,,False,False,False,False,,,BROKEN,"failed: crossing_exists, tls_connected, ped_link_index_available, pedestrian_only_phase_available, route_from_edge, route_to_edge"

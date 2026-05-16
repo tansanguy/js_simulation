@@ -1,0 +1,86 @@
+{
+  "LINK_212169": {
+    "crossing_id": ":11449716078_c0",
+    "crossing_edge_id": ":11449716078_c0",
+    "route_from_edge": "1233842659",
+    "route_to_edge": "-1233842659",
+    "generated_route_edges": "1233842659|:11449716078_w0|:11449716078_c0|:11449716078_w1|-1233842659",
+    "contains_crossing_edge": true,
+    "tls_id": "11449716078",
+    "ped_link_index": 5,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  },
+  "NODE_8452": {
+    "crossing_id": ":3846603653_c0",
+    "crossing_edge_id": ":3846603653_c0",
+    "route_from_edge": "381458592#4",
+    "route_to_edge": "-381458592#4",
+    "generated_route_edges": "381458592#4|:3846603653_w1|:3846603653_c0|:3846603653_w0|-381458592#4",
+    "contains_crossing_edge": true,
+    "tls_id": "3846603653",
+    "ped_link_index": 2,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  },
+  "NODE_6082": {
+    "crossing_id": ":11449716078_c0",
+    "crossing_edge_id": ":11449716078_c0",
+    "route_from_edge": "1233842659",
+    "route_to_edge": "-1233842659",
+    "generated_route_edges": "1233842659|:11449716078_w0|:11449716078_c0|:11449716078_w1|-1233842659",
+    "contains_crossing_edge": true,
+    "tls_id": "11449716078",
+    "ped_link_index": 5,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  },
+  "NODE_6123": {
+    "crossing_id": ":7300992884_c0",
+    "crossing_edge_id": ":7300992884_c0",
+    "route_from_edge": "955312948",
+    "route_to_edge": "-955312948",
+    "generated_route_edges": "955312948|:7300992884_w0|:7300992884_c0|:7300992884_w1|-955312948",
+    "contains_crossing_edge": true,
+    "tls_id": "7300992884",
+    "ped_link_index": 5,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  },
+  "NODE_8426": {
+    "crossing_id": ":3849142980_c0",
+    "crossing_edge_id": ":3849142980_c0",
+    "route_from_edge": "920025287#2",
+    "route_to_edge": "920025287#3",
+    "generated_route_edges": "920025287#2|:3849142980_w1|:3849142980_c0|:3849142980_w0|920025287#3",
+    "contains_crossing_edge": true,
+    "tls_id": "3849142980",
+    "ped_link_index": 16,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  },
+  "NODE_74388": {
+    "crossing_id": ":436883130_c0",
+    "crossing_edge_id": ":436883130_c0",
+    "route_from_edge": "1206220504#1",
+    "route_to_edge": "-516163750#1",
+    "generated_route_edges": "1206220504#1|:436883130_w2|:436883130_c0|:436883130_w1|-516163750#1",
+    "contains_crossing_edge": true,
+    "tls_id": "436883130",
+    "ped_link_index": 16,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  },
+  "NODE_10273": {
+    "crossing_id": ":3846533030_c1",
+    "crossing_edge_id": ":3846533030_c1",
+    "route_from_edge": "-381452118#0",
+    "route_to_edge": "381452118#0",
+    "generated_route_edges": "-381452118#0|:3846533030_w0|:3846533030_c1|:3846533030_w1|381452118#0",
+    "contains_crossing_edge": true,
+    "tls_id": "3846533030",
+    "ped_link_index": 12,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml"
+  }
+}

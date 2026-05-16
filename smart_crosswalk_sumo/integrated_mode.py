@@ -12,6 +12,12 @@ import numpy as np
 import pandas as pd
 
 try:
+    from .demand_scenarios import (
+        DEFAULT_DEMAND_SCENARIO_NAME,
+        build_fixed_departure_times,
+        build_fixed_type_assignments,
+        resolve_demand_scenario_name,
+    )
     from .build_networks import build_network
     from .generate_demand import (
         generate_vehicle_routes,
@@ -19,6 +25,11 @@ try:
         load_traffic_counts,
         observed_vehicle_rate_for_candidate,
         write_sumocfg,
+    )
+    from .vehicle_demand_policy import (
+        build_vehicle_demand_audit,
+        resolve_vehicle_policy_summary,
+        summarize_vehicle_route_artifact,
     )
     from .model_config import load_model_parameters
     from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
@@ -42,6 +53,12 @@ try:
         serialize_incident_event,
     )
 except ImportError:
+    from demand_scenarios import (
+        DEFAULT_DEMAND_SCENARIO_NAME,
+        build_fixed_departure_times,
+        build_fixed_type_assignments,
+        resolve_demand_scenario_name,
+    )
     from build_networks import build_network
     from generate_demand import (
         generate_vehicle_routes,
@@ -49,6 +66,11 @@ except ImportError:
         load_traffic_counts,
         observed_vehicle_rate_for_candidate,
         write_sumocfg,
+    )
+    from vehicle_demand_policy import (
+        build_vehicle_demand_audit,
+        resolve_vehicle_policy_summary,
+        summarize_vehicle_route_artifact,
     )
     from model_config import load_model_parameters
     from mpl_runtime import configure_matplotlib, ensure_matplotlib_env
@@ -1866,19 +1888,14 @@ def generate_integrated_pedestrian_demand(
         source_cw_id = str(selected.get("source_crosswalk_id") or cw_id)
         canonical_cw_id = _normalize_crosswalk_id(selected.get("canonical_crosswalk_id") or cw_id)
         registry_cw_id = str(selected.get("registry_crosswalk_id") or "")
-        seed_offset = _stable_crosswalk_seed_offset(
-            canonical_cw_id or registry_cw_id or source_cw_id or cw_id
-        )
         params = selected["params"]
         manifest_row = manifest_by_id[cw_id]
         route = manifest_row["ped_route"]
-        rng = np.random.default_rng(seed + 1000 + seed_offset)
         elderly_ratio = float(params["elderly_ratio"])
-        mean_gap = float(params["ped_mean_gap_sec"])
-        t = float(rng.exponential(mean_gap))
-        ped_idx = 0
-        while t < sim_duration:
-            person_type = "elderly" if rng.random() < elderly_ratio else "adult"
+        generated_count = int(params.get("generated_pedestrian_count", 0))
+        depart_times = build_fixed_departure_times(generated_count, sim_duration)
+        type_assignments = build_fixed_type_assignments(generated_count, elderly_ratio)
+        for ped_idx, (t, person_type) in enumerate(zip(depart_times, type_assignments, strict=False)):
             person = ET.SubElement(
                 root,
                 "person",
@@ -1896,9 +1913,7 @@ def generate_integrated_pedestrian_demand(
                     "to": str(route["to_edge"]),
                 },
             )
-            t += float(rng.exponential(mean_gap))
-            ped_idx += 1
-        count_by_crosswalk[cw_id] = ped_idx
+        count_by_crosswalk[cw_id] = generated_count
         selected["source_crosswalk_id"] = source_cw_id
         selected["canonical_crosswalk_id"] = canonical_cw_id
         selected["registry_crosswalk_id"] = registry_cw_id
@@ -1968,7 +1983,7 @@ def generate_integrated_demand(
     sim_duration: int,
     warmup: int,
     step_length: float,
-    demand_profile: str,
+    scenario_name: str,
     traffic_counts_csv: str | Path | None,
     representative_day_id: str | None,
     model_parameters_path: str | Path | None,
@@ -1980,6 +1995,7 @@ def generate_integrated_demand(
     manifest_rows = manifest.get("crosswalks", [])
     counts_df = load_traffic_counts(traffic_counts_csv, representative_day_id)
     model_params = load_model_parameters(model_parameters_path)
+    policy_summary = resolve_vehicle_policy_summary(scenario_name)
     integrated_dir = Path(manifest_path).parent
     net_file = Path(manifest["net_file"])
     print(f"[generate_demand] runtime net: {net_file}")
@@ -1990,6 +2006,7 @@ def generate_integrated_demand(
 
     manifest_by_id = {str(row["crosswalk_id"]): row for row in manifest_rows}
     selected_rows = selected_df.to_dict(orient="records")
+    scenario_name = resolve_demand_scenario_name(scenario_name)
 
     per_crosswalk_observed: dict[str, float | None] = {}
     for row in selected_rows:
@@ -2022,16 +2039,17 @@ def generate_integrated_demand(
 
     for seed in seeds:
         selected_with_params: list[dict[str, Any]] = []
-        shared_vehicle_rates: list[float] = []
         for row in selected_rows:
             cw_id = str(row["crosswalk_id"])
             params = get_demand_params(
                 pd.Series(row),
                 seed,
-                demand_profile,
+                scenario_name,
                 model_params,
                 per_crosswalk_observed[cw_id],
+                sim_duration,
                 sensitivity_config,
+                policy_summary,
             )
             selected_with_params.append(
                 {
@@ -2042,16 +2060,30 @@ def generate_integrated_demand(
                     "params": params,
                 }
             )
-            shared_vehicle_rates.append(float(params["veh_per_hour"]))
-        shared_veh_per_hour = float(np.nanmean(shared_vehicle_rates)) if shared_vehicle_rates else 1.0
+        shared_veh_per_hour = float(policy_summary["total_vehicle_flow_vph"])
         vehicle_file = integrated_dir / f"routes_seed{seed}.rou.xml"
         pedestrian_file = integrated_dir / f"peds_seed{seed}.rou.xml"
-        generate_vehicle_routes(
+        generated_vehicle_count = generate_vehicle_routes(
             {"veh_per_hour": shared_veh_per_hour},
             net_file,
             vehicle_file,
             sim_duration,
             seed,
+        )
+        route_summary = summarize_vehicle_route_artifact(
+            vehicle_file,
+            net_file,
+            scenario_name=scenario_name,
+            road_allocated_count_600s=int(policy_summary["road_allocated_count_600s"]),
+            road_allocated_flow_vph=float(policy_summary["road_allocated_flow_vph"]),
+            vehicle_type=str(policy_summary["vehicle_type"]),
+            passenger_ratio=float(policy_summary["passenger_ratio"]),
+            allocation_basis=str(policy_summary["allocation_basis"]),
+            road_group="all_network",
+            vehicle_type_split=str(policy_summary["vehicle_type_split"]),
+            road_group_type="full_network",
+            edge_group_mapping_status="full_network_fallback",
+            network_edge_group="full_network",
         )
         if vehicle_only:
             ET.ElementTree(ET.Element("routes")).write(
@@ -2081,6 +2113,8 @@ def generate_integrated_demand(
                 additional_files,
                 vehicle_only=vehicle_only,
             )
+        baseline_sumocfg_file = str((integrated_dir / f"baseline_seed{seed}.sumocfg").resolve())
+        smart_sumocfg_file = str((integrated_dir / f"smart_selected_seed{seed}.sumocfg").resolve())
         for row in selected_rows:
             cw_id = str(row["crosswalk_id"])
             params = next(item["params"] for item in selected_with_params if item["crosswalk_id"] == cw_id)
@@ -2100,9 +2134,38 @@ def generate_integrated_demand(
                     "canonical_crosswalk_id": _normalize_crosswalk_id(row.get("canonical_crosswalk_id") or cw_id),
                     "registry_crosswalk_id": str(row.get("registry_crosswalk_id") or ""),
                     "seed": seed,
+                    "scenario_name": params["scenario_name"],
                     "demand_profile": params["demand_profile"],
+                    "allocation_basis": params["allocation_basis"],
                     "veh_per_hour": params["veh_per_hour"],
                     "veh_source": params["veh_source"],
+                    "vehicle_flow_scale": params["vehicle_flow_scale"],
+                    "total_vehicle_flow_vph": params["total_vehicle_flow_vph"],
+                    "total_vehicle_count_600s": params["total_vehicle_count_600s"],
+                    "vehicle_type": params["vehicle_type"],
+                    "passenger_ratio": params["passenger_ratio"],
+                    "vehicle_type_split": params["vehicle_type_split"],
+                    "road_group": params["road_group"],
+                    "road_name": params["road_name"],
+                    "road_group_type": params["road_group_type"],
+                    "edge_group_mapping_status": params["edge_group_mapping_status"],
+                    "network_edge_group": params["network_edge_group"],
+                    "road_allocated_count_600s": params["road_allocated_count_600s"],
+                    "road_allocated_flow_vph": params["road_allocated_flow_vph"],
+                    "pedestrian_scale": params["pedestrian_scale"],
+                    "pedestrian_count_600s": params["pedestrian_count_600s"],
+                    "generated_pedestrian_count": ped_counts.get(cw_id, 0),
+                    "generated_vehicle_count": generated_vehicle_count,
+                    "generated_vehicle_route_file": str(vehicle_file.resolve()),
+                    "generated_vehicle_trip_file": str(vehicle_file.with_name(vehicle_file.name.replace(".rou.xml", ".trips.xml")).resolve()),
+                    "vehicle_net_file": str(net_file.resolve()),
+                    "baseline_sumocfg_file": baseline_sumocfg_file,
+                    "smart_sumocfg_file": smart_sumocfg_file,
+                    "unique_depart_edges": route_summary["unique_depart_edges"],
+                    "unique_arrival_edges": route_summary["unique_arrival_edges"],
+                    "unique_route_edges": route_summary["unique_route_edges"],
+                    "network_edge_coverage_ratio": route_summary["network_edge_coverage_ratio"],
+                    "pedestrian_scale_source": params["pedestrian_scale_source"],
                     "ped_lambda": params["ped_lambda"],
                     "elderly_ratio": params["elderly_ratio"],
                     "ped_count": ped_counts.get(cw_id, 0),
@@ -2124,6 +2187,15 @@ def generate_integrated_demand(
     write_csv_utf8_sig(
         pd.DataFrame(invalid_ped_rows).drop_duplicates(),
         output_dir / "invalid_pedestrian_routes.csv",
+    )
+    build_vehicle_demand_audit(
+        output_dir,
+        demand_df,
+        scenario_name=scenario_name,
+        legacy_notes=[
+            "Integrated-selected demand reuses the same shared vehicle route file for baseline and smart-selected runs.",
+            "Road-group allocation is policy metadata; actual route generation remains network-wide randomTrips output.",
+        ],
     )
     return demand_df
 
@@ -2157,6 +2229,12 @@ def collect_integrated_metrics(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     output_dir = Path(output_dir)
     run_name = output_dir.parent.name if output_dir.parent.name else output_dir.name
+    demand_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    demand_csv = output_dir / "demand_params.csv"
+    if demand_csv.exists():
+        demand_df = pd.read_csv(demand_csv)
+        for row in demand_df.to_dict(orient="records"):
+            demand_lookup[(str(row.get("crosswalk_id", "")), str(row.get("seed", "")))] = row
     seed_for_trace = int(seeds[0]) if seeds else 42
     runtime_trace_path = output_dir / f"runtime_trace_seed{seed_for_trace}.log"
     failure_context_path = output_dir / f"traci_failure_context_seed{seed_for_trace}.json"
@@ -2345,6 +2423,7 @@ def collect_integrated_metrics(
                 cw_id = str(row["crosswalk_id"])
                 selected_row = selected_map[cw_id]
                 signal_timing = compute_signal_timing(selected_row)
+                demand_row = demand_lookup.get((cw_id, str(seed)), {})
                 per_seed_rows.append(
                     {
                         "crosswalk_id": cw_id,
@@ -2352,6 +2431,27 @@ def collect_integrated_metrics(
                         "admin_dong": selected_row["admin_dong"],
                         "dong_name": selected_row["dong_name"],
                         "scenario": scenario,
+                        "scenario_name": demand_row.get("scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
+                        "demand_profile": demand_row.get("demand_profile", DEFAULT_DEMAND_SCENARIO_NAME),
+                        "vehicle_flow_scale": float(
+                            demand_row.get("vehicle_flow_scale", DEFAULT_VEHICLE_FLOW_SCALE)
+                        ),
+                        "pedestrian_scale": float(
+                            demand_row.get("pedestrian_scale", DEFAULT_PEDESTRIAN_SCALE)
+                        ),
+                        "pedestrian_arrival_rate_multiplier": float(
+                            demand_row.get("pedestrian_arrival_rate_multiplier", DEFAULT_PEDESTRIAN_SCALE)
+                            or DEFAULT_PEDESTRIAN_SCALE
+                        ),
+                        "vehicle_volume_multiplier": float(
+                            demand_row.get("vehicle_volume_multiplier", DEFAULT_VEHICLE_FLOW_SCALE)
+                            or DEFAULT_VEHICLE_FLOW_SCALE
+                        ),
+                        "pedestrian_count_600s": int(demand_row.get("pedestrian_count_600s", 0) or 0),
+                        "generated_pedestrian_count": int(
+                            demand_row.get("generated_pedestrian_count", 0) or 0
+                        ),
+                        "pedestrian_scale_source": demand_row.get("pedestrian_scale_source", ""),
                         "raw_accident_count": selected_row["accident_count"],
                         "elderly_ratio": selected_row["elderly_ratio"],
                         "lane_count": selected_row["lane_count"],
@@ -2385,6 +2485,9 @@ def collect_integrated_metrics(
                     "admin_dong": first["admin_dong"],
                     "dong_name": first["dong_name"],
                     "scenario": scenario,
+                    "scenario_name": first.get("scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
+                    "demand_profile": first.get("demand_profile", DEFAULT_DEMAND_SCENARIO_NAME),
+                    "pedestrian_scale_source": first.get("pedestrian_scale_source", ""),
                     **avg_metrics,
                 }
             )

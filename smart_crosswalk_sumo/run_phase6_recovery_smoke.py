@@ -1479,6 +1479,7 @@ def main() -> None:
     parser.add_argument("--ped-depart-offset-sec", type=float, default=None, help="Override pedestrian depart offset in seconds.")
     parser.add_argument("--phase-aligned-ped-depart", action="store_true", help="Align first pedestrian depart with pedestrian-only green phase.")
     parser.add_argument("--include-vehicles", action="store_true", help="Also emit vehicle routes and include them in the SUMO config.")
+    parser.add_argument("--metric-sample-interval", type=float, default=0.0, help="Accepted for CLI parity; smoke runner does not use lane sampling.")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
@@ -1527,6 +1528,7 @@ def main() -> None:
         "step_length": args.step_length,
         "extension_sec": args.extension_sec,
         "include_vehicles": args.include_vehicles,
+        "metric_sample_interval": float(args.metric_sample_interval),
         "output_dir": str(out_dir),
         "candidate_rows": int(len(candidate_df)),
         "candidate_ids": candidate_df["crosswalk_id"].astype(str).tolist(),

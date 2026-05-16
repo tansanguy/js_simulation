@@ -135,6 +135,56 @@ class LaneState:
     disallowed: tuple[str, ...] | None = None
 
 
+@dataclass
+class StepMetricCache:
+    lane_metrics: dict[str, dict[str, float] | None]
+    vehicle_state: dict[str, dict[str, float | str] | None]
+
+    def reset(self) -> None:
+        self.lane_metrics.clear()
+        self.vehicle_state.clear()
+
+
+def _lane_metric_snapshot(lane_id: str, cache: dict[str, dict[str, float] | None]) -> dict[str, float] | None:
+    if lane_id in cache:
+        return cache[lane_id]
+    try:
+        lane_state = {
+            "halting_number": float(traci.lane.getLastStepHaltingNumber(lane_id)),
+            "occupancy": float(traci.lane.getLastStepOccupancy(lane_id)),
+            "mean_speed": float(traci.lane.getLastStepMeanSpeed(lane_id)),
+        }
+    except Exception:
+        cache[lane_id] = None
+        return None
+    cache[lane_id] = lane_state
+    return lane_state
+
+
+def _vehicle_state_snapshot(
+    vehicle_id: str,
+    cache: dict[str, dict[str, float | str] | None],
+) -> dict[str, float | str] | None:
+    if vehicle_id in cache:
+        return cache[vehicle_id]
+    try:
+        vehicle_state = {
+            "road_id": str(traci.vehicle.getRoadID(vehicle_id)),
+            "lane_id": str(traci.vehicle.getLaneID(vehicle_id)),
+            "speed": float(traci.vehicle.getSpeed(vehicle_id)),
+            "accumulated_wait": float(traci.vehicle.getAccumulatedWaitingTime(vehicle_id)),
+        }
+    except Exception:
+        cache[vehicle_id] = None
+        return None
+    cache[vehicle_id] = vehicle_state
+    return vehicle_state
+
+
+def _lane_sample_due(metric_sample_interval_s: float, rel_t: float, next_sample_t: float) -> bool:
+    if metric_sample_interval_s <= 0:
+        return True
+    return rel_t + 1e-9 >= next_sample_t
 
 
 def free_traci_port() -> int:
@@ -1047,6 +1097,7 @@ def run_simulation(
     sensitivity_config: dict[str, Any] | None = None,
     enable_risk_event_collection: bool = False,
     risk_event_sample_interval_s: float = 1.0,
+    metric_sample_interval_s: float = 0.0,
 ) -> tuple[dict[str, float | int], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     if traci is None:
         raise RuntimeError("traci가 설치되어 있지 않습니다.")
@@ -1237,6 +1288,7 @@ def run_simulation(
     network_travel_times: list[float] = []
     spillback_steps = 0
     measure_steps = 0
+    lane_measure_steps = 0
     extension_count_in_cycle = 0
     extended_in_cycle = False
     pedestrian_green_extension_time = 0.0
@@ -1261,6 +1313,8 @@ def run_simulation(
     queue_departure_credit = 0.0
     cycle_count = 0
     total_extension_count = 0
+    next_lane_sample_t = 0.0
+    step_cache = StepMetricCache({}, {})
 
     lane_original_states: dict[str, LaneState] = {}
     active_event_ids: set[str] = set()
@@ -1299,6 +1353,10 @@ def run_simulation(
             t = float(traci.simulation.getTime())
             rel_t = max(0.0, t - warmup)
             collect = t > warmup
+            step_cache.reset()
+            lane_sample_due = _lane_sample_due(metric_sample_interval_s, rel_t, next_lane_sample_t)
+            if lane_sample_due and metric_sample_interval_s > 0:
+                next_lane_sample_t += metric_sample_interval_s
             if tls_refresh_countdown <= 0:
                 known_tls_ids = traci_trafficlight_ids()
                 tls_refresh_countdown = 10
@@ -1448,6 +1506,8 @@ def run_simulation(
 
             if collect:
                 measure_steps += 1
+                if lane_sample_due:
+                    lane_measure_steps += 1
                 current_person_ids = set(traci.person.getIDList())
                 for ped_id in current_person_ids:
                     ped_first_seen.setdefault(ped_id, t)
@@ -1471,23 +1531,23 @@ def run_simulation(
                 current_area_vehicles: set[str] = set()
                 all_vehicle_speeds: list[float] = []
                 for veh_id in current_vehicle_ids:
-                    try:
-                        road_id = traci.vehicle.getRoadID(veh_id)
-                        if road_id in vehicle_conflict_edges:
-                            current_vehicle_conflict.add(veh_id)
-                        accumulated_wait = float(traci.vehicle.getAccumulatedWaitingTime(veh_id))
-                        veh_waits[veh_id] = accumulated_wait
-                        lane_id = traci.vehicle.getLaneID(veh_id)
-                        all_vehicle_speeds.append(float(traci.vehicle.getSpeed(veh_id)))
-                        if lane_id in monitored_lanes:
-                            current_area_vehicles.add(veh_id)
-                            area_seen_vehicles.add(veh_id)
-                            area_vehicle_waits[veh_id] = accumulated_wait
-                            if veh_id not in area_active_since:
-                                area_active_since[veh_id] = t
-                                area_entry_count += 1
-                    except Exception:
+                    vehicle_state = _vehicle_state_snapshot(veh_id, step_cache.vehicle_state)
+                    if vehicle_state is None:
                         continue
+                    road_id = str(vehicle_state["road_id"])
+                    if road_id in vehicle_conflict_edges:
+                        current_vehicle_conflict.add(veh_id)
+                    accumulated_wait = float(vehicle_state["accumulated_wait"])
+                    veh_waits[veh_id] = accumulated_wait
+                    lane_id = str(vehicle_state["lane_id"])
+                    all_vehicle_speeds.append(float(vehicle_state["speed"]))
+                    if lane_id in monitored_lanes:
+                        current_area_vehicles.add(veh_id)
+                        area_seen_vehicles.add(veh_id)
+                        area_vehicle_waits[veh_id] = accumulated_wait
+                        if veh_id not in area_active_since:
+                            area_active_since[veh_id] = t
+                            area_entry_count += 1
 
                 for veh_id in list(area_active_since):
                     if veh_id not in current_area_vehicles:
@@ -1553,63 +1613,69 @@ def run_simulation(
                 lane_occupancy: dict[str, float] = {}
                 lane_speeds: dict[str, float] = {}
                 surrounding_queue_total = 0
-                for lane_id in monitored_lanes:
-                    try:
-                        halted = int(traci.lane.getLastStepHaltingNumber(lane_id))
+                if lane_sample_due:
+                    for lane_id in monitored_lanes:
+                        lane_state = _lane_metric_snapshot(lane_id, step_cache.lane_metrics)
+                        if lane_state is None:
+                            continue
+                        halted = int(lane_state["halting_number"])
                         lane_halting[lane_id] = halted
-                        lane_occupancy[lane_id] = float(traci.lane.getLastStepOccupancy(lane_id))
-                        lane_speeds[lane_id] = float(traci.lane.getLastStepMeanSpeed(lane_id))
+                        lane_occupancy[lane_id] = float(lane_state["occupancy"])
+                        lane_speeds[lane_id] = float(lane_state["mean_speed"])
                         surrounding_queue_total += halted
                         lane_data_records.append((rel_t, lane_id, halted, lane_speeds[lane_id]))
-                    except Exception:
-                        continue
 
-                # Edge aggregation from lane data
-                edge_queue: dict[str, int] = {}
-                edge_speed_sum: dict[str, float] = {}
-                edge_speed_cnt: dict[str, int] = {}
-                for lane_id, halted in lane_halting.items():
-                    edge_id = scope["lane_to_edge"].get(lane_id, lane_id.rsplit("_", 1)[0])
-                    edge_queue[edge_id] = edge_queue.get(edge_id, 0) + halted
-                    sp = lane_speeds.get(lane_id, 0.0)
-                    edge_speed_sum[edge_id] = edge_speed_sum.get(edge_id, 0.0) + sp
-                    edge_speed_cnt[edge_id] = edge_speed_cnt.get(edge_id, 0) + 1
-                for edge_id, q in edge_queue.items():
-                    mean_sp = edge_speed_sum.get(edge_id, 0.0) / max(1, edge_speed_cnt.get(edge_id, 1))
-                    edge_data_records.append((rel_t, edge_id, q, mean_sp))
+                    # Edge aggregation from lane data
+                    edge_queue: dict[str, int] = {}
+                    edge_speed_sum: dict[str, float] = {}
+                    edge_speed_cnt: dict[str, int] = {}
+                    for lane_id, halted in lane_halting.items():
+                        edge_id = scope["lane_to_edge"].get(lane_id, lane_id.rsplit("_", 1)[0])
+                        edge_queue[edge_id] = edge_queue.get(edge_id, 0) + halted
+                        sp = lane_speeds.get(lane_id, 0.0)
+                        edge_speed_sum[edge_id] = edge_speed_sum.get(edge_id, 0.0) + sp
+                        edge_speed_cnt[edge_id] = edge_speed_cnt.get(edge_id, 0) + 1
+                    for edge_id, q in edge_queue.items():
+                        mean_sp = edge_speed_sum.get(edge_id, 0.0) / max(1, edge_speed_cnt.get(edge_id, 1))
+                        edge_data_records.append((rel_t, edge_id, q, mean_sp))
 
-                surrounding_queue_totals.append(surrounding_queue_total)
+                    for direction, lanes in direction_lanes.items():
+                        direction_queue_totals[direction].append(sum(lane_halting.get(lane_id, 0) for lane_id in lanes))
+                    adjacent_tls_queue_totals.append(sum(lane_halting.get(lane_id, 0) for lane_id in adjacent_lanes))
+                    spillback_now = False
+                    for lane_id in boundary_lanes:
+                        halted = lane_halting.get(lane_id, 0)
+                        occupancy = lane_occupancy.get(lane_id, 0.0)
+                        capacity = max(1, int(lane_capacities.get(lane_id, 1)))
+                        if halted >= max(1, int(capacity * 0.8)) or occupancy >= 85.0:
+                            spillback_now = True
+                            break
+                    if spillback_now:
+                        spillback_steps += 1
+
                 avg_wait = float(np.nanmean(list(veh_waits.values()))) if veh_waits else 0.0
                 avg_speed = float(np.nanmean(all_vehicle_speeds)) if all_vehicle_speeds else 0.0
-                ts_queue.append((rel_t, float(surrounding_queue_total)))
                 ts_wait.append((rel_t, avg_wait))
                 ts_speed.append((rel_t, avg_speed))
-                surrounding_speed_samples.append(avg_speed)
-
-                for direction, lanes in direction_lanes.items():
-                    direction_queue_totals[direction].append(sum(lane_halting.get(lane_id, 0) for lane_id in lanes))
-
-                adjacent_tls_queue_totals.append(sum(lane_halting.get(lane_id, 0) for lane_id in adjacent_lanes))
-
-                spillback_now = False
-                for lane_id in boundary_lanes:
-                    halted = lane_halting.get(lane_id, 0)
-                    occupancy = lane_occupancy.get(lane_id, 0.0)
-                    capacity = max(1, int(lane_capacities.get(lane_id, 1)))
-                    if halted >= max(1, int(capacity * 0.8)) or occupancy >= 85.0:
-                        spillback_now = True
-                        break
-                if spillback_now:
-                    spillback_steps += 1
+                if lane_sample_due:
+                    surrounding_queue_totals.append(surrounding_queue_total)
+                    ts_queue.append((rel_t, float(surrounding_queue_total)))
+                    surrounding_speed_samples.append(avg_speed)
 
                 for lane_id in approach_lanes:
                     try:
-                        queue_lengths.append(int(traci.lane.getLastStepHaltingNumber(lane_id)))
+                        lane_state = _lane_metric_snapshot(lane_id, step_cache.lane_metrics)
+                        if lane_state is None:
+                            continue
+                        queue_lengths.append(int(lane_state["halting_number"]))
                     except Exception:
                         continue
 
                 if export_fcd:
                     for veh_id in current_vehicle_ids:
+                        vehicle_state = _vehicle_state_snapshot(veh_id, step_cache.vehicle_state)
+                        if vehicle_state is None:
+                            continue
                         try:
                             x, y = traci.vehicle.getPosition(veh_id)
                             fcd_vehicle_records.append(
@@ -1618,8 +1684,8 @@ def run_simulation(
                                     veh_id,
                                     float(x),
                                     float(y),
-                                    float(traci.vehicle.getSpeed(veh_id)),
-                                    traci.vehicle.getRoadID(veh_id),
+                                    float(vehicle_state["speed"]),
+                                    str(vehicle_state["road_id"]),
                                 )
                             )
                         except Exception:
@@ -1731,7 +1797,7 @@ def run_simulation(
             network_travel_times,
             surrounding_speed_samples,
             spillback_steps,
-            measure_steps,
+            lane_measure_steps,
             sim_duration,
         )
     )
@@ -1867,6 +1933,7 @@ def run_simulation_integrated(
     sensitivity_config: dict[str, Any] | None = None,
     enable_risk_event_collection: bool = False,
     risk_event_sample_interval_s: float = 1.0,
+    metric_sample_interval_s: float = 0.0,
 ) -> tuple[
     list[dict[str, Any]],
     dict[str, Any],
@@ -2189,6 +2256,7 @@ def run_simulation_integrated(
     network_speed_means: list[float] = []
     network_spillback_steps = 0
     network_measure_steps = 0
+    lane_measure_steps = 0
     teleported_vehicle_count = 0
     known_tls_ids: set[str] = set()
     tls_refresh_countdown = 0
@@ -2198,6 +2266,8 @@ def run_simulation_integrated(
     lane_data_records: list[tuple[float, str, int, float]] = []
     edge_data_records: list[tuple[float, str, int, float]] = []
     active_target_count = int(sum(1 for state in context_states if state["crosswalk_id"] in smart_target_ids))
+    next_lane_sample_t = 0.0
+    step_cache = StepMetricCache({}, {})
 
     # feature-flagged risk event collection buffers
     _risk_ped_frames: list[dict[str, Any]] = []
@@ -2237,6 +2307,10 @@ def run_simulation_integrated(
             t = float(traci.simulation.getTime())
             rel_t = max(0.0, t - warmup)
             debug_state.update(simulation_time=t, rel_time=rel_t)
+            step_cache.reset()
+            lane_sample_due = _lane_sample_due(metric_sample_interval_s, rel_t, next_lane_sample_t)
+            if lane_sample_due and metric_sample_interval_s > 0:
+                next_lane_sample_t += metric_sample_interval_s
             loop_timing_ms: dict[str, float] = {
                 "incident_loop_ms": 0.0,
                 "vehicle_metrics_loop_ms": 0.0,
@@ -2312,41 +2386,28 @@ def run_simulation_integrated(
                 network_first_seen.setdefault(veh_id, t)
 
             vehicle_metrics_t0 = time.perf_counter()
-            vehicle_info: dict[str, dict[str, Any]] = {}
+            vehicle_state_cache: dict[str, dict[str, float | str] | None] = {}
             all_vehicle_speeds: list[float] = []
             for veh_id in current_vehicle_ids:
-                try:
-                    debug_state.update(last_traci_call="traci.vehicle.getLaneID", last_object_id=str(veh_id))
-                    lane_id = traci.vehicle.getLaneID(veh_id)
-                    debug_state.update(last_traci_call="traci.vehicle.getRoadID", last_object_id=str(veh_id))
-                    road_id = traci.vehicle.getRoadID(veh_id)
-                    debug_state.update(last_traci_call="traci.vehicle.getSpeed", last_object_id=str(veh_id))
-                    speed = float(traci.vehicle.getSpeed(veh_id))
-                    debug_state.update(last_traci_call="traci.vehicle.getAccumulatedWaitingTime", last_object_id=str(veh_id))
-                    accumulated_wait = float(traci.vehicle.getAccumulatedWaitingTime(veh_id))
-                    vehicle_info[veh_id] = {
-                        "lane_id": lane_id,
-                        "road_id": road_id,
-                        "speed": speed,
-                        "accumulated_wait": accumulated_wait,
-                    }
-                    all_vehicle_speeds.append(speed)
-                except Exception:
+                vehicle_state = _vehicle_state_snapshot(veh_id, vehicle_state_cache)
+                if vehicle_state is None:
                     continue
+                all_vehicle_speeds.append(float(vehicle_state["speed"]))
 
             if collect:
                 avg_wait = float(
-                    np.nanmean([info["accumulated_wait"] for info in vehicle_info.values()])
-                ) if vehicle_info else 0.0
+                    np.nanmean([float(info["accumulated_wait"]) for info in vehicle_state_cache.values() if info is not None])
+                ) if vehicle_state_cache else 0.0
                 network_delay_step_means.append(avg_wait)
                 network_queue_counts.append(
-                    int(sum(1 for info in vehicle_info.values() if float(info["speed"]) < 0.1))
+                    int(sum(1 for info in vehicle_state_cache.values() if info is not None and float(info["speed"]) < 0.1))
                 )
                 avg_speed = float(np.nanmean(all_vehicle_speeds)) if all_vehicle_speeds else 0.0
                 network_speed_means.append(avg_speed)
-                ts_queue.append((rel_t, float(network_queue_counts[-1])))
                 ts_wait.append((rel_t, avg_wait))
                 ts_speed.append((rel_t, avg_speed))
+                if lane_sample_due:
+                    ts_queue.append((rel_t, float(network_queue_counts[-1])))
             loop_timing_ms["vehicle_metrics_loop_ms"] = float((time.perf_counter() - vehicle_metrics_t0) * 1000.0)
 
             union_lane_ids = sorted(
@@ -2360,16 +2421,17 @@ def run_simulation_integrated(
             lane_occupancy: dict[str, float] = {}
             lane_speeds: dict[str, float] = {}
             lane_edge_t0 = time.perf_counter()
-            if collect:
+            if collect and lane_sample_due:
+                lane_measure_steps += 1
                 for lane_id in union_lane_ids:
                     try:
-                        debug_state.update(last_traci_call="traci.lane.getLastStepHaltingNumber", last_object_id=str(lane_id))
-                        halted = int(traci.lane.getLastStepHaltingNumber(lane_id))
+                        lane_state = _lane_metric_snapshot(lane_id, step_cache.lane_metrics)
+                        if lane_state is None:
+                            continue
+                        halted = int(lane_state["halting_number"])
                         lane_halting[lane_id] = halted
-                        debug_state.update(last_traci_call="traci.lane.getLastStepOccupancy", last_object_id=str(lane_id))
-                        lane_occupancy[lane_id] = float(traci.lane.getLastStepOccupancy(lane_id))
-                        debug_state.update(last_traci_call="traci.lane.getLastStepMeanSpeed", last_object_id=str(lane_id))
-                        lane_speeds[lane_id] = float(traci.lane.getLastStepMeanSpeed(lane_id))
+                        lane_occupancy[lane_id] = float(lane_state["occupancy"])
+                        lane_speeds[lane_id] = float(lane_state["mean_speed"])
                         lane_data_records.append((rel_t, lane_id, halted, lane_speeds[lane_id]))
                     except Exception:
                         continue
@@ -2630,7 +2692,9 @@ def run_simulation_integrated(
                 any_spillback_now = False
                 current_person_ids = set(traci.person.getIDList())
                 if export_fcd:
-                    for veh_id, info in vehicle_info.items():
+                    for veh_id, info in vehicle_state_cache.items():
+                        if info is None:
+                            continue
                         try:
                             x, y = traci.vehicle.getPosition(veh_id)
                             fcd_vehicle_records.append(
@@ -2665,8 +2729,9 @@ def run_simulation_integrated(
                     )
                     current_vehicle_conflict = {
                         veh_id
-                        for veh_id, info in vehicle_info.items()
-                        if str(info["road_id"]) in set(str(edge) for edge in metadata.get("vehicle_conflict_edges", []))
+                        for veh_id, info in vehicle_state_cache.items()
+                        if info is not None
+                        and str(info["road_id"]) in set(str(edge) for edge in metadata.get("vehicle_conflict_edges", []))
                     }
                     for veh_id in context_state["vehicle_on_conflict_prev"] - current_vehicle_conflict:
                         context_state["vehicle_exit_times"].append(t)
@@ -2725,9 +2790,12 @@ def run_simulation_integrated(
 
                     current_area_vehicles = set()
                     area_wait_sum = 0.0
-                    for veh_id, info in vehicle_info.items():
+                    monitored_lanes_set = set(context_state["scope"]["monitored_lanes"])
+                    for veh_id, info in vehicle_state_cache.items():
+                        if info is None:
+                            continue
                         lane_id = str(info["lane_id"])
-                        if lane_id in set(context_state["scope"]["monitored_lanes"]):
+                        if lane_id in monitored_lanes_set:
                             current_area_vehicles.add(veh_id)
                             context_state["area_seen_vehicles"].add(veh_id)
                             context_state["area_vehicle_waits"][veh_id] = float(info["accumulated_wait"])
@@ -2744,44 +2812,48 @@ def run_simulation_integrated(
                     context_state["area_vehicle_time_sec"] += len(current_area_vehicles) * traci_step_length
                     context_state["total_vehicle_wait_exposure"] += area_wait_sum * traci_step_length
 
-                    surrounding_queue_total = sum(
-                        lane_halting.get(lane_id, 0)
-                        for lane_id in context_state["scope"]["monitored_lanes"]
-                    )
-                    context_state["surrounding_queue_totals"].append(surrounding_queue_total)
-                    context_state["surrounding_speed_samples"].append(
-                        float(
-                            np.nanmean(
-                                [
-                                    lane_speeds.get(lane_id, np.nan)
-                                    for lane_id in context_state["scope"]["monitored_lanes"]
-                                    if lane_id in lane_speeds
-                                ]
-                            )
-                        )
-                        if context_state["scope"]["monitored_lanes"]
-                        else 0.0
-                    )
-                    for direction, lanes in context_state["scope"]["direction_lanes"].items():
-                        context_state["direction_queue_totals"][direction].append(
-                            sum(lane_halting.get(lane_id, 0) for lane_id in lanes)
-                        )
-                    context_state["adjacent_tls_queue_totals"].append(
-                        sum(lane_halting.get(lane_id, 0) for lane_id in context_state["adjacent_lanes"])
-                    )
-                    spillback_now = False
-                    for lane_id in context_state["scope"]["boundary_lanes"]:
-                        halted = lane_halting.get(lane_id, 0)
-                        occupancy = lane_occupancy.get(lane_id, 0.0)
-                        capacity = max(1, int(context_state["scope"]["lane_capacities"].get(lane_id, 1)))
-                        if halted >= max(1, int(capacity * 0.8)) or occupancy >= 85.0:
-                            spillback_now = True
-                            break
-                    if spillback_now:
-                        context_state["spillback_steps"] += 1
-                        any_spillback_now = True
                     for lane_id in metadata.get("approach_lanes", []):
-                        context_state["queue_lengths"].append(lane_halting.get(str(lane_id), 0))
+                        lane_state = _lane_metric_snapshot(str(lane_id), step_cache.lane_metrics)
+                        if lane_state is None:
+                            continue
+                        context_state["queue_lengths"].append(int(lane_state["halting_number"]))
+                    if lane_sample_due:
+                        surrounding_queue_total = sum(
+                            lane_halting.get(lane_id, 0)
+                            for lane_id in context_state["scope"]["monitored_lanes"]
+                        )
+                        context_state["surrounding_queue_totals"].append(surrounding_queue_total)
+                        context_state["surrounding_speed_samples"].append(
+                            float(
+                                np.nanmean(
+                                    [
+                                        lane_speeds.get(lane_id, np.nan)
+                                        for lane_id in context_state["scope"]["monitored_lanes"]
+                                        if lane_id in lane_speeds
+                                    ]
+                                )
+                            )
+                            if context_state["scope"]["monitored_lanes"]
+                            else 0.0
+                        )
+                        for direction, lanes in context_state["scope"]["direction_lanes"].items():
+                            context_state["direction_queue_totals"][direction].append(
+                                sum(lane_halting.get(lane_id, 0) for lane_id in lanes)
+                            )
+                        context_state["adjacent_tls_queue_totals"].append(
+                            sum(lane_halting.get(lane_id, 0) for lane_id in context_state["adjacent_lanes"])
+                        )
+                        spillback_now = False
+                        for lane_id in context_state["scope"]["boundary_lanes"]:
+                            halted = lane_halting.get(lane_id, 0)
+                            occupancy = lane_occupancy.get(lane_id, 0.0)
+                            capacity = max(1, int(context_state["scope"]["lane_capacities"].get(lane_id, 1)))
+                            if halted >= max(1, int(capacity * 0.8)) or occupancy >= 85.0:
+                                spillback_now = True
+                                break
+                        if spillback_now:
+                            context_state["spillback_steps"] += 1
+                            any_spillback_now = True
                 if any_spillback_now:
                     network_spillback_steps += 1
             loop_timing_ms["per_crosswalk_context_loop_ms"] = float((time.perf_counter() - per_crosswalk_t0) * 1000.0)
@@ -2790,7 +2862,9 @@ def run_simulation_integrated(
             if enable_risk_event_collection and collect and t >= _risk_next_sample_t:
                 _risk_next_sample_t = t + _risk_sample_interval
                 # vehicle frames
-                for veh_id, vinfo in vehicle_info.items():
+                for veh_id, vinfo in vehicle_state_cache.items():
+                    if vinfo is None:
+                        continue
                     try:
                         vx, vy = traci.vehicle.getPosition(veh_id)
                         _risk_veh_frames.append({
@@ -2967,7 +3041,7 @@ def run_simulation_integrated(
                 network_travel_times,
                 context_state["surrounding_speed_samples"],
                 context_state["spillback_steps"],
-                context_state["measure_steps"],
+                lane_measure_steps,
                 sim_duration,
             )
         )
@@ -3011,7 +3085,7 @@ def run_simulation_integrated(
         "network_avg_travel_time_sec": float(np.nanmean(network_travel_times)) if network_travel_times else 0.0,
         "network_avg_speed_mps": float(np.nanmean(network_speed_means)) if network_speed_means else 0.0,
         "network_teleported_vehicles": int(teleported_vehicle_count),
-        "network_spillback_rate": float(network_spillback_steps / max(network_measure_steps, 1)),
+        "network_spillback_rate": float(network_spillback_steps / max(lane_measure_steps, 1)),
         "network_spillback_step_count": int(network_spillback_steps),
         "selected_crosswalk_count": int(len(crosswalk_contexts)),
         **diag,
@@ -3220,6 +3294,7 @@ def main() -> None:
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--export_fcd", action="store_true")
     parser.add_argument("--vehicle_only", action="store_true")
+    parser.add_argument("--metric-sample-interval", type=float, default=0.0)
     parser.add_argument("--sensitivity_scenarios", default=None)
     parser.add_argument("--sensitivity_case", default=None)
     args = parser.parse_args()
@@ -3262,6 +3337,7 @@ def main() -> None:
         args.output_dir,
         args.vehicle_only,
         sensitivity_config,
+        metric_sample_interval_s=args.metric_sample_interval,
     )
     for key, value in metrics.items():
         print(f"{key}={value}")

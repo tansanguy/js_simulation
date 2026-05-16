@@ -1,0 +1,6 @@
+crosswalk_id,original_rank,crossing_edge_id,tls_id_used,crossing_exists,tls_connected,controlled_links_count,ped_link_index_original,ped_link_index_recovered,ped_link_index_available,route_from_edge,route_to_edge,pedestrian_only_phase_available_before,signal_fix_possible,failure_reason,recommended_action
+NODE_10060,14,:11203052964_c0,11203052964,True,True,12,11,11,True,1209133881#0,-781985788#0,False,True,,SIGNAL_PHASE_FIX
+NODE_6342,15,:11203041633_c0,11203041633,True,True,10,9,9,True,-1499619438#1,1499619438#1,False,True,,SIGNAL_PHASE_FIX
+NODE_5647,16,:10974501473_c0,10974501473,True,True,5,4,4,True,1461316096#1,333969025#1,False,True,,SIGNAL_PHASE_FIX
+NODE_14937,30,:11139418723_c0,11139418723,True,True,3,2,2,True,1201492610#1,183272312#3,False,True,,SIGNAL_PHASE_FIX
+NODE_122781,42,:11203041635_c0,11203041635,True,True,5,4,4,True,345046979#5,-345046979#5,False,True,,SIGNAL_PHASE_FIX

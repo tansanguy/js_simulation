@@ -1,0 +1,5 @@
+﻿net_group,status_label,candidate_count,status_family,ready_share
+current_main,MAIN_READY_CURRENT_NET,12,ready,0.36363636363636365
+generated_signal,GENERATED_SIGNAL_READY,7,ready,0.21212121212121213
+p1_signal_fix,P1_SIGNAL_FIX_READY,5,ready,0.15151515151515152
+signal_fix,SIGNAL_FIX_READY,9,ready,0.2727272727272727

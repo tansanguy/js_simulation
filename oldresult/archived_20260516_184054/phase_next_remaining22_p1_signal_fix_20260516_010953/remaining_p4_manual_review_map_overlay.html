@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>remaining_p4_manual_review_map_overlay</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .panel { position: absolute; z-index: 999; top: 12px; left: 12px; background: #111827; color: #f9fafb; padding: 10px 12px; border-radius: 8px; max-width: 460px; font-family: sans-serif; }
+    .panel h1 { margin: 0 0 4px; font-size: 15px; }
+    .panel p { margin: 0; font-size: 12px; color: #d1d5db; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 2px 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>P4 manual review map</h1>
+  <p>green=real, gray=current SUMO, blue=generated (if any), red=nearest TLS.</p>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const data = [{"crosswalk_id": "NODE_5830", "original_rank": 10, "mapping_distance_m": 27.172, "failure_category": "MANUAL_REVIEW_NEEDED", "manual_review_type": "MANUAL_EDGE_PAIR_SELECTION", "recommended_action": "MANUAL_EDGE_PAIR_SELECTION", "nearest_tls_id": "5593950698", "nearest_tls_distance_m": "", "real_lon": 126.973732, "real_lat": 37.558791, "current_sumo_lon": 126.974036, "current_sumo_lat": 37.558755, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.974036, "nearest_tls_lat": 37.558755}, {"crosswalk_id": "LINK_153517", "original_rank": 20, "mapping_distance_m": 119.135, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "LOCATION_TOO_FAR_HOLD", "recommended_action": "HOLD", "nearest_tls_id": "436856319", "nearest_tls_distance_m": "", "real_lon": 126.97692, "real_lat": 37.557731, "current_sumo_lon": 126.97596, "current_sumo_lat": 37.558485, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.975959, "nearest_tls_lat": 37.558486}, {"crosswalk_id": "NODE_21869", "original_rank": 21, "mapping_distance_m": 172.809, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "LOCATION_TOO_FAR_HOLD", "recommended_action": "HOLD", "nearest_tls_id": "11203052964", "nearest_tls_distance_m": "", "real_lon": 126.980248, "real_lat": 37.55974, "current_sumo_lon": 126.98196, "current_sumo_lat": 37.560498, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.982008, "nearest_tls_lat": 37.560519}, {"crosswalk_id": "NODE_6425", "original_rank": 22, "mapping_distance_m": 298.1, "failure_category": "MANUAL_REVIEW_NEEDED", "manual_review_type": "MANUAL_EDGE_PAIR_SELECTION", "recommended_action": "MANUAL_EDGE_PAIR_SELECTION", "nearest_tls_id": "436856276", "nearest_tls_distance_m": "", "real_lon": 126.980952, "real_lat": 37.554782, "current_sumo_lon": 126.982098, "current_sumo_lat": 37.55226, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.981996, "nearest_tls_lat": 37.55221}, {"crosswalk_id": "NODE_10067", "original_rank": 23, "mapping_distance_m": 179.32, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "LOCATION_TOO_FAR_HOLD", "recommended_action": "HOLD", "nearest_tls_id": "11203052960", "nearest_tls_distance_m": "", "real_lon": 126.980162, "real_lat": 37.559429, "current_sumo_lon": 126.981931, "current_sumo_lat": 37.560225, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.981935, "nearest_tls_lat": 37.560227}, {"crosswalk_id": "LINK_107613", "original_rank": 25, "mapping_distance_m": 307.281, "failure_category": "MANUAL_REVIEW_NEEDED", "manual_review_type": "MANUAL_EDGE_PAIR_SELECTION", "recommended_action": "MANUAL_EDGE_PAIR_SELECTION", "nearest_tls_id": "436856276", "nearest_tls_distance_m": "", "real_lon": 126.980934, "real_lat": 37.554864, "current_sumo_lon": 126.982098, "current_sumo_lat": 37.55226, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.981996, "nearest_tls_lat": 37.55221}, {"crosswalk_id": "NODE_8382", "original_rank": 26, "mapping_distance_m": 98.998, "failure_category": "MANUAL_REVIEW_NEEDED", "manual_review_type": "MANUAL_EDGE_PAIR_SELECTION", "recommended_action": "MANUAL_EDGE_PAIR_SELECTION", "nearest_tls_id": "1936511299", "nearest_tls_distance_m": "", "real_lon": 127.010647, "real_lat": 37.554487, "current_sumo_lon": 127.011406, "current_sumo_lat": 37.553831, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 127.011456, "nearest_tls_lat": 37.553774}, {"crosswalk_id": "NODE_8431", "original_rank": 27, "mapping_distance_m": 143.24, "failure_category": "MANUAL_REVIEW_NEEDED", "manual_review_type": "MANUAL_EDGE_PAIR_SELECTION", "recommended_action": "MANUAL_EDGE_PAIR_SELECTION", "nearest_tls_id": "1936511299", "nearest_tls_distance_m": "", "real_lon": 127.01039, "real_lat": 37.554836, "current_sumo_lon": 127.011406, "current_sumo_lat": 37.553831, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 127.011456, "nearest_tls_lat": 37.553774}, {"crosswalk_id": "NODE_10333", "original_rank": 29, "mapping_distance_m": 125.39, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "LOCATION_TOO_FAR_HOLD", "recommended_action": "HOLD", "nearest_tls_id": "436856319", "nearest_tls_distance_m": "", "real_lon": 126.97694, "real_lat": 37.557668, "current_sumo_lon": 126.97596, "current_sumo_lat": 37.558485, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.975959, "nearest_tls_lat": 37.558486}, {"crosswalk_id": "NODE_6153", "original_rank": 32, "mapping_distance_m": 113.0, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "LOCATION_TOO_FAR_HOLD", "recommended_action": "HOLD", "nearest_tls_id": "436856319", "nearest_tls_distance_m": "", "real_lon": 126.9769, "real_lat": 37.557794, "current_sumo_lon": 126.97596, "current_sumo_lat": 37.558485, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.975959, "nearest_tls_lat": 37.558486}, {"crosswalk_id": "NODE_6212", "original_rank": 40, "mapping_distance_m": 130.275, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "GENERATED_CROSSING_RETRY_POSSIBLE", "recommended_action": "HOLD", "nearest_tls_id": "2457731125", "nearest_tls_distance_m": "", "real_lon": 126.977194, "real_lat": 37.556141, "current_sumo_lon": 126.977051, "current_sumo_lat": 37.554975, "generated_lon": 126.977248, "generated_lat": 37.556324, "nearest_tls_lon": 126.977041, "nearest_tls_lat": 37.554979}, {"crosswalk_id": "LINK_22103", "original_rank": 48, "mapping_distance_m": 177.89, "failure_category": "LOCATION_TOO_FAR", "manual_review_type": "LOCATION_TOO_FAR_HOLD", "recommended_action": "HOLD", "nearest_tls_id": "11203052960", "nearest_tls_distance_m": "", "real_lon": 126.980099, "real_lat": 37.559555, "current_sumo_lon": 126.981931, "current_sumo_lat": 37.560225, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.981935, "nearest_tls_lat": 37.560227}, {"crosswalk_id": "NODE_5938", "original_rank": 49, "mapping_distance_m": 23.468, "failure_category": "MANUAL_REVIEW_NEEDED", "manual_review_type": "MANUAL_EDGE_PAIR_SELECTION", "recommended_action": "MANUAL_EDGE_PAIR_SELECTION", "nearest_tls_id": "5851251266", "nearest_tls_distance_m": "", "real_lon": 126.976897, "real_lat": 37.566841, "current_sumo_lon": 126.976969, "current_sumo_lat": 37.566638, "generated_lon": "", "generated_lat": "", "nearest_tls_lon": 126.977117, "nearest_tls_lat": 37.566637}];
+const map = L.map('map').setView([37.558791, 126.973732], 14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+const bounds = [];
+function popup(r) {
+  const keys = ['crosswalk_id','original_rank','mapping_distance_m','failure_category','manual_review_type','recommended_action','nearest_tls_id','nearest_tls_distance_m'];
+  const rows = keys.map(k => `<tr><th>${k}</th><td>${r[k] ?? ''}</td></tr>`).join('');
+  return `<table>${rows}</table>`;
+}
+for (const r of data) {
+  if (r.real_lat !== '' && r.real_lon !== '') {
+    L.circleMarker([r.real_lat, r.real_lon], {radius:7, color:'#16a34a'}).addTo(map).bindPopup(popup(r));
+    bounds.push([r.real_lat, r.real_lon]);
+  }
+  if (r.current_sumo_lat !== '' && r.current_sumo_lon !== '') {
+    L.circleMarker([r.current_sumo_lat, r.current_sumo_lon], {radius:6, color:'#6b7280'}).addTo(map);
+    bounds.push([r.current_sumo_lat, r.current_sumo_lon]);
+  }
+  if (r.generated_lat !== '' && r.generated_lon !== '') {
+    L.circleMarker([r.generated_lat, r.generated_lon], {radius:6, color:'#2563eb'}).addTo(map);
+    bounds.push([r.generated_lat, r.generated_lon]);
+  }
+  if (r.nearest_tls_lat !== '' && r.nearest_tls_lon !== '') {
+    L.circleMarker([r.nearest_tls_lat, r.nearest_tls_lon], {radius:6, color:'#dc2626'}).addTo(map);
+    bounds.push([r.nearest_tls_lat, r.nearest_tls_lon]);
+  }
+  if (r.real_lat !== '' && r.current_sumo_lat !== '') {
+    L.polyline([[r.real_lat, r.real_lon], [r.current_sumo_lat, r.current_sumo_lon]], {color:'#64748b', dashArray:'4 4'}).addTo(map);
+  }
+  if (r.real_lat !== '' && r.generated_lat !== '') {
+    L.polyline([[r.real_lat, r.real_lon], [r.generated_lat, r.generated_lon]], {color:'#f97316'}).addTo(map);
+  }
+  if (r.real_lat !== '' && r.nearest_tls_lat !== '') {
+    L.polyline([[r.real_lat, r.real_lon], [r.nearest_tls_lat, r.nearest_tls_lon]], {color:'#dc2626', dashArray:'2 4'}).addTo(map);
+  }
+}
+if (bounds.length) map.fitBounds(bounds, {padding:[40,40]});
+</script>
+</body>
+</html>

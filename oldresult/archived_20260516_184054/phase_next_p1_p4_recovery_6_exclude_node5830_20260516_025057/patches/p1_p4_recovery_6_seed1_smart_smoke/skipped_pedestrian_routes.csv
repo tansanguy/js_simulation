@@ -1,0 +1,1 @@
+crosswalk_id,person_id,depart,route_from_edge,route_to_edge,crossing_edge_id,generated_route_edges,contains_crossing_edge,detected_crossing_presence,reason

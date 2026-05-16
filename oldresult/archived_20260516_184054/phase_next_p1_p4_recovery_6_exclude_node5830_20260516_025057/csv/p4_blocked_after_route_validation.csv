@@ -1,0 +1,2 @@
+crosswalk_id,blocked_reason,crossing_edge_id,decision,note
+NODE_5830,no_valid_pedestrian_route_pair,:5593950705_c0,excluded_from_p1_p4_recovery_6,seed1 smoke candidate build failed before SUMO because route pair did not include crossing edge

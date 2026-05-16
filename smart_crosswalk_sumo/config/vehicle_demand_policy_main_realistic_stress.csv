@@ -1,0 +1,13 @@
+scenario_name,total_vehicle_flow_vph,total_vehicle_count_600s,vehicle_type,passenger_ratio,allocation_basis,road_group,road_name,road_allocated_count_600s,direction_split,road_group_type,edge_group_mapping_status,network_edge_group,vehicle_type_split
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-10,동호로,505,55/45,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-17,세종대로_시청역2,478,55/45,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-13,세종대로_서울역,452,55/45,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-11,장충단로,393,50/50,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-09,퇴계로_신당역,353,55/45,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-16,서소문로,306,50/50,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-18,을지로,260,55/45,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-12,퇴계로_회현역,265,55/45,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-21,남산2호터널,188,50/50,major_axis,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-19,칠패로,147,50/50,other,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-23,소월로_회현역,73,50/50,other,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0
+main_realistic_stress,20877,3480,passenger,1.0,road_06_22_volume_share,A-24,소파로_숭의여자대학교,60,50/50,other,fallback_full_network,full_network,passenger:1.0|taxi:0.0|bus:0.0|truck:0.0

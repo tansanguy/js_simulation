@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>generated_signal_net_v1 map overlay</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    body { font-family: sans-serif; }
+    .panel { position:absolute; z-index:999; top:12px; left:12px; background:#111827; color:#f9fafb; padding:10px 12px; border-radius:8px; max-width:360px; }
+    .panel h1 { margin:0 0 6px; font-size:16px; }
+    .panel p { margin:0; font-size:12px; color:#d1d5db; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 3px 5px; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel"><h1>generated_signal_net_v1 map overlay</h1><p>green=real, gray=old SUMO, blue=fixed/generated crossing. Lines connect points.</p></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const data = [{"crosswalk_id": "NODE_8426", "original_rank": 4, "real_lon": 127.010956, "real_lat": 37.554733, "old_lon": 127.011406, "old_lat": 37.553831, "fixed_lon": 127.010984, "fixed_lat": 37.554601, "mapping_distance_m": 107.854, "tls_id": "3849142980", "ped_link_index": "16", "pedestrian_only_phase_available": false, "final_recovery_status": "GENERATED_GEOMETRY_OK", "candidate_status": "GENERATED_GEOMETRY_OK", "recommended_action": "try_existing_tls_or_new_signal_installation"}, {"crosswalk_id": "LINK_212169", "original_rank": 18, "real_lon": 126.976957, "real_lat": 37.557612, "old_lon": 126.97596, "old_lat": 37.558485, "fixed_lon": 126.976906, "fixed_lat": 37.557527, "mapping_distance_m": 130.982, "tls_id": "11449716078", "ped_link_index": "5", "pedestrian_only_phase_available": false, "final_recovery_status": "GENERATED_GEOMETRY_OK", "candidate_status": "GENERATED_GEOMETRY_OK", "recommended_action": "try_existing_tls_or_new_signal_installation"}, {"crosswalk_id": "NODE_6123", "original_rank": 28, "real_lon": 126.97855, "real_lat": 37.558678, "old_lon": 126.97596, "old_lat": 37.558485, "fixed_lon": 126.978728, "fixed_lat": 37.558626, "mapping_distance_m": 229.304, "tls_id": "7300992884", "ped_link_index": "5", "pedestrian_only_phase_available": false, "final_recovery_status": "GENERATED_GEOMETRY_OK", "candidate_status": "GENERATED_GEOMETRY_OK", "recommended_action": "try_existing_tls_or_new_signal_installation"}, {"crosswalk_id": "NODE_6082", "original_rank": 33, "real_lon": 126.976975, "real_lat": 37.557556, "old_lon": 126.97596, "old_lat": 37.558485, "fixed_lon": 126.976906, "fixed_lat": 37.557527, "mapping_distance_m": 136.645, "tls_id": "11449716078", "ped_link_index": "5", "pedestrian_only_phase_available": false, "final_recovery_status": "GENERATED_GEOMETRY_OK", "candidate_status": "GENERATED_GEOMETRY_OK", "recommended_action": "try_existing_tls_or_new_signal_installation"}, {"crosswalk_id": "NODE_10273", "original_rank": 46, "real_lon": 127.009397, "real_lat": 37.556784, "old_lon": 127.01216, "old_lat": 37.559245, "fixed_lon": 127.009241, "fixed_lat": 37.556868, "mapping_distance_m": 366.265, "tls_id": "3846533030", "ped_link_index": "12", "pedestrian_only_phase_available": false, "final_recovery_status": "GENERATED_GEOMETRY_OK", "candidate_status": "GENERATED_GEOMETRY_OK", "recommended_action": "try_existing_tls_or_new_signal_installation"}, {"crosswalk_id": "NODE_8452", "original_rank": 47, "real_lon": 127.009042, "real_lat": 37.556655, "old_lon": 127.011406, "old_lat": 37.553831, "fixed_lon": 127.009082, "fixed_lat": 37.556562, "mapping_distance_m": 376.937, "tls_id": "3846603653", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "GENERATED_GEOMETRY_OK", "candidate_status": "GENERATED_GEOMETRY_OK", "recommended_action": "try_existing_tls_or_new_signal_installation"}];
+const map = L.map('map').setView([37.554733, 127.010956], 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+function popup(r) {
+  const rows = ['crosswalk_id','original_rank','mapping_distance_m','tls_id','ped_link_index','pedestrian_only_phase_available','final_recovery_status','recommended_action']
+    .map(k => `<tr><th>${k}</th><td>${r[k] ?? ''}</td></tr>`).join('');
+  return `<table>${rows}</table>`;
+}
+const bounds = [];
+for (const r of data) {
+  if (r.real_lat !== '' && r.real_lon !== '') {
+    L.circleMarker([r.real_lat, r.real_lon], {radius:7,color:'#16a34a',fillOpacity:.9}).addTo(map).bindPopup(popup(r));
+    bounds.push([r.real_lat, r.real_lon]);
+  }
+  if (r.old_lat !== '' && r.old_lon !== '') {
+    L.circleMarker([r.old_lat, r.old_lon], {radius:6,color:'#6b7280',fillOpacity:.7}).addTo(map);
+    bounds.push([r.old_lat, r.old_lon]);
+  }
+  if (r.fixed_lat !== '' && r.fixed_lon !== '') {
+    L.circleMarker([r.fixed_lat, r.fixed_lon], {radius:6,color:'#2563eb',fillOpacity:.9}).addTo(map);
+    bounds.push([r.fixed_lat, r.fixed_lon]);
+  }
+  if (r.real_lat !== '' && r.fixed_lat !== '') L.polyline([[r.real_lat,r.real_lon],[r.fixed_lat,r.fixed_lon]], {color:'#f97316',weight:2}).addTo(map);
+  if (r.old_lat !== '' && r.fixed_lat !== '') L.polyline([[r.old_lat,r.old_lon],[r.fixed_lat,r.fixed_lon]], {color:'#64748b',weight:1,dashArray:'4 4'}).addTo(map);
+}
+if (bounds.length) map.fitBounds(bounds, {padding:[40,40]});
+</script>
+</body>
+</html>

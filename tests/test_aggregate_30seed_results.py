@@ -60,15 +60,21 @@ def test_prepare_builds_pipeline_pack_without_running_sumo(tmp_path: Path) -> No
     manifest = pd.read_csv(output_root / "run_manifest.csv")
     baseline_manifest = pd.read_csv(output_root / "manifests" / "baseline_run_manifest.csv")
     smart_manifest = pd.read_csv(output_root / "manifests" / "smart_run_manifest.csv")
+    validation_manifest = pd.read_csv(output_root / "manifests" / "run_validation_manifest.csv")
+    validation_summary = pd.read_csv(output_root / "csv" / "run_validation_summary.csv")
 
-    assert manifest.shape[0] == 930
-    assert baseline_manifest.shape[0] == 90
-    assert smart_manifest.shape[0] == 840
+    assert manifest.shape[0] == 1140
+    assert baseline_manifest.shape[0] == 120
+    assert smart_manifest.shape[0] == 1020
+    assert validation_manifest.shape[0] >= 10
+    assert validation_summary.shape[0] == validation_manifest.shape[0]
+    assert "validation_manifest" in manifest.columns
     assert (output_root / "commands" / "command_to_run_30seed_all_groups.sh").is_file()
     assert (output_root / "commands" / "command_to_cleanup_result_dry_run.sh").is_file()
     assert (output_root / "commands" / "command_to_cleanup_result_apply.sh").is_file()
     assert (output_root / "csv" / "csv_output_inventory.csv").is_file()
     assert (output_root / "csv" / "csv_pipeline_audit_summary.csv").is_file()
+    assert (output_root / "csv" / "run_validation_summary.csv").is_file()
     assert (output_root / "csv" / "safety_metric_presence_check.csv").is_file()
     assert (output_root / "csv" / "result_cleanup_inventory.csv").is_file()
     assert (output_root / "csv" / "result_cleanup_safe_to_delete.csv").is_file()
@@ -80,4 +86,3 @@ def test_prepare_builds_pipeline_pack_without_running_sumo(tmp_path: Path) -> No
     cleanup = pd.read_csv(output_root / "csv" / "result_cleanup_inventory.csv")
     assert "old_smoke/sample.csv" in set(cleanup["file_path"].astype(str))
     assert (cleanup["file_path"].astype(str).str.startswith("phase_next_30seed_28_ready_pipeline_test")).sum() == 0
-

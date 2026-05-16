@@ -1,0 +1,8 @@
+crosswalk_id,smart_completed,smart_ped_crossing_person_count,smart_extension_count,smart_smoke_success,baseline_completed,baseline_ped_crossing_person_count,baseline_extension_count,baseline_smoke_success,ready_for_30seed,reason
+LINK_212169,True,10,1,True,True,10,0,True,True,seed1 smart/baseline passed
+NODE_8452,True,5,1,True,True,5,0,True,True,seed1 smart/baseline passed
+NODE_6082,True,10,1,True,True,10,0,True,True,seed1 smart/baseline passed
+NODE_6123,True,5,1,True,True,5,0,True,True,seed1 smart/baseline passed
+NODE_8426,True,5,1,True,True,5,0,True,True,seed1 smart/baseline passed
+NODE_74388,True,5,1,True,True,5,0,True,True,seed1 smart/baseline passed
+NODE_10273,True,5,1,True,True,5,0,True,True,seed1 smart/baseline passed

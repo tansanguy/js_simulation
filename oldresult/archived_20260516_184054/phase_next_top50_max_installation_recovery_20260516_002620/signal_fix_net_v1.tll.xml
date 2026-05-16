@@ -1,0 +1,33 @@
+<?xml version='1.0' encoding='utf-8'?>
+<tlLogics>
+  <tlLogic id="5161705573" type="static" programID="0" offset="0">
+    <phase duration="79" state="GGr" />
+    <phase duration="6" state="yyr" />
+    <phase duration="13" state="rrG" />
+  </tlLogic>
+  <tlLogic id="11139418715" type="static" programID="0" offset="0">
+    <phase duration="79" state="GGr" />
+    <phase duration="6" state="yyr" />
+    <phase duration="13" state="rrG" />
+  </tlLogic>
+  <tlLogic id="10974501473" type="static" programID="0" offset="0">
+    <phase duration="81" state="GGGGr" />
+    <phase duration="4" state="yyyyr" />
+    <phase duration="13" state="rrrrG" />
+  </tlLogic>
+  <tlLogic id="11203052965" type="static" programID="0" offset="0">
+    <phase duration="79" state="GGGGGGGGGGGr" />
+    <phase duration="6" state="yyyyyyyyyyyr" />
+    <phase duration="13" state="rrrrrrrrrrrG" />
+  </tlLogic>
+  <tlLogic id="11139418723" type="static" programID="0" offset="0">
+    <phase duration="79" state="GGr" />
+    <phase duration="6" state="yyr" />
+    <phase duration="13" state="rrG" />
+  </tlLogic>
+  <tlLogic id="11203041635" type="static" programID="0" offset="0">
+    <phase duration="79" state="GGGGr" />
+    <phase duration="6" state="yyyyr" />
+    <phase duration="13" state="rrrrG" />
+  </tlLogic>
+</tlLogics>

@@ -1,5 +1,7 @@
 # 스마트 횡단보도 시뮬레이션 결과 읽는 법
 
+Deprecated legacy guide. Current truth is in `README.md`, `docs/index.md`, and `docs/current_status.md`.
+
 이 문서는 `integrated_short_test` 실행 결과로 생성된 데이터와 리포트를 해석하는 방법을 안내합니다.
 
 ## 1. 주요 결과 파일 안내

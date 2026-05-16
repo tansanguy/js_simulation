@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<nodes>
+  <node id="5593950705" x="21341.56" y="4502.97" type="traffic_light" />
+  <crossing node="5593950705" edges="585341901#2 585341901#1" id="P4_NODE_5830" width="4.0" priority="true" />
+  <node id="5851251266" x="21642.67" y="5365.04" type="traffic_light" />
+  <crossing node="5851251266" edges="431903253#0 -431903253#0" id="P4_NODE_5938" width="4.0" priority="true" />
+</nodes>

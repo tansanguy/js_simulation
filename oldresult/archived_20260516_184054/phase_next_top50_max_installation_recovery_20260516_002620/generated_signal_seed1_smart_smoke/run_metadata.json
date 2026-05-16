@@ -1,0 +1,27 @@
+{
+  "candidate_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_candidate_table.csv",
+  "net_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml",
+  "scenario": "smart",
+  "seed": 1,
+  "sim_duration": 600,
+  "warmup": 0,
+  "step_length": 0.5,
+  "extension_sec": 5.0,
+  "include_vehicles": false,
+  "output_dir": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_seed1_smart_smoke",
+  "candidate_rows": 7,
+  "candidate_ids": [
+    "LINK_212169",
+    "NODE_8452",
+    "NODE_6082",
+    "NODE_6123",
+    "NODE_8426",
+    "NODE_74388",
+    "NODE_10273"
+  ],
+  "run_name": "phase6_smoke_smart_seed1",
+  "run_start_time": "2026-05-15T15:33:19+00:00",
+  "run_end_time": "2026-05-15T15:33:31+00:00",
+  "elapsed_sec": 11.54,
+  "completed": true
+}

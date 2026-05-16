@@ -1,0 +1,7 @@
+{
+  "scenario": "baseline",
+  "ped_route_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/signal_fix_seed1_baseline_smoke/demand_pedestrian.rou.xml",
+  "ped_route_order_debug_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/signal_fix_seed1_baseline_smoke/pedestrian_route_order_debug.csv",
+  "ped_depart_sorted_ok": true,
+  "ped_person_rows": 45
+}

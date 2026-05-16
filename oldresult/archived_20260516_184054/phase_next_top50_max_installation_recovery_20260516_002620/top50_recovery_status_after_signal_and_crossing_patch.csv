@@ -1,0 +1,51 @@
+crosswalk_id,original_rank,previous_status,final_recovery_status,smart_smoke_success,baseline_smoke_success,ready_for_30seed,reason
+LINK_249048,1,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+NODE_10335,2,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_8369,3,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_8426,4,RESULT_OK_BUT_LOCATION_BAD,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+NODE_5837,5,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+NODE_167173,6,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+LINK_239754,7,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_74388,8,RESULT_OK_BUT_LOCATION_BAD,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+NODE_5846,9,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_5830,10,RESULT_OK_BUT_LOCATION_REVIEW,NEEDS_MANUAL_REVIEW,False,False,False,signal ready but location review needed
+NODE_5831,11,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+LINK_10218,12,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+LINK_140740,13,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+NODE_10060,14,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_6342,15,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_5647,16,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_9634,17,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+LINK_212169,18,NOT_FINAL_CANDIDATE,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+LINK_194891,19,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+LINK_153517,20,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_21869,21,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_6425,22,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,False,False,False,location review needed before smoke
+NODE_10067,23,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+LINK_266939,24,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+LINK_107613,25,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,False,False,False,location review needed before smoke
+NODE_8382,26,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,False,False,False,location review needed before smoke
+NODE_8431,27,RESULT_OK_BUT_LOCATION_BAD,NEEDS_MANUAL_REVIEW,False,False,False,location review needed before smoke
+NODE_6123,28,NOT_FINAL_CANDIDATE,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+NODE_10333,29,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_14937,30,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_10377,31,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_6153,32,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_6082,33,NOT_FINAL_CANDIDATE,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+NODE_6122,34,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_10376,35,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_10378,36,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+NODE_150723,37,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_5681,38,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+NODE_125895,39,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+NODE_6212,40,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_10262,41,LOCATION_OK_BUT_SMART_RESULT_FAIL,RECOVERED_SIGNAL_FIX_READY,True,True,True,seed1 smoke passed
+NODE_122781,42,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_10381,43,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved
+LINK_127869,44,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+LINK_230879,45,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_10273,46,NOT_FINAL_CANDIDATE,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+NODE_8452,47,RESULT_OK_BUT_LOCATION_BAD,RECOVERED_GENERATED_SIGNAL_READY,True,True,True,seed1 smoke passed
+LINK_22103,48,NOT_FINAL_CANDIDATE,REJECT,False,False,False,not present in ready5 or mixed redesign promotion inputs
+NODE_5938,49,RESULT_OK_BUT_LOCATION_REVIEW,NEEDS_MANUAL_REVIEW,False,False,False,location review needed before smoke
+LINK_120139,50,FINAL_GOOD_MAPPING_AND_GOOD_RESULT,MAIN_READY_CURRENT_NET,True,True,True,main preserved

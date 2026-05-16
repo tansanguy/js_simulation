@@ -1,0 +1,3 @@
+crosswalk_id,crossing_edge_id,selected_node_id,selected_tls_id,crossing_exists,tls_connected,ped_link_index_available,route_available,tlLogic_present,preserved
+NODE_5830,:5593950705_c0,5593950705,5593950705,True,True,True,True,True,True
+NODE_5938,:5851251266_c0,5851251266,5851251266,True,True,True,True,True,True

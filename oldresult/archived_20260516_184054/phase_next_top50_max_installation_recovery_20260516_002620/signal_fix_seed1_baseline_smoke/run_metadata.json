@@ -1,0 +1,29 @@
+{
+  "candidate_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/signal_fix_candidate_table.csv",
+  "net_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/signal_fix_net_v1.net.xml",
+  "scenario": "baseline",
+  "seed": 1,
+  "sim_duration": 600,
+  "warmup": 0,
+  "step_length": 0.5,
+  "extension_sec": 5.0,
+  "include_vehicles": false,
+  "output_dir": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/signal_fix_seed1_baseline_smoke",
+  "candidate_rows": 9,
+  "candidate_ids": [
+    "LINK_249048",
+    "NODE_5837",
+    "LINK_10218",
+    "LINK_140740",
+    "NODE_9634",
+    "LINK_194891",
+    "NODE_10378",
+    "NODE_5681",
+    "NODE_10262"
+  ],
+  "run_name": "phase6_smoke_baseline_seed1",
+  "run_start_time": "2026-05-15T15:32:55+00:00",
+  "run_end_time": "2026-05-15T15:33:07+00:00",
+  "elapsed_sec": 11.579,
+  "completed": true
+}

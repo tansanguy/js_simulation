@@ -1,0 +1,25 @@
+{
+  "candidate_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_signal_fix_candidate_table.csv",
+  "net_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_signal_fix_net_v1.net.xml",
+  "scenario": "baseline",
+  "seed": 1,
+  "sim_duration": 600,
+  "warmup": 0,
+  "step_length": 0.5,
+  "extension_sec": 5.0,
+  "include_vehicles": false,
+  "output_dir": "/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_seed1_baseline_smoke",
+  "candidate_rows": 5,
+  "candidate_ids": [
+    "NODE_10060",
+    "NODE_122781",
+    "NODE_14937",
+    "NODE_5647",
+    "NODE_6342"
+  ],
+  "run_name": "phase6_smoke_baseline_seed1",
+  "run_start_time": "2026-05-15T16:36:53+00:00",
+  "run_end_time": "2026-05-15T16:37:05+00:00",
+  "elapsed_sec": 11.86,
+  "completed": true
+}

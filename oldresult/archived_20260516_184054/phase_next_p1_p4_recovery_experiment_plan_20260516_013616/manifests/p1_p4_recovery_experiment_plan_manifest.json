@@ -1,0 +1,23 @@
+{
+  "output_dir": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616",
+  "base_net": "/Users/junlee/Desktop/2026-1/js/result/phase_next_recovery_command_plan_20260514_200908/batch_03_run/recovery_tls_batch_network_v1.net.xml",
+  "p1_candidate_table": "/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_signal_fix_candidate_table.csv",
+  "p1_net": "/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_signal_fix_net_v1.net.xml",
+  "p4_candidate_rows": 13,
+  "p4_manual_rows": 6,
+  "template_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/csv/manual_edge_pair_selection_template.csv",
+  "nearby_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/csv/p4_nearby_edge_tls_candidates.csv",
+  "review_map": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/html/p4_manual_approval_review_map.html",
+  "plan_md": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/readme/p1_p4_recovery_map_plan.md",
+  "guide_md": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/readme/p4_manual_approval_guide.md",
+  "commands": [
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_build_p1_p4_recovery_net_after_p4_approval.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_build_p4_manual_recovery_after_approval.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_check_p4_manual_seed1_smoke.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_copy_manual_template_for_editing.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_open_p4_review_map.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_run_p4_manual_seed1_smoke.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_experiment_plan_20260516_013616/commands/command_to_validate_manual_edge_pair_selection.sh"
+  ],
+  "p1_baseline_rule": "baseline must be built from P1+P4 recovery net, not shared with current_main_12/signal_fix_9/generated_signal_7"
+}

@@ -1,5 +1,7 @@
 # 스마트 횡단보도 SUMO 시뮬레이션 최종 보고서 초안
 
+Temporary draft. Do not treat this file as current status or final completion proof.
+
 ## 0. 이 실험의 개요
 본 실험의 목적은 스마트 횡단보도 도입 시 예상되는 보행자 안전 편익과 차량 교통 비용 간의 상충 관계(Trade-off)를 관측하는 데 있습니다. 본 실험 구조에서 **유일한 독립변수는 '스마트 횡단보도 적용 여부'**입니다. 실험은 스마트 횡단보도 기능이 완전히 꺼진 기본 상태(`baseline`)와 해당 기능이 켜진 상태(`smart_crosswalk`) 두 시나리오를 비교하여 진행됩니다.
 

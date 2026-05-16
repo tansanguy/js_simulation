@@ -1,0 +1,15 @@
+{
+  "output_dir": "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620",
+  "base_net": "/Users/junlee/Desktop/2026-1/js/result/phase_next_recovery_command_plan_20260514_200908/batch_03_run/recovery_tls_batch_network_v1.net.xml",
+  "run_smoke": true,
+  "signal_fix_candidate_rows": 9,
+  "generated_signal_candidate_rows": 7,
+  "signal_fix_seed1_ready": 9,
+  "generated_signal_seed1_ready": 7,
+  "commands": [
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/command_to_run_signal_fix_seed1_smoke.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/command_to_run_generated_signal_seed1_smoke.sh",
+    "/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/command_to_run_next_30seed_signal_and_generated.sh"
+  ],
+  "note": "seed1 smoke was run before the final verdict-only recalculation; verdict CSVs are based on existing phase6_smoke_summary.csv files."
+}

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+netconvert --sumo-net-file /Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_pre_phase.net.xml --tllogic-files /Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.tll.xml --output-file /Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/generated_signal_net_v1.net.xml --no-turnarounds true --walkingareas true --crossings.guess true --sidewalks.guess true --sidewalks.guess.min-speed 0 --sidewalks.guess.max-speed 40 --tls.crossing-min.time 6 --tls.crossing-clearance.time 3

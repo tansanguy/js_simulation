@@ -1,0 +1,3 @@
+network_group,candidate_tls_count,patched_tls_count,unchanged_tls_count,changed_tls_count,new_tls_count,removed_tls_count,changed_candidate_tls_count,changed_non_candidate_tls_count,high_risk_tls_count,high_risk_comment
+signal_fix_net_v1,6,558,558,0,0,0,0,0,0,candidate 외 TLS 변경은 HIGH_RISK
+generated_signal_net_v1,6,565,558,7,7,0,6,1,0,new TLS allowed but requires separate baseline

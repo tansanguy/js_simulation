@@ -1,6 +1,8 @@
 # Final Results Reading Guide
 ## 스마트 횡단보도 시뮬레이션 결과 읽는 법
 
+Deprecated legacy guide. Current truth is in `README.md`, `docs/index.md`, and `docs/current_status.md`.
+
 ---
 
 ## 1. 이 문서의 목적

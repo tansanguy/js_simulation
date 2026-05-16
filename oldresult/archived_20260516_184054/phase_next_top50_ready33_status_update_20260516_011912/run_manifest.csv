@@ -1,0 +1,8 @@
+﻿key,value
+top50_source,/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/next_integrated_map_candidate_pool.csv
+p1_verdict_source,/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_seed1_smoke_verdict.csv
+diagnosis_source,/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_recovery_integrity_audit_20260516_005535/remaining22_recovery_diagnosis.csv
+current_top50_source,/Users/junlee/Desktop/2026-1/js/result/phase_next_top50_max_installation_recovery_20260516_002620/top50_recovery_status_after_signal_and_crossing_patch.csv
+total_rows,50
+ready_rows,33
+remaining_rows,17

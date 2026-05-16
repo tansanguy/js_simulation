@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>signal_fix_net_v1 map overlay</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    body { font-family: sans-serif; }
+    .panel { position:absolute; z-index:999; top:12px; left:12px; background:#111827; color:#f9fafb; padding:10px 12px; border-radius:8px; max-width:360px; }
+    .panel h1 { margin:0 0 6px; font-size:16px; }
+    .panel p { margin:0; font-size:12px; color:#d1d5db; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 3px 5px; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel"><h1>signal_fix_net_v1 map overlay</h1><p>green=real, gray=old SUMO, blue=fixed/generated crossing. Lines connect points.</p></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const data = [{"crosswalk_id": "LINK_249048", "original_rank": 1, "real_lon": 126.97407, "real_lat": 37.558696, "old_lon": 126.974119, "old_lat": 37.558715, "fixed_lon": 126.974119, "fixed_lat": 37.558715, "mapping_distance_m": 4.842, "tls_id": "5161705573", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "NODE_5837", "original_rank": 5, "real_lon": 126.9742, "real_lat": 37.558638, "old_lon": 126.974119, "old_lat": 37.558715, "fixed_lon": 126.974119, "fixed_lat": 37.558715, "mapping_distance_m": 11.153, "tls_id": "5161705573", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "LINK_10218", "original_rank": 12, "real_lon": 126.969222, "real_lat": 37.555327, "old_lon": 126.969111, "old_lat": 37.555262, "fixed_lon": 126.969111, "fixed_lat": 37.555262, "mapping_distance_m": 12.172, "tls_id": "11139418715", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "LINK_140740", "original_rank": 13, "real_lon": 126.969221, "real_lat": 37.555255, "old_lon": 126.969111, "old_lat": 37.555262, "fixed_lon": 126.969111, "fixed_lat": 37.555262, "mapping_distance_m": 9.707, "tls_id": "11139418715", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "NODE_9634", "original_rank": 17, "real_lon": 126.967078, "real_lat": 37.565877, "old_lon": 126.966941, "old_lat": 37.565966, "fixed_lon": 126.966941, "fixed_lat": 37.565966, "mapping_distance_m": 15.553, "tls_id": "10974501473", "ped_link_index": "4", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "LINK_194891", "original_rank": 19, "real_lon": 126.981991, "real_lat": 37.560503, "old_lon": 126.981975, "old_lat": 37.560487, "fixed_lon": 126.981975, "fixed_lat": 37.560487, "mapping_distance_m": 2.291, "tls_id": "11203052965", "ped_link_index": "11", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "NODE_10378", "original_rank": 36, "real_lon": 126.969224, "real_lat": 37.555293, "old_lon": 126.969111, "old_lat": 37.555262, "fixed_lon": 126.969111, "fixed_lat": 37.555262, "mapping_distance_m": 10.498, "tls_id": "11139418715", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "NODE_5681", "original_rank": 38, "real_lon": 126.969221, "real_lat": 37.555361, "old_lon": 126.969115, "old_lat": 37.555425, "fixed_lon": 126.969115, "fixed_lat": 37.555425, "mapping_distance_m": 11.729, "tls_id": "11139418723", "ped_link_index": "2", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}, {"crosswalk_id": "NODE_10262", "original_rank": 41, "real_lon": 126.980913, "real_lat": 37.562216, "old_lon": 126.981053, "old_lat": 37.562093, "fixed_lon": 126.981053, "fixed_lat": 37.562093, "mapping_distance_m": 18.491, "tls_id": "11203041635", "ped_link_index": "4", "pedestrian_only_phase_available": false, "final_recovery_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "candidate_status": "LOCATION_OK_BUT_SMART_RESULT_FAIL", "recommended_action": "add_or_repair_pedestrian_only_phase"}];
+const map = L.map('map').setView([37.558696, 126.97407], 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+function popup(r) {
+  const rows = ['crosswalk_id','original_rank','mapping_distance_m','tls_id','ped_link_index','pedestrian_only_phase_available','final_recovery_status','recommended_action']
+    .map(k => `<tr><th>${k}</th><td>${r[k] ?? ''}</td></tr>`).join('');
+  return `<table>${rows}</table>`;
+}
+const bounds = [];
+for (const r of data) {
+  if (r.real_lat !== '' && r.real_lon !== '') {
+    L.circleMarker([r.real_lat, r.real_lon], {radius:7,color:'#16a34a',fillOpacity:.9}).addTo(map).bindPopup(popup(r));
+    bounds.push([r.real_lat, r.real_lon]);
+  }
+  if (r.old_lat !== '' && r.old_lon !== '') {
+    L.circleMarker([r.old_lat, r.old_lon], {radius:6,color:'#6b7280',fillOpacity:.7}).addTo(map);
+    bounds.push([r.old_lat, r.old_lon]);
+  }
+  if (r.fixed_lat !== '' && r.fixed_lon !== '') {
+    L.circleMarker([r.fixed_lat, r.fixed_lon], {radius:6,color:'#2563eb',fillOpacity:.9}).addTo(map);
+    bounds.push([r.fixed_lat, r.fixed_lon]);
+  }
+  if (r.real_lat !== '' && r.fixed_lat !== '') L.polyline([[r.real_lat,r.real_lon],[r.fixed_lat,r.fixed_lon]], {color:'#f97316',weight:2}).addTo(map);
+  if (r.old_lat !== '' && r.fixed_lat !== '') L.polyline([[r.old_lat,r.old_lon],[r.fixed_lat,r.fixed_lon]], {color:'#64748b',weight:1,dashArray:'4 4'}).addTo(map);
+}
+if (bounds.length) map.fitBounds(bounds, {padding:[40,40]});
+</script>
+</body>
+</html>

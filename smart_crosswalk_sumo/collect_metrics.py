@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    from .demand_scenarios import (
+        DEFAULT_DEMAND_SCENARIO_NAME,
+        DEFAULT_PEDESTRIAN_SCALE,
+        DEFAULT_VEHICLE_FLOW_SCALE,
+    )
     from .network_utils import load_metadata
     from .run_simulations import (
         compute_signal_timing,
@@ -17,6 +23,11 @@ try:
         serialize_incident_event,
     )
 except ImportError:
+    from demand_scenarios import (
+        DEFAULT_DEMAND_SCENARIO_NAME,
+        DEFAULT_PEDESTRIAN_SCALE,
+        DEFAULT_VEHICLE_FLOW_SCALE,
+    )
     from network_utils import load_metadata
     from run_simulations import (
         compute_signal_timing,
@@ -46,6 +57,18 @@ def mean_or_nan(values: list[float]) -> float:
     return float(np.nanmean(arr))
 
 
+def _load_demand_lookup(output_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    demand_csv = output_dir / "demand_params.csv"
+    if not demand_csv.exists():
+        return {}
+    df = pd.read_csv(demand_csv)
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in df.to_dict(orient="records"):
+        key = (str(row.get("crosswalk_id", "")), str(row.get("seed", "")))
+        lookup[key] = row
+    return lookup
+
+
 def collect_all(
     candidates_csv: str | Path,
     output_dir: str | Path = "outputs",
@@ -70,9 +93,11 @@ def collect_all(
     export_fcd: bool = False,
     vehicle_only: bool = False,
     sensitivity_config: dict[str, Any] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    metric_sample_interval_s: float = 0.0,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float | str | None]]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    demand_lookup = _load_demand_lookup(output_dir)
     candidates = pd.read_csv(candidates_csv)
     seed_rows = []
     avg_rows = []
@@ -81,6 +106,10 @@ def collect_all(
     incident_event_rows: list[dict[str, Any]] = []
     incident_impact_rows: list[dict[str, Any]] = []
     boundary_warning_rows: list[dict[str, Any]] = []
+    timing: dict[str, float | str | None] = {
+        "simulation_baseline_sec": 0.0,
+        "simulation_smart_sec": 0.0,
+    }
 
     model_params = apply_parameter_value_overrides(
         load_model_parameters(model_parameters_path),
@@ -171,6 +200,7 @@ def collect_all(
                 ped_file = cw_dir / f"peds_seed{seed}.rou.xml"
                 sumocfg = cw_dir / f"{scenario}_seed{seed}.sumocfg"
                 try:
+                    scenario_t0 = time.perf_counter()
                     metrics, extension_events, _, incident_impacts, export_paths = run_simulation(
                         net_file,
                         route_file,
@@ -204,6 +234,11 @@ def collect_all(
                         output_dir,
                         vehicle_only,
                         sensitivity_config,
+                        metric_sample_interval_s=metric_sample_interval_s,
+                    )
+                    timing_key = f"simulation_{scenario}_sec"
+                    timing[timing_key] = float(timing.get(timing_key, 0.0) or 0.0) + float(
+                        time.perf_counter() - scenario_t0
                     )
                 except Exception as exc:
                     failures.append(
@@ -254,22 +289,61 @@ def collect_all(
                         }
                     )
 
+                demand_row = demand_lookup.get((str(cw_id), str(seed)), {})
                 seed_row = {
                     "crosswalk_id": cw_id,
                     "seed": seed,
                     "admin_dong": row["admin_dong"],
                     "dong_name": row["dong_name"],
                     "scenario": scenario,
+                    "scenario_name": demand_row.get("scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
+                    "demand_profile": demand_row.get("demand_profile", DEFAULT_DEMAND_SCENARIO_NAME),
+                    "allocation_basis": demand_row.get("allocation_basis", ""),
+                    "total_vehicle_flow_vph": float(demand_row.get("total_vehicle_flow_vph", 0.0) or 0.0),
+                    "total_vehicle_count_600s": int(demand_row.get("total_vehicle_count_600s", 0) or 0),
+                    "vehicle_type": demand_row.get("vehicle_type", "passenger"),
+                    "passenger_ratio": float(demand_row.get("passenger_ratio", 1.0) or 1.0),
+                    "vehicle_type_split": demand_row.get("vehicle_type_split", ""),
+                    "road_group": demand_row.get("road_group", ""),
+                    "road_name": demand_row.get("road_name", ""),
+                    "road_group_type": demand_row.get("road_group_type", ""),
+                    "edge_group_mapping_status": demand_row.get("edge_group_mapping_status", ""),
+                    "network_edge_group": demand_row.get("network_edge_group", ""),
+                    "road_allocated_count_600s": int(demand_row.get("road_allocated_count_600s", 0) or 0),
+                    "road_allocated_flow_vph": float(demand_row.get("road_allocated_flow_vph", 0.0) or 0.0),
+                    "vehicle_flow_scale": float(
+                        demand_row.get("vehicle_flow_scale", DEFAULT_VEHICLE_FLOW_SCALE)
+                    ),
+                    "pedestrian_scale": float(
+                        demand_row.get("pedestrian_scale", DEFAULT_PEDESTRIAN_SCALE)
+                    ),
+                    "pedestrian_count_600s": int(demand_row.get("pedestrian_count_600s", 0) or 0),
+                    "generated_pedestrian_count": int(
+                        demand_row.get("generated_pedestrian_count", 0) or 0
+                    ),
+                    "generated_vehicle_count": int(demand_row.get("generated_vehicle_count", 0) or 0),
+                    "generated_vehicle_route_file": demand_row.get("generated_vehicle_route_file", ""),
+                    "generated_vehicle_trip_file": demand_row.get("generated_vehicle_trip_file", ""),
+                    "vehicle_net_file": demand_row.get("vehicle_net_file", ""),
+                    "unique_depart_edges": int(demand_row.get("unique_depart_edges", 0) or 0),
+                    "unique_arrival_edges": int(demand_row.get("unique_arrival_edges", 0) or 0),
+                    "unique_route_edges": int(demand_row.get("unique_route_edges", 0) or 0),
+                    "network_edge_coverage_ratio": float(
+                        demand_row.get("network_edge_coverage_ratio", 0.0) or 0.0
+                    ),
+                    "pedestrian_scale_source": demand_row.get("pedestrian_scale_source", ""),
                     "raw_accident_count": row["accident_count"],
                     "elderly_ratio": row["elderly_ratio"],
                     "lane_count": lane_count_for_sim,
                     "vehicle_arrival_rate_per_lane": queue_vehicle_arrival_rate,
                     "queue_vehicle_num_lanes": queue_vehicle_num_lanes,
                     "pedestrian_arrival_rate_multiplier": float(
-                        (sensitivity_config or {}).get("pedestrian_arrival_rate_multiplier", 1.0) or 1.0
+                        demand_row.get("pedestrian_arrival_rate_multiplier", DEFAULT_PEDESTRIAN_SCALE)
+                        or DEFAULT_PEDESTRIAN_SCALE
                     ),
                     "vehicle_volume_multiplier": float(
-                        (sensitivity_config or {}).get("vehicle_volume_multiplier", 1.0) or 1.0
+                        demand_row.get("vehicle_volume_multiplier", DEFAULT_VEHICLE_FLOW_SCALE)
+                        or DEFAULT_VEHICLE_FLOW_SCALE
                     ),
                     "walking_speed_profile": str(
                         (sensitivity_config or {}).get("walking_speed_profile_name", "base")
@@ -296,9 +370,10 @@ def collect_all(
             scenario_seed_rows = [r for r in seed_rows if r["crosswalk_id"] == cw_id and r["scenario"] == scenario]
             if not scenario_seed_rows:
                 continue
+            first_row = scenario_seed_rows[0]
             metric_keys = [
                 key
-                for key in scenario_seed_rows[0]
+                for key in first_row
                 if key
                 not in {
                     "crosswalk_id",
@@ -319,6 +394,22 @@ def collect_all(
                     "admin_dong": row["admin_dong"],
                     "dong_name": row["dong_name"],
                     "scenario": scenario,
+                    "scenario_name": first_row.get("scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
+                    "demand_profile": first_row.get("demand_profile", DEFAULT_DEMAND_SCENARIO_NAME),
+                    "allocation_basis": first_row.get("allocation_basis", ""),
+                    "total_vehicle_flow_vph": float(first_row.get("total_vehicle_flow_vph", 0.0) or 0.0),
+                    "total_vehicle_count_600s": int(first_row.get("total_vehicle_count_600s", 0) or 0),
+                    "vehicle_type": first_row.get("vehicle_type", "passenger"),
+                    "passenger_ratio": float(first_row.get("passenger_ratio", 1.0) or 1.0),
+                    "vehicle_type_split": first_row.get("vehicle_type_split", ""),
+                    "road_group": first_row.get("road_group", ""),
+                    "road_name": first_row.get("road_name", ""),
+                    "road_group_type": first_row.get("road_group_type", ""),
+                    "edge_group_mapping_status": first_row.get("edge_group_mapping_status", ""),
+                    "network_edge_group": first_row.get("network_edge_group", ""),
+                    "road_allocated_count_600s": int(first_row.get("road_allocated_count_600s", 0) or 0),
+                    "road_allocated_flow_vph": float(first_row.get("road_allocated_flow_vph", 0.0) or 0.0),
+                    "pedestrian_scale_source": first_row.get("pedestrian_scale_source", ""),
                     **avg_metrics,
                 }
             )
@@ -380,7 +471,7 @@ def collect_all(
             header=not failed_path.exists(),
             index=False,
         )
-    return seed_df, avg_df
+    return seed_df, avg_df, timing
 
 
 def main() -> None:
@@ -417,6 +508,7 @@ def main() -> None:
     parser.add_argument("--vehicle_only", action="store_true")
     parser.add_argument("--sensitivity_scenarios", default=None)
     parser.add_argument("--sensitivity_case", default=None)
+    parser.add_argument("--metric-sample-interval", type=float, default=0.0)
     args = parser.parse_args()
     sensitivity_config = None
     if args.sensitivity_case:
@@ -446,6 +538,7 @@ def main() -> None:
         args.export_fcd,
         args.vehicle_only,
         sensitivity_config,
+        metric_sample_interval_s=args.metric_sample_interval,
     )
 
 

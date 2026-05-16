@@ -1,0 +1,4 @@
+source_type,path,exists
+candidate_csv,/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_signal_fix_candidate_table.csv,True
+net_file,/Users/junlee/Desktop/2026-1/js/result/phase_next_remaining22_p1_signal_fix_20260516_010953/remaining_p1_signal_fix_net_v1.net.xml,True
+factory_table,/Users/junlee/Desktop/2026-1/js/result/phase_next_real_csv_crossing_factory_20260514_103928/real_csv_crossing_factory_table.csv,False

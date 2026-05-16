@@ -6,6 +6,7 @@ import csv
 import json
 import shutil
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -98,6 +99,10 @@ def _now_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
+def _default_candidate_metadata_source() -> Path:
+    return Path(__file__).resolve().parents[2] / "smart_crosswalk_sumo" / "data" / "crosswalk_stepwise_result_50m.csv"
+
+
 def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -182,6 +187,16 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _safe_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and np.isnan(value):
+        return ""
+    if pd.isna(value):
+        return ""
+    return str(value)
+
+
 def _root_readme_text(output_root: Path) -> str:
     return "\n".join(
         [
@@ -211,6 +226,7 @@ def _root_readme_text(output_root: Path) -> str:
             "- `readme/` per-table notes",
             "- `commands/` executable shell scripts",
             "- `manifests/` run plans and single-candidate CSVs",
+            "- `manifests/run_validation_manifest.csv` validation catalog",
             "- `runs/` actual run output directories used by the generated commands",
             "",
             "Recommended flow:",
@@ -309,17 +325,89 @@ def _presence_check_df(inventory_df: pd.DataFrame, result_root: Path) -> pd.Data
     return pd.DataFrame(rows)
 
 
-def _load_group_specs(input_root: Path, output_root: Path) -> list[GroupSpec]:
+def _load_group_specs(input_root: Path, output_root: Path, active_root: Path | None = None) -> list[GroupSpec]:
+    """Load group specs for all 4 active experiment groups.
+
+    active_root: explicit path to result/active/ — the source of truth for nets and CSVs.
+    When provided, CSV/nets are loaded directly from result/active/csv/ and result/active/nets/.
+    Falls back to legacy input_root paths when active_root files are absent.
+
+    p1_p4_recovery_6: NODE_5830 excluded (confirmed 2026-05-16).
+    project_root fix: input_root is <project>/result/<subdir>, so parent.parent = project root.
+    """
     recovery_root = input_root
-    main_df = _read_csv(recovery_root / "main_verified_current_net_12.csv")
-    signal_df = _read_csv(recovery_root / "signal_fix_candidate_table.csv")
-    generated_df = _read_csv(recovery_root / "generated_signal_candidate_table.csv")
+
+    # Resolve active root explicitly (avoid recovery_root.parent path-depth bug)
+    if active_root is not None:
+        ar = active_root.resolve()
+    else:
+        # input_root is typically <project>/result/<something>
+        # parent = <project>/result  ;  parent.parent = <project>
+        ar = recovery_root.parent.parent / "result" / "active"
+
+    active_nets = ar / "nets"
+    active_csv  = ar / "csv"
+    project_result = ar.parent  # <project>/result
+
+    def _active_net(name: str, legacy: Path) -> Path:
+        candidate = active_nets / name
+        return candidate.resolve() if candidate.exists() else legacy.resolve()
+
+    def _active_csv_file(name: str, fallback_dir: Path, fallback_name: str) -> Path:
+        candidate = active_csv / name
+        return candidate.resolve() if candidate.exists() else (fallback_dir / fallback_name).resolve()
+
+    # --- current_main_12 ---
+    main_net = _active_net(
+        "current_main_12.net.xml",
+        project_result / "phase_next_recovery_command_plan_20260514_200908" / "batch_03_run" / "recovery_tls_batch_network_v1.net.xml",
+    )
+    main_src_csv = _active_csv_file(
+        "current_main_12_candidates.csv",
+        recovery_root,
+        "main_verified_current_net_12.csv",
+    )
+    main_df = _read_csv(main_src_csv)
+
+    # --- signal_fix_9 ---
+    signal_net = _active_net("signal_fix_9.net.xml", recovery_root / "signal_fix_net_v1.net.xml")
+    signal_src_csv = _active_csv_file(
+        "signal_fix_9_candidates.csv",
+        recovery_root,
+        "signal_fix_candidate_table.csv",
+    )
+    signal_df = _read_csv(signal_src_csv)
+
+    # --- generated_signal_7 ---
+    generated_net = _active_net("generated_signal_7.net.xml", recovery_root / "generated_signal_net_v1.net.xml")
+    generated_src_csv = _active_csv_file(
+        "generated_signal_7_candidates.csv",
+        recovery_root,
+        "generated_signal_candidate_table.csv",
+    )
+    generated_df = _read_csv(generated_src_csv)
+
+    # --- p1_p4_recovery_6 (NODE_5830 hard-excluded) ---
+    p1_p4_net = _active_net(
+        "p1_p4_recovery_6.net.xml",
+        project_result / "phase_next_p1_p4_combined_recovery_20260516_020409" / "p1_p4_recovery_net.net.xml",
+    )
+    p1_p4_src_csv = _active_csv_file(
+        "p1_p4_recovery_6_candidates.csv",
+        project_result / "phase_next_p1_p4_combined_recovery_20260516_020409" / "csv",
+        "p1_p4_recovery_candidate_table.csv",
+    )
+    p1_p4_df_raw = _read_csv(p1_p4_src_csv)
+    if not p1_p4_df_raw.empty and "crosswalk_id" in p1_p4_df_raw.columns:
+        p1_p4_df = p1_p4_df_raw[p1_p4_df_raw["crosswalk_id"] != "NODE_5830"].copy().reset_index(drop=True)
+    else:
+        p1_p4_df = p1_p4_df_raw.copy()
 
     specs = [
         GroupSpec(
             run_group="current_main_12",
             net_group="current_main",
-            baseline_net_file=(recovery_root.parent / "phase_next_recovery_command_plan_20260514_200908" / "batch_03_run" / "recovery_tls_batch_network_v1.net.xml").resolve(),
+            baseline_net_file=main_net,
             full_candidate_csv=(output_root / "manifests" / "current_main_12_candidates.csv").resolve(),
             smart_candidates=main_df.copy(),
             baseline_placeholder_crosswalk_id="BASELINE_CURRENT_MAIN_12",
@@ -327,7 +415,7 @@ def _load_group_specs(input_root: Path, output_root: Path) -> list[GroupSpec]:
         GroupSpec(
             run_group="signal_fix_9",
             net_group="signal_fix",
-            baseline_net_file=(recovery_root / "signal_fix_net_v1.net.xml").resolve(),
+            baseline_net_file=signal_net,
             full_candidate_csv=(output_root / "manifests" / "signal_fix_9_candidates.csv").resolve(),
             smart_candidates=signal_df.copy(),
             baseline_placeholder_crosswalk_id="BASELINE_SIGNAL_FIX_9",
@@ -335,13 +423,22 @@ def _load_group_specs(input_root: Path, output_root: Path) -> list[GroupSpec]:
         GroupSpec(
             run_group="generated_signal_7",
             net_group="generated_signal",
-            baseline_net_file=(recovery_root / "generated_signal_net_v1.net.xml").resolve(),
+            baseline_net_file=generated_net,
             full_candidate_csv=(output_root / "manifests" / "generated_signal_7_candidates.csv").resolve(),
             smart_candidates=generated_df.copy(),
             baseline_placeholder_crosswalk_id="BASELINE_GENERATED_SIGNAL_7",
         ),
+        GroupSpec(
+            run_group="p1_p4_recovery_6",
+            net_group="p1_p4_recovery",
+            baseline_net_file=p1_p4_net,
+            full_candidate_csv=(output_root / "manifests" / "p1_p4_recovery_6_candidates.csv").resolve(),
+            smart_candidates=p1_p4_df.copy(),
+            baseline_placeholder_crosswalk_id="BASELINE_P1_P4_RECOVERY_6",
+        ),
     ]
     return specs
+
 
 
 def _build_single_candidate_csvs(spec: GroupSpec, single_root: Path) -> list[Path]:
@@ -477,6 +574,7 @@ def _build_all_groups_script(output_root: Path) -> str:
             'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_current_main_12.sh"',
             'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_signal_fix_9.sh"',
             'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_generated_signal_7.sh"',
+            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_p1_p4_recovery_6.sh"',
             "",
         ]
     )
@@ -588,6 +686,525 @@ def _build_plan_by_group(specs: list[GroupSpec], output_root: Path) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
+def _build_candidate_metadata(
+    specs: list[GroupSpec],
+    source_csv: Path,
+    expected_smart_ids: set[str] | None = None,
+) -> pd.DataFrame:
+    source_df = _read_csv(source_csv)
+    columns = [
+        "crosswalk_id",
+        "dong_name",
+        "admin_dong",
+        "net_group",
+        "run_group",
+        "net_file",
+        "source_csv",
+        "source_rank",
+        "risk_rank",
+        "risk_score",
+        "phase6_status_label",
+        "is_smart_target",
+    ]
+    if source_df.empty:
+        return pd.DataFrame(columns=columns)
+    if "crosswalk_id" not in source_df.columns:
+        raise ValueError(f"Missing crosswalk_id in candidate metadata source: {source_csv}")
+
+    source_df = source_df.copy().reset_index(drop=False).rename(columns={"index": "source_rank"})
+    source_df["crosswalk_id"] = source_df["crosswalk_id"].astype(str).str.strip()
+    source_df["source_rank"] = pd.to_numeric(source_df["source_rank"], errors="coerce").fillna(-1).astype(int) + 1
+    if "risk_score" in source_df.columns:
+        source_df["risk_score"] = pd.to_numeric(source_df["risk_score"], errors="coerce")
+        risk_rank_df = source_df.sort_values(
+            ["risk_score", "crosswalk_id"],
+            ascending=[False, True],
+            na_position="last",
+        ).reset_index(drop=True)
+        risk_rank_map = {str(row["crosswalk_id"]): idx + 1 for idx, row in risk_rank_df.iterrows()}
+    else:
+        source_df["risk_score"] = np.nan
+        risk_rank_map = {}
+
+    source_lookup: dict[str, dict[str, Any]] = {}
+    for _, row in source_df.iterrows():
+        key = str(row.get("crosswalk_id", "")).strip()
+        if not key:
+            continue
+        source_lookup[key] = row.to_dict()
+
+    rows: list[dict[str, Any]] = []
+    smart_ids: set[str] = set()
+    for spec in specs:
+        if spec.smart_candidates.empty:
+            continue
+        for _, row in spec.smart_candidates.iterrows():
+            crosswalk_id = str(row.get("crosswalk_id", "")).strip()
+            if not crosswalk_id:
+                continue
+            smart_ids.add(crosswalk_id)
+            source_row = source_lookup.get(crosswalk_id)
+            if source_row is None:
+                raise ValueError(f"Missing candidate metadata source row for crosswalk_id={crosswalk_id}")
+            status_value = source_row.get("phase6_status_label", "")
+            if pd.isna(status_value) or str(status_value).strip() == "":
+                status_value = source_row.get("final_tier", "")
+            if pd.isna(status_value) or str(status_value).strip() == "":
+                status_value = row.get("phase6_status_label", row.get("final_tier", ""))
+            risk_score = source_row.get("risk_score", row.get("risk_score", np.nan))
+            rows.append(
+                {
+                    "crosswalk_id": crosswalk_id,
+                    "dong_name": source_row.get("dong_name", row.get("dong_name", "")),
+                    "admin_dong": source_row.get("admin_dong", row.get("admin_dong", "")),
+                    "net_group": spec.net_group,
+                    "run_group": spec.run_group,
+                    "net_file": spec.baseline_net_file.as_posix(),
+                    "source_csv": source_csv.resolve().as_posix(),
+                    "source_rank": int(source_row.get("source_rank", np.nan)) if pd.notna(source_row.get("source_rank", np.nan)) else np.nan,
+                    "risk_rank": int(risk_rank_map.get(crosswalk_id, np.nan)) if crosswalk_id in risk_rank_map else np.nan,
+                    "risk_score": _safe_float(risk_score),
+                    "phase6_status_label": str(status_value).strip(),
+                    "is_smart_target": True,
+                }
+            )
+
+    metadata_df = pd.DataFrame(rows, columns=columns)
+    if not metadata_df.empty:
+        metadata_df = metadata_df.sort_values(["run_group", "risk_rank", "crosswalk_id"], ascending=[True, True, True]).reset_index(drop=True)
+    if expected_smart_ids is not None:
+        metadata_ids = set(metadata_df["crosswalk_id"].astype(str).tolist()) if not metadata_df.empty else set()
+        missing = sorted(expected_smart_ids - metadata_ids)
+        extra = sorted(metadata_ids - expected_smart_ids)
+        if missing or extra:
+            raise ValueError(
+                "candidate_metadata crosswalk_id mismatch: "
+                f"missing={missing[:10]}, extra={extra[:10]}"
+            )
+    if "dong_name" in metadata_df.columns and metadata_df["dong_name"].isna().any():
+        raise ValueError("candidate_metadata is missing dong_name for at least one row")
+    if "admin_dong" in metadata_df.columns and metadata_df["admin_dong"].isna().any():
+        raise ValueError("candidate_metadata is missing admin_dong for at least one row")
+    return metadata_df
+
+
+def _load_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _find_smoke_candidate_validation_json(output_dir: Path) -> Path | None:
+    candidates = sorted(output_dir.glob("phase6_smoke_*_candidate_validation.json"))
+    return candidates[0] if candidates else None
+
+
+def _load_pedestrian_depart_plan(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    return _read_csv(path)
+
+
+def _load_pedestrian_route_diagnostics(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    return _read_csv(path)
+
+
+def _load_pedestrian_departures_from_xml(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=["crosswalk_id", "person_id", "depart"])
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return pd.DataFrame(columns=["crosswalk_id", "person_id", "depart"])
+    rows: list[dict[str, Any]] = []
+    for person in root.findall("person"):
+        person_id = _safe_str(person.get("id"))
+        depart = person.get("depart")
+        crosswalk_id = ""
+        parts = person_id.split("_")
+        if len(parts) >= 4:
+            crosswalk_id = "_".join(parts[3:])
+        rows.append(
+            {
+                "crosswalk_id": crosswalk_id,
+                "person_id": person_id,
+                "depart": _safe_float(depart),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _load_pedestrian_demand_sources() -> tuple[pd.DataFrame, list[Path]]:
+    source_paths = [
+        Path(__file__).resolve().parents[2] / "result" / "active" / "pedestrian_assumption" / "crosswalk_pedestrian_assumptions_top50_daytime_high_1p2.csv",
+        Path(__file__).resolve().parents[2] / "result" / "active" / "pedestrian_assumption" / "crosswalk_pedestrian_assumptions_daytime_high_1p2.csv",
+    ]
+    frames: list[pd.DataFrame] = []
+    used_paths: list[Path] = []
+    for path in source_paths:
+        frame = _read_csv(path)
+        if frame.empty:
+            continue
+        if "admin_dong" not in frame.columns:
+            continue
+        cols = [c for c in ["admin_dong", "dong_name", "crosswalk_id", "base_pedestrian_600s", "final_pedestrian_600s", "ped_source", "scenario_name"] if c in frame.columns]
+        frames.append(frame[cols].copy())
+        used_paths.append(path)
+    if not frames:
+        return pd.DataFrame(), []
+    combined = pd.concat(frames, ignore_index=True)
+    if "final_pedestrian_600s" not in combined.columns:
+        combined["final_pedestrian_600s"] = pd.NA
+    if "base_pedestrian_600s" not in combined.columns:
+        combined["base_pedestrian_600s"] = pd.NA
+    combined["admin_dong"] = combined["admin_dong"].astype(str).str.strip()
+    combined["crosswalk_id"] = combined.get("crosswalk_id", pd.Series(dtype=str)).astype(str).str.strip()
+    combined["source_file"] = used_paths[0].as_posix() if len(used_paths) == 1 else ";".join(path.as_posix() for path in used_paths)
+    return combined, used_paths
+
+
+def _resolve_demand_lookup(source_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    if source_df.empty or "admin_dong" not in source_df.columns:
+        return lookup
+    ordered = source_df.copy()
+    if "final_pedestrian_600s" in ordered.columns:
+        ordered["final_pedestrian_600s"] = pd.to_numeric(ordered["final_pedestrian_600s"], errors="coerce")
+        ordered = ordered.sort_values(["admin_dong", "final_pedestrian_600s", "crosswalk_id"], ascending=[True, False, True], na_position="last")
+    else:
+        ordered = ordered.sort_values(["admin_dong", "crosswalk_id"], ascending=[True, True])
+    for _, row in ordered.iterrows():
+        admin = _safe_str(row.get("admin_dong"))
+        if not admin:
+            continue
+        if admin in lookup:
+            continue
+        lookup[admin] = {
+            "admin_dong": admin,
+            "dong_name": _safe_str(row.get("dong_name")),
+            "demand_10min": _safe_float(row.get("final_pedestrian_600s")),
+            "base_pedestrian_600s": _safe_float(row.get("base_pedestrian_600s")),
+            "source_file": _safe_str(row.get("source_file")),
+            "ped_source": _safe_str(row.get("ped_source")),
+        }
+    return lookup
+
+
+def _load_smoke_summary_row(output_dir: Path) -> pd.DataFrame:
+    summary_path = output_dir / "phase6_smoke_summary.csv"
+    if not summary_path.exists():
+        return pd.DataFrame()
+    return _read_csv(summary_path)
+
+
+def _count_xml_persons(route_path: Path) -> int | None:
+    if not route_path.exists():
+        return None
+    try:
+        root = ET.parse(route_path).getroot()
+    except Exception:
+        return None
+    return len(root.findall("person"))
+
+
+def _sum_runtime_observed_ped_count(summary_df: pd.DataFrame) -> float | None:
+    if summary_df.empty or "ped_crossing_person_count" not in summary_df.columns:
+        return None
+    values = pd.to_numeric(summary_df["ped_crossing_person_count"], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.sum())
+
+
+def _validation_reason(parts: list[str]) -> str:
+    clean = [p for p in parts if p]
+    return "; ".join(clean) if clean else "ok"
+
+
+def _build_pedestrian_smoke_validation_rows(
+    manifest_row: pd.Series,
+    candidate_metadata_df: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    run_id = _safe_str(manifest_row.get("run_id"))
+    scenario = _safe_str(manifest_row.get("scenario"))
+    seed = manifest_row.get("seed")
+    run_group = _safe_str(manifest_row.get("run_group"))
+    net_group = _safe_str(manifest_row.get("net_group"))
+    output_dir = Path(_safe_str(manifest_row.get("output_dir"))).expanduser()
+    output_exists = output_dir.is_dir()
+    summary_path = output_dir / "phase6_smoke_summary.csv"
+    demand_path = output_dir / "demand_pedestrian.rou.xml"
+    depart_plan_path = output_dir / "pedestrian_depart_plan.csv"
+    diagnostics_path = output_dir / "pedestrian_route_diagnostics.csv"
+    validation_json_path = _find_smoke_candidate_validation_json(output_dir) if output_exists else None
+    validation_json = _load_optional_json(validation_json_path) if validation_json_path else {}
+    candidate_lookup = (
+        candidate_metadata_df.set_index("crosswalk_id", drop=False)
+        if not candidate_metadata_df.empty and "crosswalk_id" in candidate_metadata_df.columns
+        else pd.DataFrame()
+    )
+
+    if not output_exists or not summary_path.exists():
+        return [
+            {
+                "run_id": run_id,
+                "scenario": scenario,
+                "seed": seed,
+                "net_group": net_group,
+                "run_group": run_group,
+                "crosswalk_id": _safe_str(manifest_row.get("crosswalk_id")),
+                "dong_name": "",
+                "admin_dong": "",
+                "output_dir": str(output_dir),
+                "expected_ped_count": np.nan,
+                "observed_ped_count": np.nan,
+                "ped_count_pass": False,
+                "spacing_pass": False,
+                "phase_aligned_pass": False,
+                "pedestrian_crossing_pass": False,
+                "extension_pass": False,
+                "overall_pass": False,
+                "reason": _validation_reason(
+                    [
+                        "output_dir_missing" if not output_exists else "",
+                        "phase6_smoke_summary_missing" if not summary_path.exists() else "",
+                    ]
+                ),
+                "output_dir_exists": output_exists,
+                "phase6_smoke_summary_exists": summary_path.exists(),
+                "demand_pedestrian_exists": demand_path.exists(),
+                "pedestrian_depart_plan_exists": depart_plan_path.exists(),
+                "pedestrian_route_diagnostics_exists": diagnostics_path.exists(),
+                "candidate_validation_json_exists": bool(validation_json_path),
+                "source_crosswalk_id": _safe_str(manifest_row.get("crosswalk_id")),
+                "expected_ped_repeat_count": np.nan,
+                "observed_depart_groups": np.nan,
+                "expected_extension_count": np.nan,
+                "observed_extension_count": np.nan,
+            }
+        ]
+
+    summary_df = _read_csv(summary_path)
+    if summary_df.empty:
+        return [
+            {
+                "run_id": run_id,
+                "scenario": scenario,
+                "seed": seed,
+                "net_group": net_group,
+                "run_group": run_group,
+                "crosswalk_id": _safe_str(manifest_row.get("crosswalk_id")),
+                "dong_name": "",
+                "admin_dong": "",
+                "output_dir": str(output_dir),
+                "expected_ped_count": np.nan,
+                "observed_ped_count": np.nan,
+                "ped_count_pass": False,
+                "spacing_pass": False,
+                "phase_aligned_pass": False,
+                "pedestrian_crossing_pass": False,
+                "extension_pass": False,
+                "overall_pass": False,
+                "reason": "phase6_smoke_summary_empty",
+                "output_dir_exists": output_exists,
+                "phase6_smoke_summary_exists": summary_path.exists(),
+                "demand_pedestrian_exists": demand_path.exists(),
+                "pedestrian_depart_plan_exists": depart_plan_path.exists(),
+                "pedestrian_route_diagnostics_exists": diagnostics_path.exists(),
+                "candidate_validation_json_exists": bool(validation_json_path),
+                "source_crosswalk_id": _safe_str(manifest_row.get("crosswalk_id")),
+                "expected_ped_repeat_count": np.nan,
+                "observed_depart_groups": np.nan,
+                "expected_extension_count": np.nan,
+                "observed_extension_count": np.nan,
+            }
+        ]
+
+    plan_df = _load_pedestrian_depart_plan(depart_plan_path)
+    diag_df = _load_pedestrian_route_diagnostics(diagnostics_path)
+    xml_df = _load_pedestrian_departures_from_xml(demand_path)
+
+    plan_lookup = plan_df.set_index("crosswalk_id", drop=False) if not plan_df.empty and "crosswalk_id" in plan_df.columns else pd.DataFrame()
+    diag_lookup = diag_df.groupby("crosswalk_id") if not diag_df.empty and "crosswalk_id" in diag_df.columns else None
+    xml_lookup = xml_df.groupby("crosswalk_id") if not xml_df.empty and "crosswalk_id" in xml_df.columns else None
+
+    rows: list[dict[str, Any]] = []
+    for _, summary_row in summary_df.iterrows():
+        crosswalk_id = _safe_str(summary_row.get("crosswalk_id"))
+        meta = candidate_lookup.loc[crosswalk_id] if not candidate_metadata_df.empty and crosswalk_id in candidate_lookup.index else None
+        expected_ped_repeat_count = _safe_float(summary_row.get("expected_ped_repeat_count"))
+        observed_ped_count = _safe_float(summary_row.get("ped_crossing_person_count"))
+        ped_repeat_match = summary_row.get("ped_repeat_count_match")
+        expected_extension_count = 0 if scenario == "baseline" else 1
+        observed_extension_count = _safe_float(summary_row.get("extension_count"))
+        expected_ped_count = expected_ped_repeat_count
+
+        if diag_lookup is not None and crosswalk_id in diag_lookup.groups:
+            diag_crosswalk = diag_lookup.get_group(crosswalk_id)
+        else:
+            diag_crosswalk = pd.DataFrame()
+        if xml_lookup is not None and crosswalk_id in xml_lookup.groups:
+            xml_crosswalk = xml_lookup.get_group(crosswalk_id)
+        else:
+            xml_crosswalk = pd.DataFrame()
+
+        depart_times: list[float] = []
+        if not diag_crosswalk.empty and "depart" in diag_crosswalk.columns:
+            depart_times = sorted({float(v) for v in pd.to_numeric(diag_crosswalk["depart"], errors="coerce").dropna().tolist()})
+        elif not xml_crosswalk.empty and "depart" in xml_crosswalk.columns:
+            depart_times = sorted({float(v) for v in pd.to_numeric(xml_crosswalk["depart"], errors="coerce").dropna().tolist()})
+
+        plan_row = plan_lookup.loc[crosswalk_id] if not plan_df.empty and crosswalk_id in plan_lookup.index else None
+        plan_spacing = _safe_float(plan_row.get("ped_repeat_spacing_sec")) if plan_row is not None else None
+        plan_depart_strategy = _safe_str(plan_row.get("depart_strategy")) if plan_row is not None else ""
+        plan_depart_time = _safe_float(plan_row.get("depart_time")) if plan_row is not None else None
+        plan_first_green = _safe_float(plan_row.get("first_green_start_time")) if plan_row is not None else None
+
+        spacing_pass = False
+        if plan_row is not None and len(depart_times) >= 2 and plan_spacing is not None:
+            diffs = [round(depart_times[i + 1] - depart_times[i], 6) for i in range(len(depart_times) - 1)]
+            spacing_pass = all(abs(diff - plan_spacing) <= 1e-6 for diff in diffs)
+
+        phase_aligned_pass = False
+        if plan_row is not None:
+            strategy_ok = "phase_aligned" in plan_depart_strategy
+            timing_ok = plan_depart_time is not None and plan_first_green is not None and abs((plan_first_green - plan_depart_time) - 1.5) <= 1e-6
+            phase_aligned_pass = bool(strategy_ok and timing_ok)
+
+        pedestrian_crossing_pass = bool((observed_ped_count or 0) > 0)
+        if validation_json_path and isinstance(validation_json, dict) and crosswalk_id in validation_json:
+            json_entry = validation_json.get(crosswalk_id, {})
+            pedestrian_crossing_pass = bool(pedestrian_crossing_pass and _safe_bool(json_entry.get("contains_crossing_edge", True)))
+
+        ped_count_pass = bool(ped_repeat_match) if ped_repeat_match is not None and not pd.isna(ped_repeat_match) else bool((observed_ped_count or 0) == expected_ped_count)
+        extension_pass = bool((_safe_float(observed_extension_count) or 0) == expected_extension_count)
+        overall_pass = bool(
+            ped_count_pass
+            and spacing_pass
+            and phase_aligned_pass
+            and pedestrian_crossing_pass
+            and extension_pass
+            and output_exists
+            and summary_path.exists()
+            and demand_path.exists()
+            and depart_plan_path.exists()
+        )
+
+        reason_parts = [
+            "" if output_exists else "output_dir_missing",
+            "" if summary_path.exists() else "phase6_smoke_summary_missing",
+            "" if demand_path.exists() else "demand_pedestrian_missing",
+            "" if depart_plan_path.exists() else "pedestrian_depart_plan_missing",
+            "" if ped_count_pass else f"ped_count_mismatch(expected={expected_ped_count},observed={observed_ped_count})",
+            "" if spacing_pass else "spacing_mismatch",
+            "" if phase_aligned_pass else "phase_alignment_mismatch",
+            "" if pedestrian_crossing_pass else "no_pedestrian_crossing_detected",
+            "" if extension_pass else f"extension_mismatch(expected={expected_extension_count},observed={observed_extension_count})",
+        ]
+
+        rows.append(
+            {
+                "run_id": run_id,
+                "scenario": scenario,
+                "seed": seed,
+                "net_group": net_group,
+                "run_group": run_group,
+                "crosswalk_id": crosswalk_id,
+                "dong_name": _safe_str(meta["dong_name"]) if meta is not None and "dong_name" in meta else "",
+                "admin_dong": _safe_str(meta["admin_dong"]) if meta is not None and "admin_dong" in meta else "",
+                "output_dir": str(output_dir),
+                "expected_ped_count": expected_ped_count,
+                "observed_ped_count": observed_ped_count,
+                "ped_count_pass": ped_count_pass,
+                "spacing_pass": spacing_pass,
+                "phase_aligned_pass": phase_aligned_pass,
+                "pedestrian_crossing_pass": pedestrian_crossing_pass,
+                "extension_pass": extension_pass,
+                "overall_pass": overall_pass,
+                "reason": _validation_reason(reason_parts),
+                "output_dir_exists": output_exists,
+                "phase6_smoke_summary_exists": summary_path.exists(),
+                "demand_pedestrian_exists": demand_path.exists(),
+                "pedestrian_depart_plan_exists": depart_plan_path.exists(),
+                "pedestrian_route_diagnostics_exists": diagnostics_path.exists(),
+                "candidate_validation_json_exists": bool(validation_json_path),
+                "source_crosswalk_id": _safe_str(summary_row.get("crosswalk_id")),
+                "expected_ped_repeat_count": expected_ped_repeat_count,
+                "observed_depart_groups": len(depart_times),
+                "expected_extension_count": expected_extension_count,
+                "observed_extension_count": observed_extension_count,
+                "ped_repeat_spacing_sec_expected": plan_spacing,
+                "depart_strategy": plan_depart_strategy,
+                "depart_time": plan_depart_time,
+                "first_green_start_time": plan_first_green,
+            }
+        )
+    return rows
+
+
+def _build_pedestrian_smoke_validation(
+    run_manifest_df: pd.DataFrame,
+    candidate_metadata_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rows: list[dict[str, Any]] = []
+    for _, manifest_row in run_manifest_df.iterrows():
+        rows.extend(_build_pedestrian_smoke_validation_rows(manifest_row, candidate_metadata_df))
+    validation_df = pd.DataFrame(rows)
+    if validation_df.empty:
+        summary_df = pd.DataFrame(
+            [
+                {
+                    "run_group": "",
+                    "net_group": "",
+                    "scenario": "",
+                    "total_rows": 0,
+                    "overall_pass_rows": 0,
+                    "overall_fail_rows": 0,
+                    "ped_count_pass_rows": 0,
+                    "spacing_pass_rows": 0,
+                    "phase_aligned_pass_rows": 0,
+                    "pedestrian_crossing_pass_rows": 0,
+                    "extension_pass_rows": 0,
+                    "output_dir_missing_rows": 0,
+                    "summary_missing_rows": 0,
+                    "demand_missing_rows": 0,
+                    "depart_plan_missing_rows": 0,
+                }
+            ]
+        )
+        return validation_df, summary_df
+
+    summary_rows: list[dict[str, Any]] = []
+    for keys, sub in validation_df.groupby(["run_group", "net_group", "scenario"], dropna=False):
+        run_group, net_group, scenario = keys
+        summary_rows.append(
+            {
+                "run_group": run_group,
+                "net_group": net_group,
+                "scenario": scenario,
+                "total_rows": int(len(sub)),
+                "overall_pass_rows": int(sub["overall_pass"].fillna(False).astype(bool).sum()) if "overall_pass" in sub.columns else 0,
+                "overall_fail_rows": int((~sub["overall_pass"].fillna(False).astype(bool)).sum()) if "overall_pass" in sub.columns else 0,
+                "ped_count_pass_rows": int(sub["ped_count_pass"].fillna(False).astype(bool).sum()) if "ped_count_pass" in sub.columns else 0,
+                "spacing_pass_rows": int(sub["spacing_pass"].fillna(False).astype(bool).sum()) if "spacing_pass" in sub.columns else 0,
+                "phase_aligned_pass_rows": int(sub["phase_aligned_pass"].fillna(False).astype(bool).sum()) if "phase_aligned_pass" in sub.columns else 0,
+                "pedestrian_crossing_pass_rows": int(sub["pedestrian_crossing_pass"].fillna(False).astype(bool).sum()) if "pedestrian_crossing_pass" in sub.columns else 0,
+                "extension_pass_rows": int(sub["extension_pass"].fillna(False).astype(bool).sum()) if "extension_pass" in sub.columns else 0,
+                "output_dir_missing_rows": int((~sub["output_dir_exists"].fillna(False).astype(bool)).sum()) if "output_dir_exists" in sub.columns else 0,
+                "summary_missing_rows": int((~sub["phase6_smoke_summary_exists"].fillna(False).astype(bool)).sum()) if "phase6_smoke_summary_exists" in sub.columns else 0,
+                "demand_missing_rows": int((~sub["demand_pedestrian_exists"].fillna(False).astype(bool)).sum()) if "demand_pedestrian_exists" in sub.columns else 0,
+                "depart_plan_missing_rows": int((~sub["pedestrian_depart_plan_exists"].fillna(False).astype(bool)).sum()) if "pedestrian_depart_plan_exists" in sub.columns else 0,
+            }
+        )
+    summary_df = pd.DataFrame(summary_rows).sort_values(["run_group", "net_group", "scenario"]).reset_index(drop=True)
+    return validation_df, summary_df
+
+
 def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     baseline_rows: list[dict[str, Any]] = []
     smart_rows: list[dict[str, Any]] = []
@@ -620,6 +1237,7 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
                         "output_dir": str(smart_out),
                         "log_file": str(smart_log),
                         "expected_summary_csv": str(smart_out / "phase6_smoke_summary.csv"),
+                        "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
                         "skip_if_exists": True,
                         "command": (
                             "python3 -m smart_crosswalk_sumo.run_phase6_recovery_smoke "
@@ -647,6 +1265,7 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
                     "output_dir": str(base_out),
                     "log_file": str(base_log),
                     "expected_summary_csv": str(base_out / "phase6_smoke_summary.csv"),
+                    "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
                     "skip_if_exists": True,
                     "command": (
                         "python3 -m smart_crosswalk_sumo.run_phase6_recovery_smoke "
@@ -661,6 +1280,191 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
     smart_df = pd.DataFrame(smart_rows)
     run_manifest_df = pd.concat([baseline_df, smart_df], ignore_index=True)
     return run_manifest_df, baseline_df, smart_df
+
+
+def _build_validation_manifest(
+    output_root: Path,
+    run_manifest_df: pd.DataFrame,
+    run_level_summary: pd.DataFrame,
+    comparison_df: pd.DataFrame,
+    metric_df: pd.DataFrame,
+    group_summary_df: pd.DataFrame,
+    completion_summary_df: pd.DataFrame,
+    inventory_df: pd.DataFrame,
+    audit_summary_df: pd.DataFrame,
+    presence_df: pd.DataFrame,
+    safety_summary_df: pd.DataFrame | None,
+    safety_missing_df: pd.DataFrame,
+    cleanup_audit_df: pd.DataFrame,
+    safe_df: pd.DataFrame,
+    review_df: pd.DataFrame,
+    protected_df: pd.DataFrame,
+) -> pd.DataFrame:
+    def _status(df: pd.DataFrame, required: set[str] | None = None) -> str:
+        if df is None or df.empty:
+            return "empty"
+        if required and not required.issubset(set(df.columns)):
+            return "partial"
+        return "ready"
+
+    rows: list[dict[str, Any]] = []
+    manifest_path = output_root / "manifests" / "run_validation_manifest.csv"
+
+    artifacts: list[tuple[str, str, str, Path, pd.DataFrame, set[str] | None, str]] = [
+        (
+            "run_manifest",
+            "manifest",
+            "planned_runs",
+            output_root / "run_manifest.csv",
+            run_manifest_df,
+            {"run_group", "scenario", "seed", "crosswalk_id", "output_dir"},
+            "source-of-truth run plan",
+        ),
+        (
+            "run_level_results",
+            "post_run",
+            "run_outputs",
+            output_root / "csv" / "seed30_run_level_results.csv",
+            run_level_summary,
+            {"run_group", "scenario", "seed", "completed"},
+            "per-run smoke output summary",
+        ),
+        (
+            "baseline_smart_comparison",
+            "post_run",
+            "paired_results",
+            output_root / "csv" / "seed30_baseline_smart_comparison.csv",
+            comparison_df,
+            {"crosswalk_id", "seed", "baseline_output_dir", "smart_output_dir"},
+            "baseline vs smart pairing table",
+        ),
+        (
+            "metric_summary",
+            "post_run",
+            "paired_results",
+            output_root / "csv" / "seed30_metric_summary.csv",
+            metric_df,
+            {"crosswalk_id", "metric"},
+            "metric aggregation across paired runs",
+        ),
+        (
+            "group_summary",
+            "post_run",
+            "group_summary",
+            output_root / "csv" / "seed30_group_summary.csv",
+            group_summary_df,
+            {"run_group", "completed_runs"},
+            "high-level per-group completion summary",
+        ),
+        (
+            "run_completion_summary",
+            "post_run",
+            "summary",
+            output_root / "run_completion_summary.csv",
+            completion_summary_df,
+            {"planned_total_runs", "completed_runs", "missing_runs"},
+            "pipeline completion summary",
+        ),
+        (
+            "csv_output_inventory",
+            "audit",
+            "csv_inventory",
+            output_root / "csv" / "csv_output_inventory.csv",
+            inventory_df,
+            {"file_path", "has_runtime_columns", "has_safety_columns"},
+            "inventory of CSV files under result root",
+        ),
+        (
+            "csv_pipeline_audit_summary",
+            "audit",
+            "csv_inventory",
+            output_root / "csv" / "csv_pipeline_audit_summary.csv",
+            audit_summary_df,
+            {"csv_file_count", "csv_with_runtime_columns", "csv_with_safety_columns"},
+            "aggregate CSV audit summary",
+        ),
+        (
+            "safety_metric_presence_check",
+            "audit",
+            "safety",
+            output_root / "csv" / "safety_metric_presence_check.csv",
+            presence_df,
+            {"file_path", "has_safety"},
+            "keyword-based safety metric presence scan",
+        ),
+        (
+            "safety_surrogate_summary",
+            "audit",
+            "safety",
+            output_root / "csv" / "safety_surrogate_summary.csv",
+            safety_summary_df if safety_summary_df is not None else pd.DataFrame(),
+            {"run_name", "crosswalk_id", "elapsed_sec"},
+            "safety surrogate summary when metrics are available",
+        ),
+        (
+            "safety_surrogate_missing_reason",
+            "audit",
+            "safety",
+            output_root / "csv" / "safety_surrogate_missing_reason.csv",
+            safety_missing_df,
+            {"reason", "note"},
+            "fallback when full safety surrogate metrics are absent",
+        ),
+        (
+            "result_cleanup_inventory",
+            "cleanup",
+            "cleanup",
+            output_root / "csv" / "result_cleanup_inventory.csv",
+            cleanup_audit_df,
+            {"file_path", "cleanup_status", "safe_to_delete"},
+            "dry-run cleanup inventory",
+        ),
+        (
+            "result_cleanup_safe_to_delete",
+            "cleanup",
+            "cleanup",
+            output_root / "csv" / "result_cleanup_safe_to_delete.csv",
+            safe_df,
+            {"file_path", "safe_to_delete"},
+            "conservative safe-to-archive subset",
+        ),
+        (
+            "result_cleanup_review_needed",
+            "cleanup",
+            "cleanup",
+            output_root / "csv" / "result_cleanup_review_needed.csv",
+            review_df,
+            {"file_path", "cleanup_status"},
+            "manual review subset",
+        ),
+        (
+            "result_cleanup_protected_files",
+            "cleanup",
+            "cleanup",
+            output_root / "csv" / "result_cleanup_protected_files.csv",
+            protected_df,
+            {"file_path", "cleanup_status"},
+            "protected files subset",
+        ),
+    ]
+
+    for validation_id, stage, scope, path, df, required, note in artifacts:
+        rows.append(
+            {
+                "validation_id": validation_id,
+                "validation_stage": stage,
+                "validation_scope": scope,
+                "source_artifact": path.name,
+                "source_path": str(path),
+                "status": _status(df, required),
+                "row_count": int(len(df)) if df is not None else 0,
+                "column_count": int(len(df.columns)) if df is not None else 0,
+                "evidence_summary": f"rows={len(df)}, cols={len(df.columns)}" if df is not None else "rows=0, cols=0",
+                "note": note,
+                "manifest_path": str(manifest_path),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _build_run_completion_summary(run_manifest_df: pd.DataFrame, output_root: Path, completed_df: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -1030,6 +1834,11 @@ def _write_prepare_outputs(
         _build_single_candidate_csvs(spec, single_csv_root)
 
     run_manifest_df, baseline_df, smart_df = _build_run_manifest(specs, output_root)
+    candidate_metadata_df = _build_candidate_metadata(
+        specs,
+        _default_candidate_metadata_source(),
+        expected_smart_ids=set(str(v).strip() for v in run_manifest_df.loc[run_manifest_df["scenario"] == "smart", "crosswalk_id"].astype(str).tolist()),
+    )
     plan_df = _build_plan_by_group(specs, output_root)
     run_level_summary = _build_run_level_results(run_manifest_df)
     comparison_df, metric_df = _comparison_rows(run_level_summary, run_manifest_df)
@@ -1074,16 +1883,10 @@ def _write_prepare_outputs(
     # Main CSV outputs.
     _write_csv(run_manifest_df, output_root / "run_manifest.csv")
     _write_csv(run_manifest_df, output_root / "manifests" / "run_manifest.csv")
+    _write_csv(candidate_metadata_df, output_root / "manifests" / "candidate_metadata.csv")
     _write_csv(baseline_df, output_root / "manifests" / "baseline_run_manifest.csv")
     _write_csv(smart_df, output_root / "manifests" / "smart_run_manifest.csv")
     _write_csv(plan_df, output_root / "manifests" / "run_plan_by_group.csv")
-    _write_csv(run_level_summary, output_root / "csv" / "seed30_run_level_results.csv")
-    _write_csv(comparison_df, output_root / "csv" / "seed30_baseline_smart_comparison.csv")
-    _write_csv(metric_df, output_root / "csv" / "seed30_metric_summary.csv")
-    _write_csv(group_summary_df, output_root / "csv" / "seed30_group_summary.csv")
-    _write_csv(completion_summary_df, output_root / "run_completion_summary.csv")
-    _write_csv(completion_summary_df, output_root / "csv" / "run_completion_summary.csv")
-    _write_csv(inventory_df, output_root / "csv" / "csv_output_inventory.csv")
     audit_summary_df = pd.DataFrame(
         [
             {
@@ -1099,6 +1902,47 @@ def _write_prepare_outputs(
             }
         ]
     )
+    validation_manifest_df = _build_validation_manifest(
+        output_root,
+        run_manifest_df,
+        run_level_summary,
+        comparison_df,
+        metric_df,
+        group_summary_df,
+        completion_summary_df,
+        inventory_df,
+        audit_summary_df,
+        presence_df,
+        safety_summary_df,
+        safety_missing_df,
+        cleanup_audit_df,
+        safe_df,
+        review_df,
+        protected_df,
+    )
+    _write_csv(validation_manifest_df, output_root / "manifests" / "run_validation_manifest.csv")
+    _write_csv(
+        validation_manifest_df[
+            [
+                "validation_id",
+                "validation_stage",
+                "validation_scope",
+                "status",
+                "row_count",
+                "column_count",
+                "source_artifact",
+                "source_path",
+            ]
+        ].copy(),
+        output_root / "csv" / "run_validation_summary.csv",
+    )
+    _write_csv(run_level_summary, output_root / "csv" / "seed30_run_level_results.csv")
+    _write_csv(comparison_df, output_root / "csv" / "seed30_baseline_smart_comparison.csv")
+    _write_csv(metric_df, output_root / "csv" / "seed30_metric_summary.csv")
+    _write_csv(group_summary_df, output_root / "csv" / "seed30_group_summary.csv")
+    _write_csv(completion_summary_df, output_root / "run_completion_summary.csv")
+    _write_csv(completion_summary_df, output_root / "csv" / "run_completion_summary.csv")
+    _write_csv(inventory_df, output_root / "csv" / "csv_output_inventory.csv")
     _write_csv(audit_summary_df, output_root / "csv" / "csv_pipeline_audit_summary.csv")
     _write_csv(presence_df, output_root / "csv" / "safety_metric_presence_check.csv")
     if safety_summary_df is not None and not safety_summary_df.empty:
@@ -1135,11 +1979,25 @@ def _write_prepare_outputs(
         output_root,
         {
             "run_manifest.csv": run_manifest_df,
+            "candidate_metadata.csv": candidate_metadata_df,
+            "run_validation_manifest.csv": validation_manifest_df,
             "run_completion_summary.csv": completion_summary_df,
             "seed30_run_level_results.csv": run_level_summary,
             "seed30_baseline_smart_comparison.csv": comparison_df,
             "seed30_metric_summary.csv": metric_df,
             "seed30_group_summary.csv": group_summary_df,
+            "run_validation_summary.csv": validation_manifest_df[
+                [
+                    "validation_id",
+                    "validation_stage",
+                    "validation_scope",
+                    "status",
+                    "row_count",
+                    "column_count",
+                    "source_artifact",
+                    "source_path",
+                ]
+            ].copy(),
             "csv_output_inventory.csv": inventory_df,
             "csv_pipeline_audit_summary.csv": audit_summary_df,
             "safety_metric_presence_check.csv": presence_df,
@@ -1152,11 +2010,14 @@ def _write_prepare_outputs(
         },
         {
             "run_manifest.csv": "Planned run manifest for 30-seed execution. Baseline rows are one per seed; smart rows are one per candidate per seed.",
+            "candidate_metadata.csv": "Candidate metadata preserved separately from the execution manifest. One row per smart candidate.",
+            "run_validation_manifest.csv": "Catalog of validation artifacts produced by the pipeline package.",
             "run_completion_summary.csv": "Planned run completion summary for the pipeline root.",
             "seed30_run_level_results.csv": "One row per run-level output row from phase6_smoke_summary.csv.",
             "seed30_baseline_smart_comparison.csv": "Baseline vs smart comparison matched by run_group, net_group, seed, and crosswalk_id.",
             "seed30_metric_summary.csv": "Grouped metric summary across seeds.",
             "seed30_group_summary.csv": "High-level per-group completion summary.",
+            "run_validation_summary.csv": "Compact summary view of the validation catalog.",
             "csv_output_inventory.csv": "Inventory of CSV files under the result tree. Intended to catch missing metadata columns.",
             "csv_pipeline_audit_summary.csv": "Audit summary of metadata coverage.",
             "safety_metric_presence_check.csv": "Keyword-based safety metric presence scan.",
@@ -1173,6 +2034,8 @@ def _write_prepare_outputs(
     _write_text(output_root / "commands" / "command_to_run_30seed_current_main_12.sh", _build_group_script(specs[0], output_root, single_csv_root))
     _write_text(output_root / "commands" / "command_to_run_30seed_signal_fix_9.sh", _build_group_script(specs[1], output_root, single_csv_root))
     _write_text(output_root / "commands" / "command_to_run_30seed_generated_signal_7.sh", _build_group_script(specs[2], output_root, single_csv_root))
+    if len(specs) > 3:
+        _write_text(output_root / "commands" / "command_to_run_30seed_p1_p4_recovery_6.sh", _build_group_script(specs[3], output_root, single_csv_root))
     _write_text(output_root / "commands" / "command_to_run_30seed_all_groups.sh", _build_all_groups_script(output_root))
     _write_text(output_root / "commands" / "command_to_standardize_30seed_outputs.sh", _build_standardize_script(output_root))
     _write_text(output_root / "commands" / "command_to_check_30seed_results.sh", _build_check_script(output_root))
@@ -1188,9 +2051,23 @@ def _write_prepare_outputs(
 
     return {
         "run_manifest": run_manifest_df,
+        "candidate_metadata": candidate_metadata_df,
+        "run_validation_manifest": validation_manifest_df,
         "baseline_manifest": baseline_df,
         "smart_manifest": smart_df,
         "run_plan_by_group": plan_df,
+        "run_validation_summary": validation_manifest_df[
+            [
+                "validation_id",
+                "validation_stage",
+                "validation_scope",
+                "status",
+                "row_count",
+                "column_count",
+                "source_artifact",
+                "source_path",
+            ]
+        ].copy(),
         "run_level_results": run_level_summary,
         "baseline_smart_comparison": comparison_df,
         "metric_summary": metric_df,
@@ -1297,10 +2174,22 @@ def _cleanup_apply(result_root: Path, pipeline_root: Path) -> int:
 def cmd_prepare(args: argparse.Namespace) -> None:
     input_root = Path(args.input_root).expanduser().resolve()
     result_root = Path(args.result_root).expanduser().resolve()
-    output_root = Path(args.output_root).expanduser().resolve() if args.output_root else result_root / f"phase_next_30seed_28_ready_pipeline_{_now_stamp()}"
-    specs = _load_group_specs(input_root, output_root)
+    output_root = (
+        Path(args.output_root).expanduser().resolve()
+        if args.output_root
+        else result_root / f"phase_next_30seed_28_ready_pipeline_{_now_stamp()}"
+    )
+    active_root = Path(args.active_root).expanduser().resolve() if args.active_root else None
+    specs = _load_group_specs(input_root, output_root, active_root=active_root)
     _write_prepare_outputs(input_root, output_root, result_root, specs)
-    print(json.dumps({"output_root": str(output_root), "planned_total_runs": 930, "group_count": 3}, ensure_ascii=False, indent=2))
+    total_runs = sum(30 + len(s.smart_candidates) * 30 for s in specs)
+    print(
+        json.dumps(
+            {"output_root": str(output_root), "planned_total_runs": total_runs, "group_count": len(specs)},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 def cmd_aggregate(args: argparse.Namespace) -> None:
@@ -1312,11 +2201,17 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
     run_level_df = _build_run_level_results(run_manifest)
     comparison_df, metric_df = _comparison_rows(run_level_df, run_manifest)
     specs = _load_group_specs(Path(args.input_root).expanduser().resolve() if args.input_root else pipeline_root.parent / "phase_next_top50_max_installation_recovery_20260516_002620", pipeline_root)
+    candidate_metadata_df = _build_candidate_metadata(
+        specs,
+        _default_candidate_metadata_source(),
+        expected_smart_ids=set(str(v).strip() for v in run_manifest.loc[run_manifest["scenario"] == "smart", "crosswalk_id"].astype(str).tolist()),
+    )
     group_summary_df = _group_summary_df(run_level_df, comparison_df, specs)
     completion_summary_df = _run_completion_summary_df(run_manifest, run_level_df, pipeline_root)
     _write_csv(run_level_df, pipeline_root / "csv" / "seed30_run_level_results.csv")
     _write_csv(comparison_df, pipeline_root / "csv" / "seed30_baseline_smart_comparison.csv")
     _write_csv(metric_df, pipeline_root / "csv" / "seed30_metric_summary.csv")
+    _write_csv(candidate_metadata_df, pipeline_root / "manifests" / "candidate_metadata.csv")
     _write_csv(group_summary_df, pipeline_root / "csv" / "seed30_group_summary.csv")
     _write_csv(completion_summary_df, pipeline_root / "csv" / "run_completion_summary.csv")
     _write_csv(completion_summary_df, pipeline_root / "run_completion_summary.csv")
@@ -1383,6 +2278,11 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
             ]
         ),
     )
+    _readme_files(
+        pipeline_root,
+        {"candidate_metadata.csv": candidate_metadata_df},
+        {"candidate_metadata.csv": "Candidate metadata preserved separately from the execution manifest. One row per smart candidate."},
+    )
     shutil.rmtree(cleanup_scan_tmp, ignore_errors=True)
     if args.copy_xml:
         _copy_xml_like(pipeline_root / "runs", pipeline_root, copy_logs=args.copy_logs)
@@ -1437,6 +2337,231 @@ def cmd_cleanup_apply(args: argparse.Namespace) -> None:
     print(json.dumps({"output_root": str(pipeline_root), "moved": moved}, ensure_ascii=False, indent=2))
 
 
+def cmd_pedestrian_smoke_validation(args: argparse.Namespace) -> None:
+    run_manifest_path = Path(args.run_manifest).expanduser().resolve()
+    candidate_metadata_path = Path(args.candidate_metadata).expanduser().resolve()
+    validation_root = Path(args.validation_root).expanduser().resolve()
+    validation_root.mkdir(parents=True, exist_ok=True)
+
+    run_manifest_df = _read_csv(run_manifest_path)
+    if run_manifest_df.empty:
+        raise FileNotFoundError(run_manifest_path)
+    candidate_metadata_df = _read_csv(candidate_metadata_path)
+    if candidate_metadata_df.empty:
+        raise FileNotFoundError(candidate_metadata_path)
+
+    demand_source_df, demand_source_paths = _load_pedestrian_demand_sources()
+    demand_lookup = _resolve_demand_lookup(demand_source_df)
+    candidate_groups = candidate_metadata_df.copy()
+    if not candidate_groups.empty and "run_group" in candidate_groups.columns:
+        candidate_groups["run_group"] = candidate_groups["run_group"].astype(str)
+
+    demand_rows: list[dict[str, Any]] = []
+    runtime_rows: list[dict[str, Any]] = []
+
+    for _, manifest_row in run_manifest_df.iterrows():
+        run_id = _safe_str(manifest_row.get("run_id"))
+        scenario = _safe_str(manifest_row.get("scenario"))
+        seed = manifest_row.get("seed")
+        net_group = _safe_str(manifest_row.get("net_group"))
+        run_group = _safe_str(manifest_row.get("run_group"))
+        crosswalk_id = _safe_str(manifest_row.get("crosswalk_id"))
+        output_dir = Path(_safe_str(manifest_row.get("output_dir"))).expanduser()
+        output_exists = output_dir.is_dir()
+        summary_df = _load_smoke_summary_row(output_dir)
+        demand_xml = output_dir / "demand_pedestrian.rou.xml"
+        depart_plan = output_dir / "pedestrian_depart_plan.csv"
+        diagnostics = output_dir / "pedestrian_route_diagnostics.csv"
+        validation_json_path = _find_smoke_candidate_validation_json(output_dir) if output_exists else None
+        runtime_observed_ped_count = _sum_runtime_observed_ped_count(summary_df)
+        xml_person_count = _count_xml_persons(demand_xml)
+        extension_count = None
+        if not summary_df.empty and "extension_count" in summary_df.columns:
+            ext_values = pd.to_numeric(summary_df["extension_count"], errors="coerce").dropna()
+            if not ext_values.empty:
+                extension_count = float(ext_values.iloc[0])
+
+        group_candidates = candidate_groups[candidate_groups["run_group"] == run_group].copy()
+        group_candidate_ids = group_candidates["crosswalk_id"].astype(str).tolist() if not group_candidates.empty else []
+        row_scope_ids = [crosswalk_id] if scenario == "smart" else group_candidate_ids
+        row_source_rows: list[dict[str, Any]] = []
+        missing_admins: list[str] = []
+        source_files: list[str] = []
+        demand_values: list[float] = []
+        for cid in row_scope_ids:
+            meta_row = group_candidates[group_candidates["crosswalk_id"].astype(str) == cid]
+            if meta_row.empty:
+                continue
+            admin = _safe_str(meta_row.iloc[0].get("admin_dong"))
+            if not admin:
+                missing_admins.append("")
+                continue
+            src = demand_lookup.get(admin)
+            if src is None or src.get("demand_10min") is None or pd.isna(src.get("demand_10min")):
+                missing_admins.append(admin)
+                continue
+            demand_values.append(float(src["demand_10min"]))
+            if src.get("source_file"):
+                source_files.append(str(src["source_file"]))
+            row_source_rows.append(src)
+
+        unique_source_files = sorted({s for s in source_files if s})
+        demand_source_file = ";".join(unique_source_files) if unique_source_files else (";".join(path.as_posix() for path in demand_source_paths) if demand_source_paths else "")
+        demand_key_type = "admin_dong"
+
+        if scenario == "smart":
+            demand_10min = demand_values[0] if len(demand_values) == 1 else np.nan
+            expected_generated_person_count = demand_10min
+            baseline_group_expected_person_count = np.nan
+            baseline_group_generated_person_count = np.nan
+            source_coverage_pass = len(demand_values) == 1 and not missing_admins
+        else:
+            demand_10min = float(sum(demand_values)) if demand_values and not missing_admins else (float(sum(demand_values)) if demand_values else np.nan)
+            expected_generated_person_count = demand_10min
+            baseline_group_expected_person_count = demand_10min
+            baseline_group_generated_person_count = xml_person_count
+            source_coverage_pass = bool(demand_values) and not missing_admins and len(demand_values) == len(group_candidate_ids)
+
+        demand_implementation_pass = bool(
+            source_coverage_pass
+            and xml_person_count is not None
+            and expected_generated_person_count is not None
+            and not pd.isna(expected_generated_person_count)
+            and float(xml_person_count) == float(expected_generated_person_count)
+        )
+
+        runtime_observation_pass = bool(runtime_observed_ped_count is not None and float(runtime_observed_ped_count) > 0)
+
+        extension_pass = False
+        expected_extension_count = 1 if scenario == "smart" else 0
+        if extension_count is not None:
+            extension_pass = bool(int(extension_count) == expected_extension_count)
+
+        overall_pass = bool(demand_implementation_pass and runtime_observation_pass and extension_pass and output_exists and summary_df is not None and not summary_df.empty)
+        reason_parts = [
+            "" if output_exists else "output_dir_missing",
+            "" if summary_df is not None and not summary_df.empty else "phase6_smoke_summary_missing",
+            "" if demand_xml.exists() else "demand_pedestrian_missing",
+            "" if depart_plan.exists() else "pedestrian_depart_plan_missing",
+            "" if xml_person_count is not None else "xml_person_count_unavailable",
+            "" if runtime_observed_ped_count is not None else "runtime_observation_unavailable",
+            "" if source_coverage_pass else f"missing_source_admin_dong={','.join(sorted({a for a in missing_admins if a}))}",
+            "" if demand_implementation_pass else f"demand_mismatch(expected={expected_generated_person_count},generated={xml_person_count})",
+            "" if runtime_observation_pass else "runtime_ped_count_zero_or_missing",
+            "" if extension_pass else f"extension_mismatch(expected={expected_extension_count},observed={extension_count})",
+        ]
+        demand_rows.append(
+            {
+                "run_id": run_id,
+                "scenario": scenario,
+                "seed": seed,
+                "net_group": net_group,
+                "run_group": run_group,
+                "crosswalk_id": crosswalk_id,
+                "dong_name": ";".join(sorted(set(group_candidates["dong_name"].astype(str).tolist()))) if scenario == "baseline" and not group_candidates.empty else _safe_str(candidate_metadata_df.loc[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id, "dong_name"].iloc[0]) if not candidate_metadata_df[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id].empty else "",
+                "admin_dong": ";".join(sorted(set(group_candidates["admin_dong"].astype(str).tolist()))) if scenario == "baseline" and not group_candidates.empty else _safe_str(candidate_metadata_df.loc[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id, "admin_dong"].iloc[0]) if not candidate_metadata_df[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id].empty else "",
+                "output_dir": str(output_dir),
+                "demand_source_file": demand_source_file,
+                "demand_key_type": demand_key_type,
+                "demand_10min": demand_10min,
+                "expected_generated_person_count": expected_generated_person_count,
+                "generated_person_count_from_xml": xml_person_count,
+                "baseline_group_expected_person_count": baseline_group_expected_person_count,
+                "baseline_group_generated_person_count": baseline_group_generated_person_count,
+                "demand_implementation_pass": demand_implementation_pass,
+                "extension_pass": extension_pass,
+                "overall_pass": overall_pass,
+                "reason": _validation_reason(reason_parts),
+            }
+        )
+        runtime_rows.append(
+            {
+                "run_id": run_id,
+                "scenario": scenario,
+                "seed": seed,
+                "net_group": net_group,
+                "run_group": run_group,
+                "crosswalk_id": crosswalk_id,
+                "dong_name": ";".join(sorted(set(group_candidates["dong_name"].astype(str).tolist()))) if scenario == "baseline" and not group_candidates.empty else _safe_str(candidate_metadata_df.loc[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id, "dong_name"].iloc[0]) if not candidate_metadata_df[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id].empty else "",
+                "admin_dong": ";".join(sorted(set(group_candidates["admin_dong"].astype(str).tolist()))) if scenario == "baseline" and not group_candidates.empty else _safe_str(candidate_metadata_df.loc[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id, "admin_dong"].iloc[0]) if not candidate_metadata_df[candidate_metadata_df["crosswalk_id"].astype(str) == crosswalk_id].empty else "",
+                "output_dir": str(output_dir),
+                "runtime_observed_ped_count": runtime_observed_ped_count,
+                "runtime_observation_pass": runtime_observation_pass,
+                "pedestrian_crossing_pass": runtime_observation_pass,
+                "phase6_smoke_summary_exists": bool(summary_df is not None and not summary_df.empty),
+                "pedestrian_depart_plan_exists": depart_plan.exists(),
+                "pedestrian_route_diagnostics_exists": diagnostics.exists(),
+                "candidate_validation_json_exists": bool(validation_json_path),
+                "extension_pass": extension_pass,
+                "overall_pass": bool(runtime_observation_pass and extension_pass and output_exists),
+                "reason": _validation_reason([
+                    "" if output_exists else "output_dir_missing",
+                    "" if summary_df is not None and not summary_df.empty else "phase6_smoke_summary_missing",
+                    "" if runtime_observed_ped_count is not None else "runtime_observation_unavailable",
+                    "" if runtime_observation_pass else "runtime_ped_count_zero_or_missing",
+                    "" if extension_pass else f"extension_mismatch(expected={expected_extension_count},observed={extension_count})",
+                ]),
+            }
+        )
+
+    demand_df = pd.DataFrame(demand_rows)
+    runtime_df = pd.DataFrame(runtime_rows)
+
+    summary_rows: list[dict[str, Any]] = []
+    for label, df in [("demand", demand_df), ("runtime", runtime_df)]:
+        for keys, sub in df.groupby(["run_group", "net_group", "scenario"], dropna=False):
+            run_group, net_group, scenario = keys
+            summary_rows.append(
+                {
+                    "validation_lane": label,
+                    "run_group": run_group,
+                    "net_group": net_group,
+                    "scenario": scenario,
+                    "total_runs": int(len(sub)),
+                    "pass_runs": int(sub["overall_pass"].fillna(False).astype(bool).sum()) if "overall_pass" in sub.columns else 0,
+                    "demand_pass_runs": int(sub["demand_implementation_pass"].fillna(False).astype(bool).sum()) if "demand_implementation_pass" in sub.columns else 0,
+                    "runtime_pass_runs": int(sub["runtime_observation_pass"].fillna(False).astype(bool).sum()) if "runtime_observation_pass" in sub.columns else 0,
+                    "extension_pass_runs": int(sub["extension_pass"].fillna(False).astype(bool).sum()) if "extension_pass" in sub.columns else 0,
+                    "missing_output_runs": int((~sub["output_dir"].astype(str).map(lambda x: Path(x).is_dir())).sum()),
+                    "missing_summary_runs": int((~sub["phase6_smoke_summary_exists"].fillna(False).astype(bool)).sum()) if "phase6_smoke_summary_exists" in sub.columns else 0,
+                }
+            )
+    summary_df = pd.DataFrame(summary_rows).sort_values(["validation_lane", "run_group", "net_group", "scenario"]).reset_index(drop=True)
+
+    _write_csv(demand_df, validation_root / "pedestrian_demand_implementation_validation.csv")
+    _write_csv(runtime_df, validation_root / "pedestrian_runtime_observation_validation.csv")
+    _write_csv(summary_df, validation_root / "pedestrian_validation_summary.csv")
+    _write_text(
+        validation_root / "README.md",
+        "\n".join(
+            [
+                "# Pedestrian Demand Validation",
+                "",
+                f"Run manifest: `{run_manifest_path}`",
+                f"Candidate metadata: `{candidate_metadata_path}`",
+                "",
+                "Demand implementation uses XML person count vs source 10min demand.",
+                "Runtime observation is separate and only checks pedestrian presence.",
+                f"Demand sources: `{';'.join(path.as_posix() for path in demand_source_paths)}`",
+                "",
+            ]
+        ),
+    )
+    print(
+        json.dumps(
+            {
+                "validation_root": str(validation_root),
+                "demand_rows": int(len(demand_df)),
+                "runtime_rows": int(len(runtime_df)),
+                "summary_rows": int(len(summary_df)),
+                "overall_pass_rows": int(demand_df["overall_pass"].fillna(False).astype(bool).sum()) if not demand_df.empty and "overall_pass" in demand_df.columns else 0,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare and aggregate the 30-seed pipeline.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1445,6 +2570,9 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--input-root", default="result/phase_next_top50_max_installation_recovery_20260516_002620")
     prepare.add_argument("--result-root", default="result")
     prepare.add_argument("--output-root", default=None)
+    prepare.add_argument("--active-root", default=None,
+                         help="Explicit path to result/active/ (preferred source of truth for nets/csv). "
+                              "Overrides legacy input-root CSV/net lookup.")
     prepare.set_defaults(func=cmd_prepare)
 
     aggregate = sub.add_parser("aggregate", help="aggregate completed 30-seed run outputs")
@@ -1467,6 +2595,12 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_apply.add_argument("--result-root", default="result")
     cleanup_apply.add_argument("--pipeline-root", required=True)
     cleanup_apply.set_defaults(func=cmd_cleanup_apply)
+
+    ped_validation = sub.add_parser("pedestrian-smoke-validation", help="build pedestrian smoke validation CSVs from existing run outputs")
+    ped_validation.add_argument("--run-manifest", default="result/active/real_30seed_runs/run_manifest.csv")
+    ped_validation.add_argument("--candidate-metadata", default="result/active/real_30seed_runs/manifests/candidate_metadata.csv")
+    ped_validation.add_argument("--validation-root", default="result/active/real_30seed_runs/validation")
+    ped_validation.set_defaults(func=cmd_pedestrian_smoke_validation)
 
     return parser
 

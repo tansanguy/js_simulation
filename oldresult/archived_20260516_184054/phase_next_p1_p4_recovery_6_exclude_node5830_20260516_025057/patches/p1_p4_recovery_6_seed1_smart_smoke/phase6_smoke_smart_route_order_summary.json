@@ -1,0 +1,7 @@
+{
+  "scenario": "smart",
+  "ped_route_file": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_6_exclude_node5830_20260516_025057/patches/p1_p4_recovery_6_seed1_smart_smoke/demand_pedestrian.rou.xml",
+  "ped_route_order_debug_csv": "/Users/junlee/Desktop/2026-1/js/result/phase_next_p1_p4_recovery_6_exclude_node5830_20260516_025057/patches/p1_p4_recovery_6_seed1_smart_smoke/pedestrian_route_order_debug.csv",
+  "ped_depart_sorted_ok": true,
+  "ped_person_rows": 26
+}

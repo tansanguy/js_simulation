@@ -1,0 +1,51 @@
+crosswalk_id,original_rank,previous_status,next_pool_status,reason
+LINK_249048,1,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_10335,2,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_8369,3,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_8426,4,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_5837,5,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_167173,6,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_239754,7,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_74388,8,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_5846,9,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_5830,10,NEEDS_MANUAL_REVIEW,P4_MANUAL_REVIEW,manual review queue
+NODE_5831,11,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_10218,12,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_140740,13,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_10060,14,REJECT,P1_SIGNAL_FIX_PENDING_SEED1,p1 signal_fix candidate; wait seed1 smoke
+NODE_6342,15,REJECT,P1_SIGNAL_FIX_PENDING_SEED1,p1 signal_fix candidate; wait seed1 smoke
+NODE_5647,16,REJECT,P1_SIGNAL_FIX_PENDING_SEED1,p1 signal_fix candidate; wait seed1 smoke
+NODE_9634,17,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_212169,18,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_194891,19,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_153517,20,REJECT,P4_MANUAL_REVIEW,manual review queue
+NODE_21869,21,REJECT,P4_MANUAL_REVIEW,manual review queue
+NODE_6425,22,NEEDS_MANUAL_REVIEW,P4_MANUAL_REVIEW,manual review queue
+NODE_10067,23,REJECT,P4_MANUAL_REVIEW,manual review queue
+LINK_266939,24,REJECT,P5_REJECT,exclude in current step
+LINK_107613,25,NEEDS_MANUAL_REVIEW,P4_MANUAL_REVIEW,manual review queue
+NODE_8382,26,NEEDS_MANUAL_REVIEW,P4_MANUAL_REVIEW,manual review queue
+NODE_8431,27,NEEDS_MANUAL_REVIEW,P4_MANUAL_REVIEW,manual review queue
+NODE_6123,28,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_10333,29,REJECT,P4_MANUAL_REVIEW,manual review queue
+NODE_14937,30,REJECT,P1_SIGNAL_FIX_PENDING_SEED1,p1 signal_fix candidate; wait seed1 smoke
+NODE_10377,31,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_6153,32,REJECT,P4_MANUAL_REVIEW,manual review queue
+NODE_6082,33,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_6122,34,REJECT,P5_REJECT,exclude in current step
+NODE_10376,35,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_10378,36,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_150723,37,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_5681,38,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_125895,39,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_6212,40,REJECT,P4_MANUAL_REVIEW,manual review queue
+NODE_10262,41,RECOVERED_SIGNAL_FIX_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_122781,42,REJECT,P1_SIGNAL_FIX_PENDING_SEED1,p1 signal_fix candidate; wait seed1 smoke
+NODE_10381,43,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_127869,44,REJECT,P5_REJECT,exclude in current step
+LINK_230879,45,REJECT,P5_REJECT,exclude in current step
+NODE_10273,46,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+NODE_8452,47,RECOVERED_GENERATED_SIGNAL_READY,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage
+LINK_22103,48,REJECT,P4_MANUAL_REVIEW,manual review queue
+NODE_5938,49,NEEDS_MANUAL_REVIEW,P4_MANUAL_REVIEW,manual review queue
+LINK_120139,50,MAIN_READY_CURRENT_NET,READY_EXISTING_28,already ready in current/signal_fix_v1/generated_v1 stage

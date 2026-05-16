@@ -1,0 +1,8 @@
+crosswalk_id,group,crossing_exists,tls_connected,ped_link_index_available,route_available,tlLogic_present,preserved,crossing_edge_id,tls_id_used,tls_exists,selected_node_id,selected_tls_id
+NODE_10060,P1,True,True,True,True,True,True,:11203052964_c0,11203052964,True,,
+NODE_122781,P1,True,True,True,True,True,True,:11203041635_c0,11203041635,True,,
+NODE_14937,P1,True,True,True,True,True,True,:11139418723_c0,11139418723,True,,
+NODE_5647,P1,True,True,True,True,True,True,:10974501473_c0,10974501473,True,,
+NODE_6342,P1,True,True,True,True,True,True,:11203041633_c0,11203041633,True,,
+NODE_5830,P4,True,True,True,True,True,True,:5593950705_c0,,,5593950705,5593950705
+NODE_5938,P4,True,True,True,True,True,True,:5851251266_c0,,,5851251266,5851251266

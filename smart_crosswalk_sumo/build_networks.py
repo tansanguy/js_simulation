@@ -116,6 +116,66 @@ def _tool_version(name: str) -> str:
     return text.splitlines()[0] if text else ""
 
 
+def _normalized_path_text(path: str | Path | None) -> str:
+    if path is None:
+        return ""
+    text = str(path).strip()
+    if not text:
+        return ""
+    return str(Path(text).expanduser().resolve())
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _copy_network_artifacts(source_dir: Path, target_dir: Path) -> None:
+    for filename in ("network.net.xml", "metadata.json", "network_build_provenance.json"):
+        source = source_dir / filename
+        if source.exists():
+            shutil.copy2(source, target_dir / filename)
+
+
+def _network_reuse_reason(
+    metadata: dict[str, Any],
+    provenance: dict[str, Any],
+    *,
+    cw_id: str | int,
+    network_mode: str,
+    buffer_m: float,
+    admin_polygon_path: str | None,
+) -> str | None:
+    if not metadata or not provenance:
+        return "missing_network_metadata_or_provenance"
+    if not provenance.get("network_net_sha256") and not metadata.get("network_file_sha256"):
+        return "missing_network_net_xml"
+    if str(metadata.get("cw_id", provenance.get("cw_id", ""))) != str(cw_id):
+        return "crosswalk_id_mismatch"
+    if str(metadata.get("network_mode", provenance.get("network_mode", ""))) != str(network_mode):
+        return "network_mode_mismatch"
+    try:
+        stored_buffer = float(metadata.get("buffer_m", provenance.get("buffer_m", 0.0)) or 0.0)
+    except Exception:
+        stored_buffer = float("nan")
+    if not math.isfinite(stored_buffer) or abs(stored_buffer - float(buffer_m)) > 1e-9:
+        return "buffer_m_mismatch"
+    desired_admin = _normalized_path_text(resolve_admin_polygon_path(network_mode, admin_polygon_path))
+    stored_admin = _normalized_path_text(
+        metadata.get("admin_polygon_path")
+        or provenance.get("admin_polygon_path")
+        or provenance.get("resolved_admin_polygon_path")
+    )
+    if desired_admin != stored_admin:
+        if desired_admin or stored_admin:
+            return "admin_polygon_path_mismatch"
+    return None
+
+
 def sanitize_vclass_string(value: str) -> tuple[str, bool]:
     tokens = [tok for tok in value.split() if tok]
     out: list[str] = []
@@ -469,6 +529,7 @@ def build_network(
     bbox_margin: float = 0.002,
     network_radius_m: float | None = None,
     force: bool = False,
+    reuse_nets_dir: str | Path | None = None,
     network_mode: str = "expanded",
     admin_polygon_path: str | None = None,
     buffer_m: float = 1000.0,
@@ -508,6 +569,46 @@ def build_network(
                 )
             else:
                 raise
+
+    admin_polygon_resolved = resolve_admin_polygon_path(normalized_mode, admin_polygon_path)
+    reuse_source_dir = Path(reuse_nets_dir).expanduser().resolve() / f"cw_{cw_id}" if reuse_nets_dir else None
+    reuse_reason = ""
+    reused_from = ""
+    reuse_checked_dirs = [output_dir]
+    if reuse_source_dir is not None and reuse_source_dir != output_dir:
+        reuse_checked_dirs.append(reuse_source_dir)
+    if not force:
+        for candidate_dir in reuse_checked_dirs:
+            candidate_net = candidate_dir / "network.net.xml"
+            candidate_metadata = _read_json_file(candidate_dir / "metadata.json")
+            candidate_provenance = _read_json_file(candidate_dir / "network_build_provenance.json")
+            if not candidate_net.exists():
+                continue
+            reason = _network_reuse_reason(
+                candidate_metadata,
+                candidate_provenance,
+                cw_id=cw_id,
+                network_mode=normalized_mode,
+                buffer_m=buffer_m,
+                admin_polygon_path=admin_polygon_resolved,
+            )
+            if reason is None:
+                if candidate_dir != output_dir:
+                    _copy_network_artifacts(candidate_dir, output_dir)
+                    reused_from = str(candidate_dir)
+                    reuse_reason = "reused_from_reuse_nets_dir"
+                else:
+                    reused_from = str(candidate_dir)
+                    reuse_reason = "reused_existing_target_network"
+                break
+            if candidate_dir != output_dir:
+                warnings.append(
+                    {
+                        "warning_type": "network_reuse_mismatch",
+                        "road_name": "",
+                        "message": f"network 재사용 불일치로 재생성합니다: {reason}",
+                    }
+                )
 
     sanitize_report: dict[str, Any] | None = None
     connection_sanitize_report: dict[str, Any] | None = None
@@ -555,7 +656,7 @@ def build_network(
             }
         )
 
-    if force or not net_file.exists():
+    if not reuse_reason:
         with (output_dir / "netconvert.log").open("w", encoding="utf-8") as log_file:
             subprocess.run(
                 [
@@ -616,12 +717,17 @@ def build_network(
                     index=False,
                 )
 
+    net_sha = _sha256_file(net_file)
     metadata = discover_network_metadata(net_file, lon=lon, lat=lat, cw_id=cw_id)
     metadata["network_mode"] = normalized_mode
     metadata["network_bbox"] = bbox
     metadata["buffer_m"] = float(buffer_m)
+    metadata["admin_polygon_path"] = admin_polygon_resolved or ""
+    metadata["network_reused"] = bool(reuse_reason)
+    metadata["network_reused_from"] = reused_from
+    metadata["reuse_reason"] = reuse_reason or "generated_new"
+    metadata["network_file_sha256"] = net_sha
     save_metadata(metadata_file, metadata)
-    net_sha = _sha256_file(net_file)
     filtered_hash = _sha256_text(
         json.dumps(filtered_options, ensure_ascii=False, separators=(",", ":"))
     )
@@ -635,23 +741,53 @@ def build_network(
     option_fingerprint_sha = _sha256_text(
         json.dumps(option_fingerprint_payload, ensure_ascii=False, separators=(",", ":"))
     )
-    provenance = {
-        "cw_id": str(cw_id),
-        "network_mode": normalized_mode,
-        "buffer_m": float(buffer_m),
-        "network_bbox": bbox,
-        "network_net_sha256": net_sha,
-        "netconvert_options_sha256": filtered_hash,
-        "netconvert_option_fingerprint_sha256": option_fingerprint_sha,
-        "filtered_netconvert_options": filtered_options,
-        "skipped_netconvert_options": skipped_options,
-        "netconvert_version": netconvert_version,
-        "sumo_version": sumo_version,
-    }
-    provenance_file.write_text(
-        json.dumps(provenance, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    if reuse_reason:
+        provenance = _read_json_file(provenance_file)
+        if not provenance:
+            provenance = {
+                "cw_id": str(cw_id),
+                "network_mode": normalized_mode,
+                "buffer_m": float(buffer_m),
+                "network_bbox": bbox,
+                "network_net_sha256": net_sha,
+                "netconvert_options_sha256": filtered_hash,
+                "netconvert_option_fingerprint_sha256": option_fingerprint_sha,
+                "filtered_netconvert_options": filtered_options,
+                "skipped_netconvert_options": skipped_options,
+                "netconvert_version": netconvert_version,
+                "sumo_version": sumo_version,
+            }
+        provenance["network_reused"] = True
+        provenance["network_reused_from"] = reused_from
+        provenance["reuse_reason"] = reuse_reason
+        provenance["admin_polygon_path"] = admin_polygon_resolved or ""
+        provenance.setdefault("network_net_sha256", net_sha)
+        provenance_file.write_text(
+            json.dumps(provenance, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    else:
+        provenance = {
+            "cw_id": str(cw_id),
+            "network_mode": normalized_mode,
+            "buffer_m": float(buffer_m),
+            "network_bbox": bbox,
+            "admin_polygon_path": admin_polygon_resolved or "",
+            "network_net_sha256": net_sha,
+            "netconvert_options_sha256": filtered_hash,
+            "netconvert_option_fingerprint_sha256": option_fingerprint_sha,
+            "filtered_netconvert_options": filtered_options,
+            "skipped_netconvert_options": skipped_options,
+            "netconvert_version": netconvert_version,
+            "sumo_version": sumo_version,
+            "network_reused": False,
+            "network_reused_from": "",
+            "reuse_reason": "generated_new",
+        }
+        provenance_file.write_text(
+            json.dumps(provenance, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     return metadata, warnings
 
 
@@ -660,6 +796,7 @@ def build_all_networks(
     nets_dir: str | Path = "sumo_nets",
     output_dir: str | Path = "outputs",
     force: bool = False,
+    reuse_nets_dir: str | Path | None = None,
     network_radius_m: float | None = None,
     network_mode: str = "expanded",
     admin_polygon_path: str | None = None,
@@ -688,6 +825,7 @@ def build_all_networks(
                 cw_dir,
                 network_radius_m=network_radius_m,
                 force=force,
+                reuse_nets_dir=reuse_nets_dir,
                 network_mode=network_mode,
                 admin_polygon_path=admin_polygon_path,
                 buffer_m=buffer_m,
