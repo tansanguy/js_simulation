@@ -22,6 +22,7 @@ try:
     from .build_networks import build_all_networks
     from .calibration import calibrate
     from .collect_metrics import collect_all
+    from .csv_outputs import ensure_csv_output_layout, mirror_existing_csv_files
     from .demand_validation import validate_demand_run
     from .generate_demand import generate_for_candidates
     from .generate_reports import generate_all_reports
@@ -42,6 +43,7 @@ except ImportError:
     from build_networks import build_all_networks
     from calibration import calibrate
     from collect_metrics import collect_all
+    from csv_outputs import ensure_csv_output_layout, mirror_existing_csv_files
     from demand_validation import validate_demand_run
     from generate_demand import generate_for_candidates
     from generate_reports import generate_all_reports
@@ -78,13 +80,39 @@ def resolve_run_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]
     return run_dir, output_dir, nets_dir, figures_dir
 
 
+def _is_regeneration_mode(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "skip_run", False))
+
+
+def _load_json_if_exists(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _has_original_execution_metadata(run_dir: Path, output_dir: Path) -> bool:
+    return bool(
+        _load_json_if_exists(run_dir / "run_metadata.json")
+        or _load_json_if_exists(output_dir / "run_metadata.json")
+    )
+
+
 def write_run_metadata(args: argparse.Namespace, run_dir: Path, output_dir: Path, nets_dir: Path, figures_dir: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
+    csv_layout = ensure_csv_output_layout(output_dir)
     experiment_metadata = _build_experiment_metadata(args)
     metadata = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "output_dir": str(output_dir),
+        "csv_output_root": str(csv_layout.root),
+        "csv_report_dir": str(csv_layout.report),
+        "csv_results_dir": str(csv_layout.results),
+        "csv_internal_dir": str(csv_layout.internal),
         "nets_dir": str(nets_dir),
         "figures_dir": str(figures_dir),
         "args": vars(args),
@@ -101,6 +129,165 @@ def write_benchmark_timing(run_dir: Path, timing: dict[str, object]) -> None:
         json.dumps(timing, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _backup_stale_json(path: Path) -> None:
+    if not path.exists():
+        return
+    stale_dir = path.parent / "stale"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    backup = stale_dir / f"{path.name}.{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
+    path.replace(backup)
+
+
+def _is_regeneration_run_metadata(payload: dict[str, object]) -> bool:
+    args = dict(payload.get("args", {}) or {})
+    return bool(
+        args.get("skip_run", False)
+        or args.get("skip_demand", False)
+        or args.get("skip_networks", False)
+        or payload.get("result_reason") == "regeneration_without_original_metadata"
+    )
+
+
+def _is_regeneration_benchmark(payload: dict[str, object]) -> bool:
+    completed = list(payload.get("completed_scenarios", []) or [])
+    return bool(
+        completed == ["post_validation"]
+        or payload.get("result_reason") == "regeneration_without_original_metadata"
+    )
+
+
+def _restore_regeneration_metadata_if_needed(run_dir: Path, output_dir: Path) -> None:
+    root_run = run_dir / "run_metadata.json"
+    root_bench = run_dir / "benchmark_timing.json"
+    output_run = output_dir / "run_metadata.json"
+    output_bench = output_dir / "benchmark_timing.json"
+
+    root_run_payload = _load_json_if_exists(root_run)
+    output_run_payload = _load_json_if_exists(output_run)
+    if root_run_payload and output_run_payload:
+        root_mode = str(root_run_payload.get("experiment_mode", "") or "")
+        output_mode = str(output_run_payload.get("experiment_mode", "") or "")
+        root_exact = root_run_payload.get("metrics_exact")
+        output_exact = output_run_payload.get("metrics_exact")
+        if (
+            (root_mode and output_mode and root_mode != output_mode)
+            or (isinstance(root_exact, bool) and isinstance(output_exact, bool) and root_exact != output_exact)
+            or _is_regeneration_run_metadata(root_run_payload)
+        ):
+            repaired = dict(output_run_payload)
+            repaired["restored_experiment_metadata_from"] = str(output_run)
+            for key in (
+                "run_dir",
+                "output_dir",
+                "csv_output_root",
+                "csv_report_dir",
+                "csv_results_dir",
+                "csv_internal_dir",
+                "nets_dir",
+                "figures_dir",
+            ):
+                if root_run_payload.get(key) is not None:
+                    repaired[key] = root_run_payload.get(key)
+            args = dict(repaired.get("args", {}) or {})
+            args["skip_run"] = False
+            args["skip_demand"] = False
+            args["skip_networks"] = False
+            repaired["args"] = args
+            _backup_stale_json(root_run)
+            root_run.write_text(json.dumps(repaired, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    root_bench_payload = _load_json_if_exists(root_bench)
+    output_bench_payload = _load_json_if_exists(output_bench)
+    if root_bench_payload and output_bench_payload:
+        root_mode = str(root_bench_payload.get("experiment_mode", "") or "")
+        output_mode = str(output_bench_payload.get("experiment_mode", "") or "")
+        root_exact = root_bench_payload.get("metrics_exact")
+        output_exact = output_bench_payload.get("metrics_exact")
+        root_completed = list(root_bench_payload.get("completed_scenarios", []) or [])
+        if (
+            (root_mode and output_mode and root_mode != output_mode)
+            or (isinstance(root_exact, bool) and isinstance(output_exact, bool) and root_exact != output_exact)
+            or root_completed == ["post_validation"]
+            or _is_regeneration_benchmark(root_bench_payload)
+        ):
+            repaired = dict(output_bench_payload)
+            repaired["restored_experiment_metadata_from"] = str(output_bench)
+            _backup_stale_json(root_bench)
+            root_bench.write_text(json.dumps(repaired, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _prepare_regeneration_environment(args: argparse.Namespace, run_dir: Path, output_dir: Path, nets_dir: Path, figures_dir: Path) -> None:
+    ensure_csv_output_layout(output_dir)
+    mirror_existing_csv_files(
+        output_dir,
+        results_files=[
+            "simulation_results.csv",
+            "simulation_results_seed.csv",
+            "simulation_summary.csv",
+            "baseline_vs_smart_summary.csv",
+            "baseline_smart_seed_results.csv",
+            "baseline_smart_summary.csv",
+            "local_tradeoff_summary.csv",
+            "tradeoff_summary.csv",
+            "candidate_quality_report.csv",
+            "demand_params.csv",
+            "demand_source_audit.csv",
+            "route_generation_audit.csv",
+            "pedestrian_connectivity_audit.csv",
+            "pedestrian_route_connectivity_audit.csv",
+            "invalid_pedestrian_candidates.csv",
+            "invalid_pedestrian_routes.csv",
+            "skipped_pedestrian_routes.csv",
+            "road_group_allocation_summary.csv",
+            "vehicle_edge_coverage_summary.csv",
+            "vehicle_route_generation_audit.csv",
+            "demand_validation_summary.csv",
+            "pedestrian_flow_policy_validation.csv",
+            "vehicle_flow_policy_validation.csv",
+            "vehicle_global_coverage_validation.csv",
+            "network_boundary_warnings.csv",
+        ],
+        internal_files=[
+            "runtime_progress.csv",
+            "extension_events_seed.csv",
+            "debug_extension_events.csv",
+            "incident_events_seed.csv",
+            "debug_incident_events.csv",
+            "incident_impact_seed.csv",
+            "failed_cases.csv",
+        ],
+    )
+    _restore_regeneration_metadata_if_needed(run_dir, output_dir)
+
+
+def _maybe_write_run_metadata(args: argparse.Namespace, run_dir: Path, output_dir: Path, nets_dir: Path, figures_dir: Path) -> None:
+    regeneration_mode = _is_regeneration_mode(args)
+    if not regeneration_mode:
+        write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
+        return
+    if _has_original_execution_metadata(run_dir, output_dir):
+        return
+    write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
+    payload = _load_json_if_exists(run_dir / "run_metadata.json")
+    if payload:
+        payload["result_status"] = "not_verified"
+        payload["result_reason"] = "regeneration_without_original_metadata"
+        (run_dir / "run_metadata.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _maybe_write_benchmark_timing(args: argparse.Namespace, run_dir: Path, output_dir: Path, timing: dict[str, object]) -> None:
+    regeneration_mode = _is_regeneration_mode(args)
+    if regeneration_mode and _load_json_if_exists(run_dir / "benchmark_timing.json"):
+        return
+    if regeneration_mode and _load_json_if_exists(output_dir / "benchmark_timing.json"):
+        return
+    if regeneration_mode:
+        timing = dict(timing)
+        timing["result_status"] = "not_verified"
+        timing["result_reason"] = "regeneration_without_original_metadata"
+    write_benchmark_timing(run_dir, timing)
 
 
 def _build_experiment_metadata(args: argparse.Namespace) -> dict[str, object]:
@@ -154,13 +341,16 @@ def _count_csv_rows_by_value(csv_path: Path, column_name: str, expected_value: s
 
 
 def _resolve_results_seed_csv(output_dir: Path) -> Path:
-    primary = output_dir / "simulation_results_seed.csv"
-    if primary.exists():
-        return primary
-    fallback = output_dir / "per_crosswalk_simulation_results_seed.csv"
-    if fallback.exists():
-        return fallback
-    return primary
+    csv_root = output_dir / "csv" / "results"
+    candidates = [
+        csv_root / "simulation_results_seed.csv",
+        output_dir / "simulation_results_seed.csv",
+        output_dir / "per_crosswalk_simulation_results_seed.csv",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 def _evaluate_run_outcome(output_dir: Path, interrupted: bool) -> dict[str, object]:
@@ -208,7 +398,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     nets_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
-    write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
+    if _is_regeneration_mode(args):
+        _prepare_regeneration_environment(args, run_dir, output_dir, nets_dir, figures_dir)
+    _maybe_write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
     print(f"Result run directory: {run_dir}")
     pipeline_t0 = time.perf_counter()
     experiment_metadata = _build_experiment_metadata(args)
@@ -398,11 +590,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
             except KeyboardInterrupt:
                 benchmark_timing["interrupted"] = True
                 benchmark_timing["partial"] = True
-                write_benchmark_timing(run_dir, benchmark_timing)
+                _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
                 raise
             except Exception:
                 benchmark_timing["partial"] = True
-                write_benchmark_timing(run_dir, benchmark_timing)
+                _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
                 raise
             benchmark_timing["simulation_baseline_sec"] = None
             benchmark_timing["simulation_smart_sec"] = None
@@ -433,12 +625,12 @@ def run_pipeline(args: argparse.Namespace) -> None:
             benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
             benchmark_timing["current_scenario"] = ""
             benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
-            write_benchmark_timing(run_dir, benchmark_timing)
+            _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
         except KeyboardInterrupt:
             benchmark_timing["interrupted"] = True
             benchmark_timing.update(_evaluate_run_outcome(output_dir, True))
             benchmark_timing["partial"] = True
-            write_benchmark_timing(run_dir, benchmark_timing)
+            _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
             raise
         except Exception as exc:
             benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
@@ -449,7 +641,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 f"{exception_reason};{existing_reason}" if existing_reason else exception_reason
             )
             benchmark_timing["partial"] = True
-            write_benchmark_timing(run_dir, benchmark_timing)
+            _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
             raise
         return
 
@@ -548,11 +740,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
         except KeyboardInterrupt:
             benchmark_timing["interrupted"] = True
             benchmark_timing["partial"] = True
-            write_benchmark_timing(run_dir, benchmark_timing)
+            _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
             raise
         except Exception:
             benchmark_timing["partial"] = True
-            write_benchmark_timing(run_dir, benchmark_timing)
+            _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
             raise
         benchmark_timing["simulation_baseline_sec"] = simulation_timing.get("simulation_baseline_sec")
         benchmark_timing["simulation_smart_sec"] = simulation_timing.get("simulation_smart_sec")
@@ -592,15 +784,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 tuple(args.seeds),
             )
 
-        if not args.skip_reports:
-            generate_all_reports(
-                output_dir,
-                figures_dir,
-                candidates_csv,
-                nets_dir,
-                assumptions_path,
-            )
-
         benchmark_timing["current_scenario"] = "post_validation"
         validation_t0 = time.perf_counter()
         _maybe_validate_demand(args, run_dir, output_dir)
@@ -608,15 +791,26 @@ def run_pipeline(args: argparse.Namespace) -> None:
         cast_list = benchmark_timing.get("completed_scenarios")
         if isinstance(cast_list, list):
             cast_list.append("post_validation")
+
+        if not args.skip_reports:
+            generate_all_reports(
+                output_dir,
+                figures_dir,
+                candidates_csv,
+                nets_dir,
+                assumptions_path,
+                getattr(args, "simulation_mode", None),
+            )
+
         benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
         benchmark_timing["current_scenario"] = ""
         benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
-        write_benchmark_timing(run_dir, benchmark_timing)
+        _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
     except KeyboardInterrupt:
         benchmark_timing["interrupted"] = True
         benchmark_timing.update(_evaluate_run_outcome(output_dir, True))
         benchmark_timing["partial"] = True
-        write_benchmark_timing(run_dir, benchmark_timing)
+        _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
         raise
     except Exception as exc:
         benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
@@ -627,7 +821,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             f"{exception_reason};{existing_reason}" if existing_reason else exception_reason
         )
         benchmark_timing["partial"] = True
-        write_benchmark_timing(run_dir, benchmark_timing)
+        _maybe_write_benchmark_timing(args, run_dir, output_dir, benchmark_timing)
         raise
 
 

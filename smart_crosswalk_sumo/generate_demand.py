@@ -24,6 +24,7 @@ try:
         build_fixed_type_assignments,
         resolve_demand_scenario_name,
     )
+    from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from .model_config import get_parameter_value, load_model_parameters
     from .network_utils import (
         load_metadata,
@@ -52,6 +53,7 @@ except ImportError:
         build_fixed_type_assignments,
         resolve_demand_scenario_name,
     )
+    from csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from vehicle_demand_policy import (
         build_vehicle_demand_audit,
         resolve_vehicle_policy_summary,
@@ -598,6 +600,7 @@ def generate_for_candidates(
     candidates = pd.read_csv(candidates_csv)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    csv_layout = ensure_csv_output_layout(output_dir)
     rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     demand_audit_rows: list[dict[str, Any]] = []
@@ -1004,11 +1007,23 @@ def generate_for_candidates(
         "walking_speed_profile",
     ]
     demand_df = pd.DataFrame(rows, columns=demand_cols)
-    demand_df.to_csv(output_dir / "demand_params.csv", index=False)
+    write_csv_bundle(
+        demand_df,
+        csv_layout.results / "demand_params.csv",
+        mirrors=[output_dir / "demand_params.csv"],
+    )
     audit_cols = ["edge_id","demand_source","volume","confidence_level"]
     demand_audit_df = pd.DataFrame(demand_audit_rows, columns=audit_cols).drop_duplicates()
-    demand_audit_df.to_csv(output_dir / "demand_source_audit.csv", index=False)
-    demand_audit_df.to_csv(output_dir / "route_generation_audit.csv", index=False)
+    write_csv_bundle(
+        demand_audit_df,
+        csv_layout.results / "demand_source_audit.csv",
+        mirrors=[output_dir / "demand_source_audit.csv"],
+    )
+    write_csv_bundle(
+        demand_audit_df,
+        csv_layout.results / "route_generation_audit.csv",
+        mirrors=[output_dir / "route_generation_audit.csv"],
+    )
     build_vehicle_demand_audit(
         output_dir,
         demand_df,
@@ -1021,27 +1036,40 @@ def generate_for_candidates(
 
     if failures:
         failed_path = output_dir / "failed_cases.csv"
-        english_output_columns(pd.DataFrame(failures)).to_csv(
+        write_csv_bundle(
+            english_output_columns(pd.DataFrame(failures)),
             failed_path,
-            mode="a",
-            header=not failed_path.exists(),
-            index=False,
+            mirrors=[csv_layout.internal / "failed_cases.csv"],
         )
-    pd.DataFrame(ped_connectivity_rows).to_csv(
-        output_dir / "pedestrian_connectivity_audit.csv",
-        index=False,
+    write_csv_bundle(
+        pd.DataFrame(ped_connectivity_rows),
+        csv_layout.results / "pedestrian_connectivity_audit.csv",
+        mirrors=[output_dir / "pedestrian_connectivity_audit.csv"],
     )
-    pd.DataFrame(ped_connectivity_rows).to_csv(
-        output_dir / "pedestrian_route_connectivity_audit.csv",
-        index=False,
+    write_csv_bundle(
+        pd.DataFrame(ped_connectivity_rows),
+        csv_layout.results / "pedestrian_route_connectivity_audit.csv",
+        mirrors=[output_dir / "pedestrian_route_connectivity_audit.csv"],
     )
     invalid_ped_df = pd.DataFrame(
         invalid_ped_rows,
         columns=["crosswalk_id", "seed", "reason", "detail"],
     ).drop_duplicates()
-    invalid_ped_df.to_csv(output_dir / "invalid_pedestrian_candidates.csv", index=False)
-    invalid_ped_df.to_csv(output_dir / "invalid_pedestrian_routes.csv", index=False)
-    invalid_ped_df.to_csv(output_dir / "skipped_pedestrian_routes.csv", index=False)
+    write_csv_bundle(
+        invalid_ped_df,
+        csv_layout.results / "invalid_pedestrian_candidates.csv",
+        mirrors=[output_dir / "invalid_pedestrian_candidates.csv"],
+    )
+    write_csv_bundle(
+        invalid_ped_df,
+        csv_layout.results / "invalid_pedestrian_routes.csv",
+        mirrors=[output_dir / "invalid_pedestrian_routes.csv"],
+    )
+    write_csv_bundle(
+        invalid_ped_df,
+        csv_layout.results / "skipped_pedestrian_routes.csv",
+        mirrors=[output_dir / "skipped_pedestrian_routes.csv"],
+    )
     return demand_df
 
 

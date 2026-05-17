@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from .network_utils import edge_function, read_net
+from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
 from .output_schema import write_csv_utf8_sig
 from .vehicle_demand_policy import compare_sumocfg_vehicle_inputs, resolve_vehicle_policy_summary
 
@@ -839,6 +840,7 @@ def _summarize_global_coverage_row(vehicle_row: dict[str, Any]) -> dict[str, Any
 def validate_demand_run(run_dir: str | Path | None = None, output_dir: str | Path | None = None) -> dict[str, Path]:
     run_path, output_path, nets_path = _resolve_run_paths(run_dir, output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    csv_layout = ensure_csv_output_layout(output_path)
     demand_params_path = output_path / "demand_params.csv"
     demand_df = _read_csv(demand_params_path)
 
@@ -906,10 +908,10 @@ def validate_demand_run(run_dir: str | Path | None = None, output_dir: str | Pat
     cov_path = output_path / GLOBAL_COVERAGE_FILENAME
     report_path = output_path / REPORT_FILENAME
 
-    write_csv_utf8_sig(summary_df, summary_path)
-    write_csv_utf8_sig(ped_df, ped_path)
-    write_csv_utf8_sig(veh_df, veh_path)
-    write_csv_utf8_sig(cov_df, cov_path)
+    write_csv_bundle(summary_df, csv_layout.results / VALIDATION_SUMMARY_FILENAME, mirrors=[summary_path])
+    write_csv_bundle(ped_df, csv_layout.results / PEDESTRIAN_VALIDATION_FILENAME, mirrors=[ped_path])
+    write_csv_bundle(veh_df, csv_layout.results / VEHICLE_VALIDATION_FILENAME, mirrors=[veh_path])
+    write_csv_bundle(cov_df, csv_layout.results / GLOBAL_COVERAGE_FILENAME, mirrors=[cov_path])
 
     report_lines = [
         "# Demand Validation Report",

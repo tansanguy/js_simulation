@@ -69,15 +69,19 @@ python3 run_pipeline.py --top_n 20 --seeds 42 43 44
 
 ## 최종 보고용 핵심 출력
 
-- `outputs/simulation_summary.csv`
-- `outputs/baseline_vs_smart_summary.csv`
+- `outputs/csv/report/final_tradeoff_summary.csv`
+- `outputs/csv/report/preflight_tradeoff_summary.csv`
+- `outputs/csv/results/simulation_summary.csv`
+- `outputs/csv/results/baseline_vs_smart_summary.csv`
 - `outputs/model_assumptions_used.csv`
 - `figures/tradeoff_summary.png`
 
 ## 선택 디버그 출력
 
-- `outputs/debug_extension_events.csv`에 해당하는 기존 `extension_events_seed.csv`
-- `outputs/debug_incident_events.csv`에 해당하는 기존 `incident_events_seed.csv`
+- `outputs/csv/internal/raw_simulation_metrics.csv`
+- `outputs/csv/internal/debug_tradeoff_summary.csv`
+- `outputs/csv/internal/debug_extension_events.csv`
+- `outputs/csv/internal/debug_incident_events.csv`
 - SUMO snapshot / FCD / lane-edge debug 산출물
 
 최종 보고에서는 핵심 출력 4개만 사용하고, 디버그 출력은 개발용 또는 부록용으로 분리한다.

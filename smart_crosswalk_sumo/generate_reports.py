@@ -14,10 +14,12 @@ from pandas.errors import EmptyDataError
 try:
     from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from .model_config import load_model_parameters
+    from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from .output_schema import write_csv_utf8_sig
 except ImportError:
     from mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from model_config import load_model_parameters
+    from csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from output_schema import write_csv_utf8_sig
 
 
@@ -52,6 +54,43 @@ BASELINE_SMART_COLUMNS = [
     "traffic_metric_scope",
     "metrics_exact",
 ]
+
+REPORT_COLUMNS = [
+    "candidate_id",
+    "seed_count",
+    "scenario_name",
+    "simulation_mode",
+    "experiment_kind",
+    "traffic_metric_scope",
+    "generated_vehicle_count",
+    "generated_pedestrian_count",
+    "demand_vehicle_validation_status",
+    "demand_pedestrian_validation_status",
+    "safety_improvement_pct",
+    "traffic_degradation_pct",
+    "tradeoff_ratio",
+    "throughput",
+    "network_arrived_vehicles",
+    "vehicle_mean_time_loss",
+    "vehicle_mean_travel_time",
+    "vehicle_mean_speed",
+    "pedestrian_waiting_time_mean",
+    "pedestrian_waiting_time_p95",
+    "result_status",
+    "result_reason",
+]
+
+REPORT_FORBIDDEN_COLUMNS = {
+    "metrics_exact",
+    "experiment_mode",
+    "toy_queue_vehicle_arrivals",
+    "vehicle_count",
+    "arrived_count",
+    "total_vehicle_arrivals",
+    "vehicle_arrivals",
+}
+
+NA_TEXT = "not_applicable"
 
 
 def df_to_markdown(df: pd.DataFrame) -> str:
@@ -88,16 +127,28 @@ def ensure_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 
 
 def _load_run_experiment_metadata(output_dir: Path) -> dict[str, Any]:
-    for run_metadata_path in (output_dir.parent / "run_metadata.json", output_dir / "run_metadata.json"):
-        if not run_metadata_path.exists():
+    merged: dict[str, Any] = {}
+    args_merged: dict[str, Any] = {}
+    for metadata_path in (
+        output_dir.parent / "run_metadata.json",
+        output_dir.parent / "benchmark_timing.json",
+        output_dir / "run_metadata.json",
+        output_dir / "benchmark_timing.json",
+    ):
+        if not metadata_path.exists():
             continue
         try:
-            payload = json.loads(run_metadata_path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-    return {}
+        if not isinstance(payload, dict):
+            continue
+        if isinstance(payload.get("args"), dict):
+            args_merged.update(payload["args"])
+        merged.update({k: v for k, v in payload.items() if k != "args"})
+    if args_merged:
+        merged["args"] = args_merged
+    return merged
 
 
 def _load_run_metrics_exact(output_dir: Path) -> bool | None:
@@ -120,6 +171,150 @@ def _load_run_metrics_exact(output_dir: Path) -> bool | None:
         except Exception:
             pass
     return None
+
+
+def _load_csv_any(*paths: Path) -> pd.DataFrame:
+    for path in paths:
+        if not path or not path.exists():
+            continue
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
+def _first_nonempty(value: Any, default: Any = NA_TEXT) -> Any:
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    text = str(value).strip()
+    if text.lower() in {"nan", "none", "null"}:
+        return default
+    return text if text else default
+
+
+def _safe_value_or_na(value: Any) -> Any:
+    if value is None:
+        return NA_TEXT
+    try:
+        if pd.isna(value):
+            return NA_TEXT
+    except Exception:
+        pass
+    if isinstance(value, str) and value.strip().lower() in {"nan", "none", "null", ""}:
+        return NA_TEXT
+    return value
+
+
+def _xml_count(path: str | Path | None, tag: str) -> int:
+    if not path:
+        return 0
+    p = Path(path)
+    if not p.exists():
+        return 0
+    try:
+        root = ET.parse(p).getroot()
+    except Exception:
+        return 0
+    return sum(1 for _ in root.iter(tag))
+
+
+def _load_demand_validation_rows(output_dir: Path) -> pd.DataFrame:
+    csv_layout = ensure_csv_output_layout(output_dir)
+    return _load_csv_any(
+        csv_layout.results / "demand_validation_summary.csv",
+        output_dir / "demand_validation_summary.csv",
+    )
+
+
+def _load_demand_params_row(output_dir: Path) -> dict[str, Any]:
+    csv_layout = ensure_csv_output_layout(output_dir)
+    demand_df = _load_csv_any(csv_layout.results / "demand_params.csv", output_dir / "demand_params.csv")
+    if demand_df.empty:
+        return {}
+    return demand_df.iloc[0].to_dict()
+
+
+def _validation_lookup(validation_df: pd.DataFrame, validation_name: str) -> dict[str, Any]:
+    if validation_df.empty or "validation_name" not in validation_df.columns:
+        return {}
+    rows = validation_df[validation_df["validation_name"] == validation_name]
+    if rows.empty:
+        return {}
+    return rows.iloc[0].to_dict()
+
+
+def _report_experiment_kind(metrics_exact: bool | None, experiment_mode: str) -> str:
+    if metrics_exact and str(experiment_mode).strip().lower() == "exact":
+        return "final"
+    return "preflight"
+
+
+def _report_target_filename(experiment_kind: str) -> str:
+    return "final_tradeoff_summary.csv" if experiment_kind == "final" else "preflight_tradeoff_summary.csv"
+
+
+def _report_status_from_validations(
+    vehicle_status: str,
+    pedestrian_status: str,
+    vehicle_reason: str = "",
+    pedestrian_reason: str = "",
+) -> tuple[str, str]:
+    statuses = [str(vehicle_status).strip().lower(), str(pedestrian_status).strip().lower()]
+    if any(status == "fail" for status in statuses):
+        status = "fail"
+    elif any(status == "warning" for status in statuses):
+        status = "warning"
+    else:
+        status = "pass"
+    reason_bits = []
+    for reason in (vehicle_reason, pedestrian_reason):
+        text = str(reason).strip()
+        if not text or text.lower() in {"nan", "none", "null"}:
+            continue
+        reason_bits.append(text)
+    return status, ";".join(reason_bits) if reason_bits else "ok"
+
+
+def _report_guardrail_paths(output_dir: Path) -> dict[str, Path]:
+    csv_layout = ensure_csv_output_layout(output_dir)
+    return {
+        "csv_layout": csv_layout,
+        "demand_params": csv_layout.results / "demand_params.csv",
+        "demand_validation": csv_layout.results / "demand_validation_summary.csv",
+        "vehicle_validation": csv_layout.results / "vehicle_flow_policy_validation.csv",
+        "ped_validation": csv_layout.results / "pedestrian_flow_policy_validation.csv",
+        "seed_results": csv_layout.results / "simulation_results_seed.csv",
+        "avg_results": csv_layout.results / "simulation_results.csv",
+    }
+
+
+def _move_to_stale(path: Path) -> None:
+    if not path.exists():
+        return
+    stale_dir = path.parent / "stale"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    target = stale_dir / path.name
+    if target.exists():
+        target = stale_dir / f"{path.stem}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}{path.suffix}"
+    path.replace(target)
+
+
+def _reconcile_report_artifacts(output_dir: Path, report_dir: Path, report_name: str) -> None:
+    active_paths = {
+        "final_tradeoff_summary.csv": [report_dir / "final_tradeoff_summary.csv", output_dir / "final_tradeoff_summary.csv"],
+        "preflight_tradeoff_summary.csv": [report_dir / "preflight_tradeoff_summary.csv", output_dir / "preflight_tradeoff_summary.csv"],
+    }
+    for name, paths in active_paths.items():
+        if name == report_name:
+            continue
+        for path in paths:
+            _move_to_stale(path)
 
 
 def _count_affected_route_vehicles(
@@ -255,6 +450,197 @@ def build_local_tradeoff_summary(seed_tradeoff: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
+def build_tradeoff_report_summary(
+    seed_df: pd.DataFrame,
+    seed_tradeoff: pd.DataFrame,
+    output_dir: Path,
+    cli_simulation_mode: str | None = None,
+) -> pd.DataFrame:
+    if seed_df.empty or seed_tradeoff.empty:
+        return pd.DataFrame(columns=REPORT_COLUMNS)
+
+    exp_meta = _load_run_experiment_metadata(output_dir)
+    metrics_exact = _load_run_metrics_exact(output_dir)
+    experiment_mode = str(exp_meta.get("experiment_mode", "") or "")
+    metadata_result_status = _first_nonempty(exp_meta.get("result_status"), "")
+    metadata_result_reason = _first_nonempty(exp_meta.get("result_reason"), "")
+    experiment_kind = _report_experiment_kind(metrics_exact, experiment_mode)
+    if metadata_result_status == "not_verified" or metadata_result_reason == "regeneration_without_original_metadata":
+        experiment_kind = "preflight"
+    simulation_mode = _first_nonempty(
+        exp_meta.get("args", {}).get("simulation_mode"),
+        "",
+    )
+    if simulation_mode == "":
+        simulation_mode = _first_nonempty(
+            exp_meta.get("simulation_mode"),
+            "",
+        )
+    if simulation_mode == "":
+        simulation_mode = _first_nonempty(cli_simulation_mode, "")
+    demand_df = _load_demand_params_row(output_dir)
+    validation_df = _load_demand_validation_rows(output_dir)
+    vehicle_val = _validation_lookup(validation_df, "vehicle_flow_policy_validation")
+    pedestrian_val = _validation_lookup(validation_df, "pedestrian_flow_policy_validation")
+    vehicle_status = str(vehicle_val.get("status", NA_TEXT) or NA_TEXT)
+    pedestrian_status = str(pedestrian_val.get("status", NA_TEXT) or NA_TEXT)
+    result_status, result_reason = _report_status_from_validations(
+        vehicle_status,
+        pedestrian_status,
+        str(vehicle_val.get("reason", "") or ""),
+        str(pedestrian_val.get("reason", "") or ""),
+    )
+    if metadata_result_status:
+        result_status = metadata_result_status
+        result_reason = metadata_result_reason or result_reason
+
+    rows: list[dict[str, Any]] = []
+    seed_df = seed_df.copy()
+    seed_df["crosswalk_id"] = seed_df["crosswalk_id"].astype(str)
+    for candidate_id, group in seed_tradeoff.groupby("candidate_id", sort=True):
+        candidate_id = str(candidate_id)
+        smart_rows = seed_df[(seed_df["crosswalk_id"] == candidate_id) & (seed_df["scenario"] == "smart")]
+        smart_seed = smart_rows.iloc[0] if not smart_rows.empty else None
+        generated_vehicle_count = _safe_value_or_na(
+            smart_seed.get("generated_vehicle_count") if smart_seed is not None else demand_df.get("generated_vehicle_count")
+        )
+        generated_pedestrian_count = _safe_value_or_na(
+            smart_seed.get("generated_pedestrian_count") if smart_seed is not None else demand_df.get("generated_pedestrian_count")
+        )
+        scenario_name = _safe_value_or_na(
+            smart_seed.get("scenario_name") if smart_seed is not None else demand_df.get("scenario_name")
+        )
+        candidate_simulation_mode = simulation_mode
+        if candidate_simulation_mode == "" and smart_seed is not None:
+            candidate_simulation_mode = _first_nonempty(smart_seed.get("simulation_mode"), "")
+        if candidate_simulation_mode == "" and "simulation_mode" in group.columns:
+            candidate_simulation_mode = _first_nonempty(group["simulation_mode"].iloc[0], "")
+        if candidate_simulation_mode == "":
+            candidate_simulation_mode = NA_TEXT
+        traffic_metric_scope = _safe_value_or_na(group["traffic_metric_scope"].iloc[0] if "traffic_metric_scope" in group.columns else NA_TEXT)
+        pedestrian_waiting_time_p95 = _safe_value_or_na(
+            smart_seed.get("pedestrian_waiting_time_p95") if smart_seed is not None else NA_TEXT
+        )
+        rows.append(
+            {
+                "candidate_id": candidate_id,
+                "seed_count": int(group["seed"].nunique()) if "seed" in group.columns else 0,
+                "scenario_name": scenario_name,
+                "simulation_mode": candidate_simulation_mode,
+                "experiment_kind": experiment_kind,
+                "traffic_metric_scope": traffic_metric_scope,
+                "generated_vehicle_count": generated_vehicle_count,
+                "generated_pedestrian_count": generated_pedestrian_count,
+                "demand_vehicle_validation_status": vehicle_status,
+                "demand_pedestrian_validation_status": pedestrian_status,
+                "safety_improvement_pct": _safe_value_or_na(group["safety_improvement_pct"].mean() if "safety_improvement_pct" in group.columns else NA_TEXT),
+                "traffic_degradation_pct": _safe_value_or_na(group["traffic_degradation_pct"].mean() if "traffic_degradation_pct" in group.columns else NA_TEXT),
+                "tradeoff_ratio": _safe_value_or_na(group["tradeoff_ratio"].mean() if "tradeoff_ratio" in group.columns else NA_TEXT),
+                "throughput": _safe_value_or_na(group["throughput"].mean() if "throughput" in group.columns else NA_TEXT),
+                "network_arrived_vehicles": _safe_value_or_na(group["network_arrived_vehicles"].mean() if "network_arrived_vehicles" in group.columns else NA_TEXT),
+                "vehicle_mean_time_loss": _safe_value_or_na(group["vehicle_mean_time_loss"].mean() if "vehicle_mean_time_loss" in group.columns else NA_TEXT),
+                "vehicle_mean_travel_time": _safe_value_or_na(group["vehicle_mean_travel_time"].mean() if "vehicle_mean_travel_time" in group.columns else NA_TEXT),
+                "vehicle_mean_speed": _safe_value_or_na(group["vehicle_mean_speed"].mean() if "vehicle_mean_speed" in group.columns else NA_TEXT),
+                "pedestrian_waiting_time_mean": _safe_value_or_na(group["pedestrian_waiting_time_mean"].mean() if "pedestrian_waiting_time_mean" in group.columns else NA_TEXT),
+                "pedestrian_waiting_time_p95": pedestrian_waiting_time_p95,
+                "result_status": result_status,
+                "result_reason": ";".join(
+                    part for part in [
+                        _first_nonempty(result_reason, ""),
+                        "sampled_preflight" if experiment_kind == "preflight" else "final_exact",
+                    ]
+                    if part and str(part).strip()
+                ),
+            }
+        )
+
+    report_df = pd.DataFrame(rows)
+    if report_df.empty:
+        return pd.DataFrame(columns=REPORT_COLUMNS)
+
+    missing_columns = [column for column in REPORT_COLUMNS if column not in report_df.columns]
+    for column in missing_columns:
+        report_df[column] = NA_TEXT
+    report_df = report_df[REPORT_COLUMNS]
+    return report_df
+
+
+def validate_tradeoff_report_guardrails(output_dir: Path, report_df: pd.DataFrame) -> None:
+    if report_df.empty:
+        raise ValueError("tradeoff report is empty")
+
+    forbidden = sorted(set(report_df.columns).intersection(REPORT_FORBIDDEN_COLUMNS))
+    if forbidden:
+        raise ValueError(f"tradeoff report contains forbidden columns: {forbidden}")
+
+    guardrail_paths = _report_guardrail_paths(output_dir)
+    demand_params_path = guardrail_paths["demand_params"]
+    if not demand_params_path.exists():
+        raise ValueError(f"required report input missing: {demand_params_path}")
+
+    demand = _load_demand_params_row(output_dir)
+    if not demand:
+        raise ValueError("demand_params.csv is missing for tradeoff report generation")
+
+    generated_vehicle_count = int(float(demand.get("generated_vehicle_count", 0) or 0))
+    expected_vehicle_count = int(
+        float(
+            demand.get("expected_vehicle_count_for_duration")
+            or demand.get("total_vehicle_count_600s")
+            or generated_vehicle_count
+        )
+    )
+    if generated_vehicle_count != expected_vehicle_count:
+        raise ValueError(
+            f"generated_vehicle_count mismatch: generated={generated_vehicle_count}, expected={expected_vehicle_count}"
+        )
+
+    route_file = demand.get("generated_vehicle_route_file")
+    trip_file = demand.get("generated_vehicle_trip_file")
+    if route_file is None or (isinstance(route_file, float) and pd.isna(route_file)) or str(route_file).strip().lower() == "nan":
+        route_file = trip_file
+    seed_value = str(demand.get("seed", "") or "")
+    ped_file = Path(str(route_file)).with_name(f"peds_seed{seed_value}.rou.xml") if route_file else None
+
+    route_vehicle_count = _xml_count(route_file, "vehicle")
+    trip_vehicle_count = _xml_count(trip_file, "trip")
+    if route_vehicle_count != generated_vehicle_count:
+        raise ValueError(
+            f"route XML vehicle count mismatch: route={route_vehicle_count}, expected={generated_vehicle_count}"
+        )
+    if trip_vehicle_count != generated_vehicle_count:
+        raise ValueError(
+            f"trip XML vehicle count mismatch: trip={trip_vehicle_count}, expected={generated_vehicle_count}"
+        )
+
+    generated_pedestrian_count = int(float(demand.get("generated_pedestrian_count", 0) or 0))
+    pedestrian_count_600s = int(float(demand.get("pedestrian_count_600s", 0) or 0))
+    if generated_pedestrian_count != pedestrian_count_600s:
+        raise ValueError(
+            f"generated_pedestrian_count mismatch: generated={generated_pedestrian_count}, policy={pedestrian_count_600s}"
+        )
+    person_count = _xml_count(ped_file, "person")
+    walk_count = _xml_count(ped_file, "walk")
+    if person_count <= 0 or walk_count <= 0:
+        raise ValueError("pedestrian XML has no person/walk entries")
+    if person_count != generated_pedestrian_count or walk_count != generated_pedestrian_count:
+        raise ValueError(
+            f"pedestrian XML count mismatch: person={person_count}, walk={walk_count}, expected={generated_pedestrian_count}"
+        )
+
+    exp_meta = _load_run_experiment_metadata(output_dir)
+    metrics_exact = _load_run_metrics_exact(output_dir)
+    experiment_mode = str(exp_meta.get("experiment_mode", "") or "").strip().lower()
+    expected_kind = _report_experiment_kind(metrics_exact, experiment_mode)
+    observed_kind = str(report_df.iloc[0].get("experiment_kind", "") or "").strip().lower()
+    if observed_kind != expected_kind:
+        raise ValueError(f"experiment_kind mismatch: observed={observed_kind}, expected={expected_kind}")
+    if not metrics_exact and observed_kind != "preflight":
+        raise ValueError("metrics_exact=false must map to preflight report")
+    if experiment_mode == "sampled" and observed_kind != "preflight":
+        raise ValueError("experiment_mode=sampled must map to preflight report")
+
+
 def write_methodology_report(
     output_dir: Path,
     model_params: dict[str, dict[str, Any]],
@@ -316,8 +702,9 @@ def write_methodology_report(
 
 ## 최종 보고용 파일
 
-- `outputs/simulation_summary.csv`
-- `outputs/baseline_vs_smart_summary.csv`
+- `outputs/csv/results/simulation_summary.csv`
+- `outputs/csv/results/baseline_vs_smart_summary.csv`
+- `outputs/csv/report/preflight_tradeoff_summary.csv` 또는 `outputs/csv/report/final_tradeoff_summary.csv`
 - `outputs/model_assumptions_used.csv`
 - `figures/tradeoff_summary.png`
 
@@ -671,11 +1058,17 @@ def write_required_outputs(
     candidates_csv: Path | None,
     nets_dir: Path | None,
     seed_df: pd.DataFrame,
+    cli_simulation_mode: str | None = None,
 ) -> None:
-    results_dir = output_dir
+    csv_layout = ensure_csv_output_layout(output_dir)
+    results_dir = csv_layout.results
+    report_dir = csv_layout.report
+    internal_dir = csv_layout.internal
     docs_dir = output_dir / "docs"
     figs_dir = figures_dir
     results_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    internal_dir.mkdir(parents=True, exist_ok=True)
     docs_dir.mkdir(parents=True, exist_ok=True)
     figs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -709,7 +1102,12 @@ def write_required_outputs(
                 seed_tradeoff.at[idx, "affected_route_vehicle_share"] = (
                     float(affected_count) / generated_count if generated_count and not np.isnan(generated_count) else np.nan
                 )
-    write_csv_utf8_sig(seed_tradeoff, results_dir / "baseline_smart_seed_results.csv")
+
+    write_csv_bundle(
+        seed_tradeoff,
+        results_dir / "baseline_smart_seed_results.csv",
+        mirrors=[output_dir / "baseline_smart_seed_results.csv", internal_dir / "debug_tradeoff_summary.csv"],
+    )
 
     summary = (
         seed_tradeoff.groupby("candidate_id", as_index=False)
@@ -737,18 +1135,45 @@ def write_required_outputs(
         if not seed_tradeoff.empty
         else pd.DataFrame()
     )
-    write_csv_utf8_sig(summary, results_dir / "baseline_smart_summary.csv")
+    write_csv_bundle(
+        summary,
+        results_dir / "baseline_smart_summary.csv",
+        mirrors=[output_dir / "baseline_smart_summary.csv"],
+    )
     local_tradeoff_summary = build_local_tradeoff_summary(seed_tradeoff)
-    write_csv_utf8_sig(local_tradeoff_summary, results_dir / "local_tradeoff_summary.csv")
+    write_csv_bundle(
+        local_tradeoff_summary,
+        results_dir / "local_tradeoff_summary.csv",
+        mirrors=[output_dir / "local_tradeoff_summary.csv"],
+    )
 
     quality = pd.DataFrame()
     if candidates_csv and candidates_csv.exists() and nets_dir and nets_dir.exists():
         candidates = pd.read_csv(candidates_csv)
         quality = build_candidate_quality_report(candidates, nets_dir, seed_tradeoff)
-    write_csv_utf8_sig(quality, results_dir / "candidate_quality_report.csv")
+    write_csv_bundle(
+        quality,
+        results_dir / "candidate_quality_report.csv",
+        mirrors=[output_dir / "candidate_quality_report.csv"],
+    )
 
     tradeoff_summary = summary.copy()
-    write_csv_utf8_sig(tradeoff_summary, results_dir / "tradeoff_summary.csv")
+    write_csv_bundle(
+        tradeoff_summary,
+        results_dir / "tradeoff_summary.csv",
+        mirrors=[output_dir / "tradeoff_summary.csv"],
+    )
+
+    report_tradeoff = build_tradeoff_report_summary(seed_df, seed_tradeoff, output_dir, cli_simulation_mode=cli_simulation_mode)
+    validate_tradeoff_report_guardrails(output_dir, report_tradeoff)
+    report_kind = str(report_tradeoff["experiment_kind"].iloc[0]) if not report_tradeoff.empty else "preflight"
+    report_name = _report_target_filename(report_kind)
+    _reconcile_report_artifacts(output_dir, report_dir, report_name)
+    write_csv_bundle(
+        report_tradeoff,
+        report_dir / report_name,
+        mirrors=[output_dir / report_name],
+    )
 
     try:
         ensure_matplotlib_env()
@@ -838,11 +1263,17 @@ def generate_all_reports(
     candidates_csv: str | Path | None = None,
     nets_dir: str | Path | None = None,
     model_parameters_path: str | Path | None = None,
+    cli_simulation_mode: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     output_dir = Path(output_dir)
     figures_dir = Path(figures_dir)
-    avg_path = output_dir / "simulation_results.csv"
-    seed_path = output_dir / "simulation_results_seed.csv"
+    csv_layout = ensure_csv_output_layout(output_dir)
+    avg_path = csv_layout.results / "simulation_results.csv"
+    seed_path = csv_layout.results / "simulation_results_seed.csv"
+    if not avg_path.exists():
+        avg_path = output_dir / "simulation_results.csv"
+    if not seed_path.exists():
+        seed_path = output_dir / "simulation_results_seed.csv"
     if not avg_path.exists():
         raise FileNotFoundError(f"{avg_path}가 없습니다. 먼저 시뮬레이션을 실행하세요.")
 
@@ -857,8 +1288,16 @@ def generate_all_reports(
     model_params = load_model_parameters(model_parameters_path)
     simulation_summary = build_simulation_summary(avg_df, seed_df)
     delta_summary = build_baseline_vs_smart_summary(simulation_summary, _load_run_metrics_exact(output_dir))
-    write_csv_utf8_sig(simulation_summary, output_dir / "simulation_summary.csv")
-    write_csv_utf8_sig(delta_summary, output_dir / "baseline_vs_smart_summary.csv")
+    write_csv_bundle(
+        simulation_summary,
+        csv_layout.results / "simulation_summary.csv",
+        mirrors=[output_dir / "simulation_summary.csv"],
+    )
+    write_csv_bundle(
+        delta_summary,
+        csv_layout.results / "baseline_vs_smart_summary.csv",
+        mirrors=[output_dir / "baseline_vs_smart_summary.csv"],
+    )
     write_methodology_report(output_dir, model_params, simulation_summary, delta_summary)
     write_figures(delta_summary, figures_dir)
     write_required_outputs(
@@ -867,6 +1306,7 @@ def generate_all_reports(
         Path(candidates_csv) if candidates_csv else None,
         Path(nets_dir) if nets_dir else None,
         seed_df,
+        cli_simulation_mode=cli_simulation_mode,
     )
     return {
         "simulation_summary": simulation_summary,
@@ -881,6 +1321,7 @@ def main() -> None:
     parser.add_argument("--candidates", default="outputs/candidates.csv")
     parser.add_argument("--nets_dir", default="sumo_nets")
     parser.add_argument("--model_parameters", default=None)
+    parser.add_argument("--simulation_mode", default=None)
     args = parser.parse_args()
     generate_all_reports(
         args.output_dir,
@@ -888,6 +1329,7 @@ def main() -> None:
         args.candidates,
         args.nets_dir,
         args.model_parameters,
+        args.simulation_mode,
     )
 
 

@@ -40,6 +40,7 @@ except ImportError:
 
 try:
     from .model_config import get_parameter_value, load_model_parameters
+    from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from .output_schema import english_output_columns
     from .sensitivity import (
         apply_parameter_value_overrides,
@@ -48,6 +49,7 @@ try:
     )
 except ImportError:
     from model_config import get_parameter_value, load_model_parameters
+    from csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from output_schema import english_output_columns
     from sensitivity import apply_parameter_value_overrides, load_sensitivity_scenarios, resolve_sensitivity_case
 
@@ -117,6 +119,7 @@ def collect_all(
     t0 = time.perf_counter()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    csv_layout = ensure_csv_output_layout(output_dir)
     demand_lookup = _load_demand_lookup(output_dir)
     candidates = pd.read_csv(candidates_csv)
     seed_rows = []
@@ -438,8 +441,23 @@ def collect_all(
 
     seed_df = pd.DataFrame(seed_rows)
     avg_df = pd.DataFrame(avg_rows)
-    english_output_columns(seed_df).to_csv(output_dir / "simulation_results_seed.csv", index=False)
-    english_output_columns(avg_df).to_csv(output_dir / "simulation_results.csv", index=False)
+    seed_out = english_output_columns(seed_df)
+    avg_out = english_output_columns(avg_df)
+    write_csv_bundle(
+        seed_out,
+        csv_layout.results / "simulation_results_seed.csv",
+        mirrors=[output_dir / "simulation_results_seed.csv"],
+    )
+    write_csv_bundle(
+        avg_out,
+        csv_layout.results / "simulation_results.csv",
+        mirrors=[output_dir / "simulation_results.csv"],
+    )
+    write_csv_bundle(
+        seed_out,
+        csv_layout.internal / "raw_simulation_metrics.csv",
+        mirrors=[csv_layout.internal / "simulation_results_seed.csv"],
+    )
 
     experiment_metadata = _experiment_metadata(metric_sample_interval_s, vehicle_sample_interval_s)
     failed_cases_count = int(len(failures))
@@ -515,8 +533,11 @@ def collect_all(
             "scenario",
         ],
     )
-    extension_debug.to_csv(output_dir / "extension_events_seed.csv", index=False)
-    extension_debug.to_csv(output_dir / "debug_extension_events.csv", index=False)
+    write_csv_bundle(
+        extension_debug,
+        output_dir / "extension_events_seed.csv",
+        mirrors=[csv_layout.internal / "debug_extension_events.csv"],
+    )
     incident_debug = pd.DataFrame(
         incident_event_rows,
         columns=[
@@ -536,23 +557,57 @@ def collect_all(
             "scenario",
         ],
     ).drop_duplicates()
-    incident_debug.to_csv(output_dir / "incident_events_seed.csv", index=False)
-    incident_debug.to_csv(output_dir / "debug_incident_events.csv", index=False)
-    pd.DataFrame(incident_impact_rows, columns=["incident_id","crosswalk_id","seed","scenario","event_type","before_queue_avg","after_queue_avg","before_wait_avg_sec","after_wait_avg_sec","before_speed_avg_mps","after_speed_avg_mps"]).to_csv(output_dir / "incident_impact_seed.csv", index=False)
+    write_csv_bundle(
+        incident_debug,
+        output_dir / "incident_events_seed.csv",
+        mirrors=[csv_layout.internal / "debug_incident_events.csv"],
+    )
+    write_csv_bundle(
+        pd.DataFrame(
+            incident_impact_rows,
+            columns=[
+                "incident_id",
+                "crosswalk_id",
+                "seed",
+                "scenario",
+                "event_type",
+                "before_queue_avg",
+                "after_queue_avg",
+                "before_wait_avg_sec",
+                "after_wait_avg_sec",
+                "before_speed_avg_mps",
+                "after_speed_avg_mps",
+            ],
+        ),
+        output_dir / "incident_impact_seed.csv",
+        mirrors=[csv_layout.internal / "intermediate_counter_dump.csv"],
+    )
 
     if boundary_warning_rows:
-        pd.DataFrame(boundary_warning_rows).to_csv(
-            output_dir / "network_boundary_warnings.csv", index=False
+        write_csv_bundle(
+            pd.DataFrame(boundary_warning_rows),
+            output_dir / "network_boundary_warnings.csv",
+            mirrors=[csv_layout.results / "network_boundary_warnings.csv"],
         )
 
     if failures:
         failed_path = output_dir / "failed_cases.csv"
-        english_output_columns(pd.DataFrame(failures)).to_csv(
+        write_csv_bundle(
+            english_output_columns(pd.DataFrame(failures)),
             failed_path,
-            mode="a",
-            header=not failed_path.exists(),
-            index=False,
+            mirrors=[csv_layout.internal / "failed_cases.csv"],
         )
+    runtime_progress_path = output_dir / "runtime_progress.csv"
+    if runtime_progress_path.exists():
+        try:
+            runtime_progress_df = pd.read_csv(runtime_progress_path)
+            write_csv_bundle(
+                runtime_progress_df,
+                csv_layout.internal / "runtime_progress.csv",
+                mirrors=[runtime_progress_path],
+            )
+        except Exception:
+            pass
     return seed_df, avg_df, timing
 
 
