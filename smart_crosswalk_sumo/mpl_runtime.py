@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import warnings
 from pathlib import Path
 
 
@@ -27,7 +26,6 @@ def ensure_matplotlib_env(cache_dir: Path | None = None) -> Path:
 
 def configure_matplotlib(matplotlib_module: object) -> str:
     font_name = "DejaVu Sans"
-    found_korean = False
     try:
         from matplotlib import font_manager
 
@@ -35,18 +33,9 @@ def configure_matplotlib(matplotlib_module: object) -> str:
         for candidate in PREFERRED_KOREAN_FONTS:
             if candidate in installed_fonts:
                 font_name = candidate
-                found_korean = True
                 break
     except Exception:
         pass
-
-    if not found_korean:
-        warnings.warn(
-            f"한글 폰트를 찾지 못했습니다 (지원 목록: {PREFERRED_KOREAN_FONTS}). "
-            "그래프 한글이 깨질 수 있으나 실행은 계속됩니다.",
-            UserWarning,
-            stacklevel=2,
-        )
 
     matplotlib_module.rcParams["font.family"] = [font_name]
     matplotlib_module.rcParams["axes.unicode_minus"] = False

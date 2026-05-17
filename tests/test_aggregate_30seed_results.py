@@ -135,6 +135,13 @@ def test_prepare_sampled10_builds_new_root(tmp_path: Path) -> None:
     assert manifest["expected_summary_csv"].astype(str).str.contains("phase6_smoke_summary.csv").sum() == 0
     assert (output_root / "commands" / "command_to_run_30seed_all_groups.sh").is_file()
 
+    sampled10_script = (output_root / "commands" / "command_to_run_seed1_current_main_12.sh").read_text(encoding="utf-8")
+    assert 'export PATH="$SUMO_HOME/bin:$PATH"' in sampled10_script
+    assert 'export PATH="$PROJECT_ROOT/.venv/bin:$PATH"' in sampled10_script
+    assert sampled10_script.index('export PATH="$PROJECT_ROOT/.venv/bin:$PATH"') > sampled10_script.index('export PATH="$SUMO_HOME/bin:$PATH"')
+    assert 'export PATH="$SUMO_HOME/bin:$PATH"\n  if [[ -z "${PROJ_LIB:-}"' in sampled10_script
+    assert 'export PATH="$SUMO_HOME/bin:$PATH"' not in sampled10_script.split('if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then', 1)[-1]
+
     status_proc = subprocess.run(
         [
             sys.executable,

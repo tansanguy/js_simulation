@@ -14,9 +14,6 @@ SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/generated_signal_7"
 BASELINE_CSV="$PIPELINE_ROOT/manifests/generated_signal_7_candidates.csv"
 NET_FILE="$NETS_DIR/generated_signal_7.net.xml"
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
-if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then
-  export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
-fi
 
 if [[ -z "${SUMO_HOME:-}" ]]; then
   if command -v sumo >/dev/null 2>&1; then
@@ -30,6 +27,9 @@ else
   if [[ -z "${PROJ_LIB:-}" && -d "$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj" ]]; then
     export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"
   fi
+fi
+if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then
+  export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
 fi
 
 mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR"
