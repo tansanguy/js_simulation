@@ -1,0 +1,2 @@
+﻿crosswalk_id,source_crosswalk_id,canonical_crosswalk_id,nearest_junction_id,tls_id_used,crossing_id,crossing_edge_id,ped_link_index,ped_link_indices,ped_depart_offset_sec,ped_repeat_count,ped_repeat_spacing_sec,route_from_edge,route_to_edge,source_file,batch_network_file,final_verdict,step_test_ok,controlled_links_count,crossing_inventory_used
+NODE_10377,NODE_10377,10377,436839905,436839905,,:436839905_c0,4,,0,5,2,1110186416#14,183272312#0,result/old/phase_next_top50_tiered_recovery_audit/top50_tiered_recovery_audit.csv,result/active/nets/current_main_12.net.xml,,,,

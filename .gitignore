@@ -38,3 +38,36 @@ statistics.xml
 result old/
 result/
 results/
+
+# --- Shared SUMO run inputs for teammate/Azure execution ---
+# Keep generated results ignored, but allow portable run inputs.
+
+# result is generally ignored
+result/**
+results/**
+
+# allow required parent dirs
+!result/
+!result/active/
+
+# allow reusable SUMO network inputs
+!result/active/nets/
+!result/active/nets/**
+
+# allow sampled10 run definition directory itself
+!result/active/real_30seed_runs_sampled10/
+result/active/real_30seed_runs_sampled10/**
+
+# allow command scripts
+!result/active/real_30seed_runs_sampled10/commands/
+!result/active/real_30seed_runs_sampled10/commands/**
+
+# allow manifests
+!result/active/real_30seed_runs_sampled10/manifests/
+!result/active/real_30seed_runs_sampled10/manifests/**
+
+# keep generated outputs ignored
+result/active/real_30seed_runs_sampled10/runs/**
+result/active/real_30seed_runs_sampled10/logs/**
+result/active/real_30seed_runs_sampled10/**/*.log
+result/active/real_30seed_runs_sampled10/**/*debug*.csv

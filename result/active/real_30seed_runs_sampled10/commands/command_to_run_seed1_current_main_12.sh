@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+RESULT_ROOT="$PROJECT_ROOT/result"
+ACTIVE_ROOT="$RESULT_ROOT/active"
+PIPELINE_ROOT="$ACTIVE_ROOT/real_30seed_runs_sampled10"
+NETS_DIR="$ACTIVE_ROOT/nets"
+FIGURES_DIR="$PIPELINE_ROOT/figures"
+RUN_ROOT="$PIPELINE_ROOT/runs/current_main_12"
+LOG_ROOT="$PIPELINE_ROOT/logs/current_main_12"
+SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/current_main_12"
+BASELINE_CSV="$PIPELINE_ROOT/manifests/current_main_12_candidates.csv"
+NET_FILE="$NETS_DIR/current_main_12.net.xml"
+SEED=1
+export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
+
+if [[ -z "${SUMO_HOME:-}" ]]; then
+  if command -v sumo >/dev/null 2>&1; then
+    :
+  elif [[ -d "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO" ]]; then
+    export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"
+    export PATH="$SUMO_HOME/bin:$PATH"
+    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"
+  else
+    echo "SUMO_HOME is not set and sumo is not on PATH" >&2
+    exit 1
+  fi
+else
+  export PATH="$SUMO_HOME/bin:$PATH"
+  if [[ -z "${PROJ_LIB:-}" && -d "$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj" ]]; then
+    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"
+  fi
+fi
+
+mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR"
+if [[ ! -f "$NET_FILE" ]]; then
+  echo "missing group net input: $NET_FILE" >&2
+  exit 1
+fi
+
+verify_run_success() {
+  local benchmark_json="$1/benchmark_timing.json"
+  python3 - "$benchmark_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+if not path.exists():
+    print(f"missing benchmark_timing.json: {path}", file=sys.stderr)
+    sys.exit(1)
+payload = json.loads(path.read_text(encoding="utf-8"))
+def as_int(name):
+    try:
+        return int(payload.get(name, -1))
+    except Exception:
+        return -1
+ok = (
+    payload.get("run_success") is True
+    and as_int("failed_cases_count") == 0
+    and as_int("baseline_result_rows") >= 1
+    and as_int("smart_result_rows") >= 1
+)
+if not ok:
+    reason = payload.get("failure_reason") or "run_success=false"
+    print(f"sampled10 run failed: {reason}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+is_successful_run() {
+  local out_dir="$1"
+  [[ -f "$out_dir/simulation_summary.csv" ]] || return 1
+  [[ -f "$out_dir/baseline_smart_seed_results.csv" ]] || return 1
+  [[ -f "$out_dir/baseline_smart_summary.csv" ]] || return 1
+  [[ -f "$out_dir/local_tradeoff_summary.csv" ]] || return 1
+  [[ -f "$out_dir/tradeoff_summary.csv" ]] || return 1
+  verify_run_success "$out_dir" >/dev/null 2>&1
+}
+
+run_sampled() {
+  local candidate_csv="$1"
+  local out_dir="$2"
+  local log_file="$3"
+  local seed="$4"
+  local manifest_row_role="$5"
+  local manifest_crosswalk_id="$6"
+  mkdir -p "$out_dir" "$(dirname "$log_file")"
+  if is_successful_run "$out_dir"; then
+    echo "skip seed$seed $out_dir"
+    return 0
+  fi
+  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration 600 --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
+  verify_run_success "$out_dir"
+  python3 -m smart_crosswalk_sumo.generate_reports --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" --candidates "$candidate_csv" --nets_dir "$NETS_DIR" >>"$log_file" 2>&1
+}
+
+echo "[current_main_12] baseline seed01 (sampled10)"
+run_sampled "$BASELINE_CSV" "$RUN_ROOT/baseline/seed01" "$LOG_ROOT/baseline/seed01.log" "$SEED" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
+
+SMART_IDS=("NODE_10335" "NODE_8369" "NODE_167173" "LINK_239754" "NODE_5846" "NODE_5831" "NODE_10377" "NODE_10376" "NODE_150723" "NODE_125895" "NODE_10381" "LINK_120139")
+echo "[current_main_12] smart seed01 per candidate (sampled10)"
+for i in "${!SMART_IDS[@]}"; do
+  crosswalk_id="${SMART_IDS[$i]}"
+  candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
+  out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed01"
+  log_file="$LOG_ROOT/smart/${crosswalk_id}/seed01.log"
+  run_sampled "$candidate_csv" "$out_dir" "$log_file" "$SEED" "smart_candidate" "$crosswalk_id"
+done
