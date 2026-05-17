@@ -2,10 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-RESULT_ROOT="$PROJECT_ROOT/result"
-ACTIVE_ROOT="$RESULT_ROOT/active"
-PIPELINE_ROOT="$ACTIVE_ROOT/real_30seed_runs_sampled10"
+PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if command -v open >/dev/null 2>&1; then
   OPEN_CMD=(open)

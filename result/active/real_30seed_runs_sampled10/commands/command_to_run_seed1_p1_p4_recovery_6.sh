@@ -149,19 +149,19 @@ run_sampled() {
   verify_report_outputs "$out_dir"
 }
 
-echo "[p1_p4_recovery_6] baseline seed1-30 (sampled10)"
-for seed in $(seq 1 30); do
+echo "[p1_p4_recovery_6] baseline seed1 (sampled10)"
+for seed in $(seq 1 1); do
   out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
   log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
   run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_P1_P4_RECOVERY_6"
 done
 
 SMART_IDS=("NODE_10060" "NODE_122781" "NODE_14937" "NODE_5647" "NODE_6342" "NODE_5938")
-echo "[p1_p4_recovery_6] smart seed1-30 per candidate (sampled10)"
+echo "[p1_p4_recovery_6] smart seed1 per candidate (sampled10)"
 for i in "${!SMART_IDS[@]}"; do
   crosswalk_id="${SMART_IDS[$i]}"
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
-  for seed in $(seq 1 30); do
+  for seed in $(seq 1 1); do
     out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
     log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
     run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"

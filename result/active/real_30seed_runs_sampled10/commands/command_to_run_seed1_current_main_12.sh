@@ -2,10 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"
 RESULT_ROOT="$PROJECT_ROOT/result"
 ACTIVE_ROOT="$RESULT_ROOT/active"
-PIPELINE_ROOT="$ACTIVE_ROOT/real_30seed_runs_sampled10"
 NETS_DIR="$ACTIVE_ROOT/nets"
 FIGURES_DIR="$PIPELINE_ROOT/figures"
 RUN_ROOT="$PIPELINE_ROOT/runs/current_main_12"
@@ -13,22 +13,20 @@ LOG_ROOT="$PIPELINE_ROOT/logs/current_main_12"
 SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/current_main_12"
 BASELINE_CSV="$PIPELINE_ROOT/manifests/current_main_12_candidates.csv"
 NET_FILE="$NETS_DIR/current_main_12.net.xml"
-SEED=1
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
+if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then
+  export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
+fi
 
 if [[ -z "${SUMO_HOME:-}" ]]; then
   if command -v sumo >/dev/null 2>&1; then
     :
-  elif [[ -d "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO" ]]; then
-    export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"
-    export PATH="$PROJECT_ROOT/.venv/bin:$SUMO_HOME/bin:$PATH"
-    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"
   else
     echo "SUMO_HOME is not set and sumo is not on PATH" >&2
     exit 1
   fi
 else
-  export PATH="$PROJECT_ROOT/.venv/bin:$SUMO_HOME/bin:$PATH"
+  export PATH="$SUMO_HOME/bin:$PATH"
   if [[ -z "${PROJ_LIB:-}" && -d "$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj" ]]; then
     export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"
   fi
@@ -69,6 +67,52 @@ if not ok:
 PY
 }
 
+verify_report_outputs() {
+  local out_dir="$1"
+  python3 - "$out_dir" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+out = Path(sys.argv[1])
+required = [
+    out / "simulation_summary.csv",
+    out / "baseline_smart_seed_results.csv",
+    out / "baseline_smart_summary.csv",
+    out / "local_tradeoff_summary.csv",
+    out / "tradeoff_summary.csv",
+    out / "demand_params.csv",
+    out / "csv" / "results" / "demand_params.csv",
+    out / "demand_vehicle.rou.xml",
+    out / "demand_vehicle.trips.xml",
+    out / "csv" / "report" / "preflight_tradeoff_summary.csv",
+]
+missing = [str(path) for path in required if not path.exists()]
+peds = sorted(out.glob("peds_seed*.rou.xml"))
+if not peds:
+    missing.append(str(out / "peds_seed*.rou.xml"))
+if missing:
+    print("missing report outputs: " + ";".join(missing), file=sys.stderr)
+    sys.exit(1)
+def count_xml(path, tag):
+    try:
+        return sum(1 for _ in ET.parse(path).getroot().iter(tag))
+    except Exception as exc:
+        print(f"xml read failed: {path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+route_count = count_xml(out / "demand_vehicle.rou.xml", "vehicle")
+trip_count = count_xml(out / "demand_vehicle.trips.xml", "trip")
+if route_count != trip_count:
+    print(f"vehicle route/trip count mismatch: route={route_count}, trip={trip_count}", file=sys.stderr)
+    sys.exit(1)
+for ped in peds:
+    person_count = count_xml(ped, "person")
+    walk_count = count_xml(ped, "walk")
+    if person_count <= 0 or walk_count <= 0 or person_count != walk_count:
+        print(f"ped count mismatch: {ped}: person={person_count}, walk={walk_count}", file=sys.stderr)
+        sys.exit(1)
+PY
+}
+
 is_successful_run() {
   local out_dir="$1"
   [[ -f "$out_dir/simulation_summary.csv" ]] || return 1
@@ -77,6 +121,7 @@ is_successful_run() {
   [[ -f "$out_dir/local_tradeoff_summary.csv" ]] || return 1
   [[ -f "$out_dir/tradeoff_summary.csv" ]] || return 1
   verify_run_success "$out_dir" >/dev/null 2>&1
+  verify_report_outputs "$out_dir" >/dev/null 2>&1
 }
 
 run_sampled() {
@@ -91,20 +136,34 @@ run_sampled() {
     echo "skip seed$seed $out_dir"
     return 0
   fi
+  if verify_run_success "$out_dir" >/dev/null 2>&1; then
+    echo "repair report seed$seed $out_dir"
+    python3 -m smart_crosswalk_sumo.repair_sampled10_demand_params --output-dir "$out_dir" >>"$log_file" 2>&1
+    python3 -m smart_crosswalk_sumo.generate_reports --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" --candidates "$candidate_csv" --nets_dir "$NETS_DIR" >>"$log_file" 2>&1
+    verify_report_outputs "$out_dir"
+    return 0
+  fi
   python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration 600 --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
   verify_run_success "$out_dir"
   python3 -m smart_crosswalk_sumo.generate_reports --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" --candidates "$candidate_csv" --nets_dir "$NETS_DIR" >>"$log_file" 2>&1
+  verify_report_outputs "$out_dir"
 }
 
-echo "[current_main_12] baseline seed01 (sampled10)"
-run_sampled "$BASELINE_CSV" "$RUN_ROOT/baseline/seed01" "$LOG_ROOT/baseline/seed01.log" "$SEED" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
+echo "[current_main_12] baseline seed1 (sampled10)"
+for seed in $(seq 1 1); do
+  out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
+  log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
+  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
+done
 
 SMART_IDS=("NODE_10335" "NODE_8369" "NODE_167173" "LINK_239754" "NODE_5846" "NODE_5831" "NODE_10377" "NODE_10376" "NODE_150723" "NODE_125895" "NODE_10381" "LINK_120139")
-echo "[current_main_12] smart seed01 per candidate (sampled10)"
+echo "[current_main_12] smart seed1 per candidate (sampled10)"
 for i in "${!SMART_IDS[@]}"; do
   crosswalk_id="${SMART_IDS[$i]}"
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
-  out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed01"
-  log_file="$LOG_ROOT/smart/${crosswalk_id}/seed01.log"
-  run_sampled "$candidate_csv" "$out_dir" "$log_file" "$SEED" "smart_candidate" "$crosswalk_id"
+  for seed in $(seq 1 1); do
+    out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
+    log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
+    run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
+  done
 done

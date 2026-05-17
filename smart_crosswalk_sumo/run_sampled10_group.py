@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 import smart_crosswalk_sumo.run_phase6_recovery_smoke as smoke_runner
+from smart_crosswalk_sumo.sampled10_demand_params import build_sampled10_demand_params
 from smart_crosswalk_sumo.run_phase6_recovery_smoke import (
     FACTORY_TABLE,
     _build_candidate_table,
@@ -158,6 +159,12 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         "sim_duration": int(args.sim_duration),
         "warmup": int(args.warmup),
         "traci_step_length": float(args.traci_step_length),
+        "traffic_measure_radius_m": float(args.traffic_measure_radius_m),
+        "extension_increment": float(args.extension_increment),
+        "max_extensions": int(args.max_extensions),
+        "ped_repeat_count": int(args.ped_repeat_count),
+        "ped_repeat_spacing_sec": float(args.ped_repeat_spacing_sec),
+        "phase_aligned_ped_depart": bool(args.phase_aligned_ped_depart),
         "include_vehicles": bool(args.include_vehicles),
         "args": {
             "metric_sample_interval": float(args.metric_sample_interval),
@@ -235,6 +242,18 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
     avg_df = _average_results(seed_df)
     english_output_columns(seed_df).to_csv(out_dir / "simulation_results_seed.csv", index=False)
     english_output_columns(avg_df).to_csv(out_dir / "simulation_results.csv", index=False)
+    if not seed_df.empty:
+        try:
+            build_sampled10_demand_params(out_dir)
+        except Exception as exc:
+            failures.append(
+                {
+                    "crosswalk_id": str(args.manifest_crosswalk_id or ""),
+                    "seed": int(args.seed),
+                    "step": "build_sampled10_demand_params",
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
     failed_cases_path = out_dir / "failed_cases.csv"
     if failures:
         english_output_columns(pd.DataFrame(failures)).to_csv(failed_cases_path, index=False)

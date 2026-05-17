@@ -7,12 +7,13 @@ PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"
 RESULT_ROOT="$PROJECT_ROOT/result"
 ACTIVE_ROOT="$RESULT_ROOT/active"
 NETS_DIR="$ACTIVE_ROOT/nets"
-FIGURES_DIR="$PIPELINE_ROOT/figures"
-RUN_ROOT="$PIPELINE_ROOT/runs/p1_p4_recovery_6"
-LOG_ROOT="$PIPELINE_ROOT/logs/p1_p4_recovery_6"
-SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/p1_p4_recovery_6"
-BASELINE_CSV="$PIPELINE_ROOT/manifests/p1_p4_recovery_6_candidates.csv"
-NET_FILE="$NETS_DIR/p1_p4_recovery_6.net.xml"
+RUN_CONTAINER_ROOT="${SMOKE_ROOT:-$ACTIVE_ROOT/smoke_30s_sampled10/seed01}"
+FIGURES_DIR="$RUN_CONTAINER_ROOT/figures"
+RUN_ROOT="$RUN_CONTAINER_ROOT/runs/current_main_12"
+LOG_ROOT="$RUN_CONTAINER_ROOT/logs/current_main_12"
+SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/current_main_12"
+BASELINE_CSV="$PIPELINE_ROOT/manifests/current_main_12_candidates.csv"
+NET_FILE="$NETS_DIR/current_main_12.net.xml"
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then
   export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
@@ -143,25 +144,25 @@ run_sampled() {
     verify_report_outputs "$out_dir"
     return 0
   fi
-  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration 600 --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
+  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration 30 --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
   verify_run_success "$out_dir"
   python3 -m smart_crosswalk_sumo.generate_reports --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" --candidates "$candidate_csv" --nets_dir "$NETS_DIR" >>"$log_file" 2>&1
   verify_report_outputs "$out_dir"
 }
 
-echo "[p1_p4_recovery_6] baseline seed1-30 (sampled10)"
-for seed in $(seq 1 30); do
+echo "[current_main_12] baseline seed1 (sampled10)"
+for seed in $(seq 1 1); do
   out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
   log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
-  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_P1_P4_RECOVERY_6"
+  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
 done
 
-SMART_IDS=("NODE_10060" "NODE_122781" "NODE_14937" "NODE_5647" "NODE_6342" "NODE_5938")
-echo "[p1_p4_recovery_6] smart seed1-30 per candidate (sampled10)"
+SMART_IDS=("NODE_10335" "NODE_8369" "NODE_167173" "LINK_239754" "NODE_5846" "NODE_5831" "NODE_10377" "NODE_10376" "NODE_150723" "NODE_125895" "NODE_10381" "LINK_120139")
+echo "[current_main_12] smart seed1 per candidate (sampled10)"
 for i in "${!SMART_IDS[@]}"; do
   crosswalk_id="${SMART_IDS[$i]}"
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
-  for seed in $(seq 1 30); do
+  for seed in $(seq 1 1); do
     out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
     log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
     run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"

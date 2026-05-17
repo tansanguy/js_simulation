@@ -91,6 +91,7 @@ SAMPLED10_EXTENSION_SEC = 5.0
 SAMPLED10_SIM_DURATION = 600
 SAMPLED10_WARMUP = 0
 SAMPLED10_STEP_LENGTH = 0.1
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,30 @@ def _now_stamp() -> str:
 
 
 def _default_candidate_metadata_source() -> Path:
-    return Path(__file__).resolve().parents[2] / "smart_crosswalk_sumo" / "data" / "crosswalk_stepwise_result_50m.csv"
+    return PROJECT_ROOT / "smart_crosswalk_sumo" / "data" / "crosswalk_stepwise_result_50m.csv"
+
+
+def _portable_path(path: Path | str) -> str:
+    p = Path(path)
+    try:
+        if p.is_absolute():
+            return p.resolve().relative_to(PROJECT_ROOT).as_posix()
+    except Exception:
+        pass
+    return p.as_posix()
+
+
+def _portableize_path_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for column in ["source_file", "batch_network_file", "net_file", "candidate_csv"]:
+        if column not in out.columns:
+            continue
+        out[column] = out[column].map(
+            lambda value: _portable_path(str(value).strip())
+            if str(value).strip() and str(value).strip().lower() not in {"nan", "none", "null"}
+            else value
+        )
+    return out
 
 
 def _ensure_dir(path: Path) -> None:
@@ -268,7 +292,7 @@ def _root_readme_text(output_root: Path) -> str:
         [
             "# 30 Seed Pipeline",
             "",
-            f"Output root: `{output_root}`",
+            f"Output root: `{_portable_path(output_root)}`",
             "",
             "This folder prepares a 30-seed workflow for three separate network groups:",
             "",
@@ -564,12 +588,20 @@ def _build_group_script(spec: GroupSpec, output_root: Path, single_csv_root: Pat
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            'export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"',
-            'export PATH="$SUMO_HOME/bin:$PATH"',
-            'export PROJ_LIB="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/framework/EclipseSUMO.framework/Resources/proj"',
-            'export PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            'PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"',
+            'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
+            'if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then',
+            '  export PATH="$PROJECT_ROOT/.venv/bin:$PATH"',
+            'fi',
+            'if [[ -n "${SUMO_HOME:-}" ]]; then',
+            '  export PATH="$SUMO_HOME/bin:$PATH"',
+            'elif ! command -v sumo >/dev/null 2>&1; then',
+            '  echo "SUMO_HOME is not set and sumo is not on PATH" >&2',
+            '  exit 1',
+            'fi',
             "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
             f'BASELINE_CSV="{ctx["base_csv"]}"',
             f'NET_FILE="{ctx["net_file"]}"',
             f'RUN_ROOT="{ctx["run_root"]}"',
@@ -647,12 +679,19 @@ def _build_all_groups_script(output_root: Path) -> str:
     )
 
 
-def _build_sampled10_command_lines(spec: GroupSpec, output_root: Path, single_csv_root: Path, nets_dir: Path) -> dict[str, str]:
+def _build_sampled10_command_lines(
+    spec: GroupSpec,
+    output_root: Path,
+    single_csv_root: Path,
+    nets_dir: Path,
+    *,
+    sim_duration: int = SAMPLED10_SIM_DURATION,
+) -> dict[str, str]:
     run_prefix = (
         "python3 -m smart_crosswalk_sumo.run_sampled10_group "
         "--candidate-csv \"$candidate_csv\" --net-file \"$NET_FILE\" "
         "--seed \"$seed\" --output-dir \"$out_dir\" "
-        f"--sim-duration {SAMPLED10_SIM_DURATION} --warmup {SAMPLED10_WARMUP} "
+        f"--sim-duration {sim_duration} --warmup {SAMPLED10_WARMUP} "
         f"--traci_step_length {SAMPLED10_STEP_LENGTH} --traffic_measure_radius_m 500.0 "
         f"--extension_increment {SAMPLED10_EXTENSION_SEC} --max_extensions 1 "
         f"--metric-sample-interval {SAMPLED10_METRIC_SAMPLE_INTERVAL} "
@@ -673,10 +712,34 @@ def _build_sampled10_command_lines(spec: GroupSpec, output_root: Path, single_cs
     }
 
 
-def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv_root: Path, nets_dir: Path) -> str:
-    ctx = _build_sampled10_command_lines(spec, output_root, single_csv_root, nets_dir)
+def _build_sampled10_group_script(
+    spec: GroupSpec,
+    output_root: Path,
+    single_csv_root: Path,
+    nets_dir: Path,
+    *,
+    seed_start: int = 1,
+    seed_end: int = 30,
+    sim_duration: int = SAMPLED10_SIM_DURATION,
+    smoke_root: bool = False,
+) -> str:
+    ctx = _build_sampled10_command_lines(spec, output_root, single_csv_root, nets_dir, sim_duration=sim_duration)
     ids = [str(v).strip() for v in spec.smart_candidates.get("crosswalk_id", pd.Series(dtype=str)).tolist()]
     id_array = " ".join(f'"{v}"' for v in ids)
+    seed_label = "seed1" if seed_start == seed_end == 1 else f"seed{seed_start}-{seed_end}"
+    if smoke_root:
+        root_lines = [
+            'RUN_CONTAINER_ROOT="${SMOKE_ROOT:-$ACTIVE_ROOT/smoke_30s_sampled10/seed01}"',
+            'FIGURES_DIR="$RUN_CONTAINER_ROOT/figures"',
+            f'RUN_ROOT="$RUN_CONTAINER_ROOT/runs/{spec.run_group}"',
+            f'LOG_ROOT="$RUN_CONTAINER_ROOT/logs/{spec.run_group}"',
+        ]
+    else:
+        root_lines = [
+            'FIGURES_DIR="$PIPELINE_ROOT/figures"',
+            f'RUN_ROOT="$PIPELINE_ROOT/runs/{spec.run_group}"',
+            f'LOG_ROOT="$PIPELINE_ROOT/logs/{spec.run_group}"',
+        ]
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -688,21 +751,18 @@ def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv
             'RESULT_ROOT="$PROJECT_ROOT/result"',
             'ACTIVE_ROOT="$RESULT_ROOT/active"',
             'NETS_DIR="$ACTIVE_ROOT/nets"',
-            'FIGURES_DIR="$PIPELINE_ROOT/figures"',
-            f'RUN_ROOT="$PIPELINE_ROOT/runs/{spec.run_group}"',
-            f'LOG_ROOT="$PIPELINE_ROOT/logs/{spec.run_group}"',
+            *root_lines,
             f'SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/{spec.run_group}"',
             f'BASELINE_CSV="$PIPELINE_ROOT/manifests/{spec.run_group}_candidates.csv"',
             f'NET_FILE="$NETS_DIR/{spec.run_group}.net.xml"',
             'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
+            'if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then',
+            '  export PATH="$PROJECT_ROOT/.venv/bin:$PATH"',
+            'fi',
             "",
             'if [[ -z "${SUMO_HOME:-}" ]]; then',
             '  if command -v sumo >/dev/null 2>&1; then',
             '    :',
-            '  elif [[ -d "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO" ]]; then',
-            '    export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"',
-            '    export PATH="$SUMO_HOME/bin:$PATH"',
-            '    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"',
             '  else',
             '    echo "SUMO_HOME is not set and sumo is not on PATH" >&2',
             '    exit 1',
@@ -749,6 +809,52 @@ def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv
             "PY",
             "}",
             "",
+            "verify_report_outputs() {",
+            "  local out_dir=\"$1\"",
+            "  python3 - \"$out_dir\" <<'PY'",
+            "import sys",
+            "import xml.etree.ElementTree as ET",
+            "from pathlib import Path",
+            "out = Path(sys.argv[1])",
+            "required = [",
+            "    out / \"simulation_summary.csv\",",
+            "    out / \"baseline_smart_seed_results.csv\",",
+            "    out / \"baseline_smart_summary.csv\",",
+            "    out / \"local_tradeoff_summary.csv\",",
+            "    out / \"tradeoff_summary.csv\",",
+            "    out / \"demand_params.csv\",",
+            "    out / \"csv\" / \"results\" / \"demand_params.csv\",",
+            "    out / \"demand_vehicle.rou.xml\",",
+            "    out / \"demand_vehicle.trips.xml\",",
+            "    out / \"csv\" / \"report\" / \"preflight_tradeoff_summary.csv\",",
+            "]",
+            "missing = [str(path) for path in required if not path.exists()]",
+            "peds = sorted(out.glob(\"peds_seed*.rou.xml\"))",
+            "if not peds:",
+            "    missing.append(str(out / \"peds_seed*.rou.xml\"))",
+            "if missing:",
+            "    print(\"missing report outputs: \" + \";\".join(missing), file=sys.stderr)",
+            "    sys.exit(1)",
+            "def count_xml(path, tag):",
+            "    try:",
+            "        return sum(1 for _ in ET.parse(path).getroot().iter(tag))",
+            "    except Exception as exc:",
+            "        print(f\"xml read failed: {path}: {exc}\", file=sys.stderr)",
+            "        sys.exit(1)",
+            "route_count = count_xml(out / \"demand_vehicle.rou.xml\", \"vehicle\")",
+            "trip_count = count_xml(out / \"demand_vehicle.trips.xml\", \"trip\")",
+            "if route_count != trip_count:",
+            "    print(f\"vehicle route/trip count mismatch: route={route_count}, trip={trip_count}\", file=sys.stderr)",
+            "    sys.exit(1)",
+            "for ped in peds:",
+            "    person_count = count_xml(ped, \"person\")",
+            "    walk_count = count_xml(ped, \"walk\")",
+            "    if person_count <= 0 or walk_count <= 0 or person_count != walk_count:",
+            "        print(f\"ped count mismatch: {ped}: person={person_count}, walk={walk_count}\", file=sys.stderr)",
+            "        sys.exit(1)",
+            "PY",
+            "}",
+            "",
             "is_successful_run() {",
             "  local out_dir=\"$1\"",
             "  [[ -f \"$out_dir/simulation_summary.csv\" ]] || return 1",
@@ -757,6 +863,7 @@ def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv
             "  [[ -f \"$out_dir/local_tradeoff_summary.csv\" ]] || return 1",
             "  [[ -f \"$out_dir/tradeoff_summary.csv\" ]] || return 1",
             "  verify_run_success \"$out_dir\" >/dev/null 2>&1",
+            "  verify_report_outputs \"$out_dir\" >/dev/null 2>&1",
             "}",
             "",
             "run_sampled() {",
@@ -771,24 +878,32 @@ def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv
             "    echo \"skip seed$seed $out_dir\"",
             "    return 0",
             "  fi",
+            "  if verify_run_success \"$out_dir\" >/dev/null 2>&1; then",
+            "    echo \"repair report seed$seed $out_dir\"",
+            "    python3 -m smart_crosswalk_sumo.repair_sampled10_demand_params --output-dir \"$out_dir\" >>\"$log_file\" 2>&1",
+            f"    {ctx['report_prefix']} --output_dir \"$out_dir\" --candidates \"$candidate_csv\" --nets_dir \"$NETS_DIR\" >>\"$log_file\" 2>&1",
+            "    verify_report_outputs \"$out_dir\"",
+            "    return 0",
+            "  fi",
             f"  {ctx['run_prefix']} >>\"$log_file\" 2>&1",
             "  verify_run_success \"$out_dir\"",
             f"  {ctx['report_prefix']} --output_dir \"$out_dir\" --candidates \"$candidate_csv\" --nets_dir \"$NETS_DIR\" >>\"$log_file\" 2>&1",
+            "  verify_report_outputs \"$out_dir\"",
             "}",
             "",
-            f"echo \"[{spec.run_group}] baseline 30 seed (sampled10)\"",
-            "for seed in $(seq 1 30); do",
+            f"echo \"[{spec.run_group}] baseline {seed_label} (sampled10)\"",
+            f"for seed in $(seq {seed_start} {seed_end}); do",
             '  out_dir="$RUN_ROOT/baseline/seed$(printf \'%02d\' "$seed")"',
             '  log_file="$LOG_ROOT/baseline/seed$(printf \'%02d\' "$seed").log"',
             f"  run_sampled \"$BASELINE_CSV\" \"$out_dir\" \"$log_file\" \"$seed\" \"baseline_placeholder\" \"{spec.baseline_placeholder_crosswalk_id}\"",
             "done",
             "",
             f"SMART_IDS=({id_array})",
-            f"echo \"[{spec.run_group}] smart 30 seed per candidate (sampled10)\"",
+            f"echo \"[{spec.run_group}] smart {seed_label} per candidate (sampled10)\"",
             "for i in \"${!SMART_IDS[@]}\"; do",
             "  crosswalk_id=\"${SMART_IDS[$i]}\"",
             '  candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"',
-            "  for seed in $(seq 1 30); do",
+            f"  for seed in $(seq {seed_start} {seed_end}); do",
             '    out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf \'%02d\' "$seed")"',
             '    log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf \'%02d\' "$seed").log"',
             "    run_sampled \"$candidate_csv\" \"$out_dir\" \"$log_file\" \"$seed\" \"smart_candidate\" \"$crosswalk_id\"",
@@ -799,7 +914,18 @@ def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv
     )
 
 
-def _build_sampled10_all_groups_script(output_root: Path) -> str:
+def _build_sampled10_all_groups_script(
+    output_root: Path,
+    *,
+    seed1_only: bool = False,
+    smoke30: bool = False,
+) -> str:
+    if smoke30:
+        prefix = "command_to_run_smoke30_seed1"
+    elif seed1_only:
+        prefix = "command_to_run_seed1"
+    else:
+        prefix = "command_to_run_30seed"
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -808,10 +934,10 @@ def _build_sampled10_all_groups_script(output_root: Path) -> str:
             'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
             'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
             "",
-            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_current_main_12.sh"',
-            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_signal_fix_9.sh"',
-            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_generated_signal_7.sh"',
-            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_p1_p4_recovery_6.sh"',
+            f'bash "$PIPELINE_ROOT/commands/{prefix}_current_main_12.sh"',
+            f'bash "$PIPELINE_ROOT/commands/{prefix}_signal_fix_9.sh"',
+            f'bash "$PIPELINE_ROOT/commands/{prefix}_generated_signal_7.sh"',
+            f'bash "$PIPELINE_ROOT/commands/{prefix}_p1_p4_recovery_6.sh"',
             "",
         ]
     )
@@ -830,10 +956,6 @@ def _build_standardize_script(output_root: Path) -> str:
             'if [[ -z "${SUMO_HOME:-}" ]]; then',
             '  if command -v sumo >/dev/null 2>&1; then',
             '    :',
-            '  elif [[ -d "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO" ]]; then',
-            '    export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"',
-            '    export PATH="$SUMO_HOME/bin:$PATH"',
-            '    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"',
             '  else',
             '    echo "SUMO_HOME is not set and sumo is not on PATH" >&2',
             '    exit 1',
@@ -876,8 +998,24 @@ def _build_open_script(output_root: Path) -> str:
             "",
             'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
             'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
-            "open \"$PIPELINE_ROOT/README.md\"",
-            "open \"$PIPELINE_ROOT/csv/seed30_group_summary.csv\" || true",
+            "",
+            "if command -v open >/dev/null 2>&1; then",
+            "  OPEN_CMD=(open)",
+            "elif command -v xdg-open >/dev/null 2>&1; then",
+            "  OPEN_CMD=(xdg-open)",
+            "elif command -v python3 >/dev/null 2>&1; then",
+            "  OPEN_CMD=(python3 -m webbrowser)",
+            "else",
+            "  OPEN_CMD=()",
+            "fi",
+            "",
+            "if [[ ${#OPEN_CMD[@]} -gt 0 ]]; then",
+            "  \"${OPEN_CMD[@]}\" \"$PIPELINE_ROOT/README.md\" || true",
+            "  \"${OPEN_CMD[@]}\" \"$PIPELINE_ROOT/csv/seed30_group_summary.csv\" || true",
+            "else",
+            "  echo \"$PIPELINE_ROOT/README.md\"",
+            "  echo \"$PIPELINE_ROOT/csv/seed30_group_summary.csv\"",
+            "fi",
             "",
         ]
     )
@@ -934,9 +1072,9 @@ def _build_plan_by_group(specs: list[GroupSpec], output_root: Path) -> pd.DataFr
                 "smart_runs": candidate_count * 30,
                 "total_runs": 30 + candidate_count * 30,
                 "candidate_count": candidate_count,
-                "baseline_candidate_csv": str(spec.full_candidate_csv),
-                "baseline_net_file": str(spec.baseline_net_file),
-                "output_root": str(output_root),
+                "baseline_candidate_csv": _portable_path(spec.full_candidate_csv),
+                "baseline_net_file": _portable_path(spec.baseline_net_file),
+                "output_root": _portable_path(output_root),
             }
         )
     return pd.DataFrame(rows)
@@ -1015,8 +1153,8 @@ def _build_candidate_metadata(
                     "admin_dong": source_row.get("admin_dong", row.get("admin_dong", "")),
                     "net_group": spec.net_group,
                     "run_group": spec.run_group,
-                    "net_file": spec.baseline_net_file.as_posix(),
-                    "source_csv": source_csv.resolve().as_posix(),
+                    "net_file": _portable_path(spec.baseline_net_file),
+                    "source_csv": _portable_path(source_csv),
                     "source_rank": int(source_row.get("source_rank", np.nan)) if pd.notna(source_row.get("source_rank", np.nan)) else np.nan,
                     "risk_rank": int(risk_rank_map.get(crosswalk_id, np.nan)) if crosswalk_id in risk_rank_map else np.nan,
                     "risk_score": _safe_float(risk_score),
@@ -1467,12 +1605,12 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
     single_csv_root = output_root / "manifests" / "single_candidates"
     for spec in specs:
         _ensure_dir(single_csv_root / spec.run_group)
-        full_csv = spec.full_candidate_csv.as_posix()
-        net_file = spec.baseline_net_file.as_posix()
+        full_csv = _portable_path(spec.full_candidate_csv)
+        net_file = _portable_path(spec.baseline_net_file)
         candidate_df = spec.smart_candidates.copy()
         if candidate_df.empty:
             continue
-        candidate_df = candidate_df.reset_index(drop=True)
+        candidate_df = _portableize_path_columns(candidate_df.reset_index(drop=True))
         _write_csv(candidate_df, spec.full_candidate_csv)
         for _, row in candidate_df.iterrows():
             crosswalk_id = str(row.get("crosswalk_id", "")).strip()
@@ -1491,20 +1629,20 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
 	                        "network_input_mode": "group_net_file",
 	                        "seed": seed,
 	                        "crosswalk_id": crosswalk_id,
-                        "candidate_csv": str(single_csv_root / spec.run_group / f"{crosswalk_id}.csv"),
+                        "candidate_csv": _portable_path(single_csv_root / spec.run_group / f"{crosswalk_id}.csv"),
                         "net_file": net_file,
-                        "output_dir": str(smart_out),
-                        "log_file": str(smart_log),
-                        "expected_summary_csv": str(smart_out / "phase6_smoke_summary.csv"),
-                        "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
+                        "output_dir": _portable_path(smart_out),
+                        "log_file": _portable_path(smart_log),
+                        "expected_summary_csv": _portable_path(smart_out / "phase6_smoke_summary.csv"),
+                        "validation_manifest": _portable_path(output_root / "manifests" / "run_validation_manifest.csv"),
                         "skip_if_exists": True,
                         "command": (
                             "python3 -m smart_crosswalk_sumo.run_phase6_recovery_smoke "
-                            f"--candidate-csv \"{single_csv_root / spec.run_group / f'{crosswalk_id}.csv'}\" "
+                            f"--candidate-csv \"{_portable_path(single_csv_root / spec.run_group / f'{crosswalk_id}.csv')}\" "
                             f"--net-file \"{net_file}\" --scenario smart --seed {seed} "
                             "--sim-duration 600 --warmup 0 --step-length 0.5 --extension-sec 5.0 "
                             "--phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 "
-                            f"--output-dir \"{smart_out}\" >\"{smart_log}\" 2>&1"
+                            f"--output-dir \"{_portable_path(smart_out)}\" >\"{_portable_path(smart_log)}\" 2>&1"
                         ),
                     }
                 )
@@ -1521,17 +1659,17 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
                     "crosswalk_id": spec.baseline_placeholder_crosswalk_id,
                     "candidate_csv": full_csv,
                     "net_file": net_file,
-                    "output_dir": str(base_out),
-                    "log_file": str(base_log),
-                    "expected_summary_csv": str(base_out / "phase6_smoke_summary.csv"),
-                    "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
+                    "output_dir": _portable_path(base_out),
+                    "log_file": _portable_path(base_log),
+                    "expected_summary_csv": _portable_path(base_out / "phase6_smoke_summary.csv"),
+                    "validation_manifest": _portable_path(output_root / "manifests" / "run_validation_manifest.csv"),
                     "skip_if_exists": True,
                     "command": (
                         "python3 -m smart_crosswalk_sumo.run_phase6_recovery_smoke "
                         f"--candidate-csv \"{full_csv}\" --net-file \"{net_file}\" --scenario baseline --seed {seed} "
                         "--sim-duration 600 --warmup 0 --step-length 0.5 --extension-sec 0 "
                         "--phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 "
-                        f"--output-dir \"{base_out}\" >\"{base_log}\" 2>&1"
+                        f"--output-dir \"{_portable_path(base_out)}\" >\"{_portable_path(base_log)}\" 2>&1"
                     ),
                 }
             )
@@ -1547,12 +1685,12 @@ def _build_run_manifest_sampled10(specs: list[GroupSpec], output_root: Path, net
     single_csv_root = output_root / "manifests" / "single_candidates"
     for spec in specs:
         _ensure_dir(single_csv_root / spec.run_group)
-        full_csv = spec.full_candidate_csv.as_posix()
-        net_file = spec.baseline_net_file.as_posix()
+        full_csv = _portable_path(spec.full_candidate_csv)
+        net_file = _portable_path(spec.baseline_net_file)
         candidate_df = spec.smart_candidates.copy()
         if candidate_df.empty:
             continue
-        candidate_df = candidate_df.reset_index(drop=True)
+        candidate_df = _portableize_path_columns(candidate_df.reset_index(drop=True))
         _write_csv(candidate_df, spec.full_candidate_csv)
         for _, row in candidate_df.iterrows():
             crosswalk_id = str(row.get("crosswalk_id", "")).strip()
@@ -1571,12 +1709,12 @@ def _build_run_manifest_sampled10(specs: list[GroupSpec], output_root: Path, net
                         "network_input_mode": "group_net_file",
                         "seed": seed,
                         "crosswalk_id": crosswalk_id,
-                        "candidate_csv": str(single_csv_root / spec.run_group / f"{crosswalk_id}.csv"),
+                        "candidate_csv": _portable_path(single_csv_root / spec.run_group / f"{crosswalk_id}.csv"),
                         "net_file": net_file,
-                        "output_dir": str(smart_out),
-                        "log_file": str(smart_log),
-                        "expected_summary_csv": str(smart_out / "simulation_results_seed.csv"),
-                        "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
+                        "output_dir": _portable_path(smart_out),
+                        "log_file": _portable_path(smart_log),
+                        "expected_summary_csv": _portable_path(smart_out / "simulation_results_seed.csv"),
+                        "validation_manifest": _portable_path(output_root / "manifests" / "run_validation_manifest.csv"),
                         "skip_if_exists": True,
                         "command": (
                             "python3 -m smart_crosswalk_sumo.run_sampled10_group "
@@ -1614,10 +1752,10 @@ def _build_run_manifest_sampled10(specs: list[GroupSpec], output_root: Path, net
                     "crosswalk_id": spec.baseline_placeholder_crosswalk_id,
                     "candidate_csv": full_csv,
                     "net_file": net_file,
-                    "output_dir": str(base_out),
-                    "log_file": str(base_log),
-                    "expected_summary_csv": str(base_out / "simulation_results_seed.csv"),
-                    "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
+                    "output_dir": _portable_path(base_out),
+                    "log_file": _portable_path(base_log),
+                    "expected_summary_csv": _portable_path(base_out / "simulation_results_seed.csv"),
+                    "validation_manifest": _portable_path(output_root / "manifests" / "run_validation_manifest.csv"),
                     "skip_if_exists": True,
                     "command": (
                         "python3 -m smart_crosswalk_sumo.run_sampled10_group "
@@ -1818,13 +1956,13 @@ def _build_validation_manifest(
                 "validation_stage": stage,
                 "validation_scope": scope,
                 "source_artifact": path.name,
-                "source_path": str(path),
+                "source_path": _portable_path(path),
                 "status": _status(df, required),
                 "row_count": int(len(df)) if df is not None else 0,
                 "column_count": int(len(df.columns)) if df is not None else 0,
                 "evidence_summary": f"rows={len(df)}, cols={len(df.columns)}" if df is not None else "rows=0, cols=0",
                 "note": note,
-                "manifest_path": str(manifest_path),
+                "manifest_path": _portable_path(manifest_path),
             }
         )
     return pd.DataFrame(rows)
@@ -2450,6 +2588,12 @@ def _write_prepare_outputs(
         _write_text(output_root / "commands" / "command_to_run_30seed_current_main_12.sh", _build_sampled10_group_script(specs[0], output_root, single_csv_root, nets_dir))
         _write_text(output_root / "commands" / "command_to_run_30seed_signal_fix_9.sh", _build_sampled10_group_script(specs[1], output_root, single_csv_root, nets_dir))
         _write_text(output_root / "commands" / "command_to_run_30seed_generated_signal_7.sh", _build_sampled10_group_script(specs[2], output_root, single_csv_root, nets_dir))
+        _write_text(output_root / "commands" / "command_to_run_seed1_current_main_12.sh", _build_sampled10_group_script(specs[0], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1))
+        _write_text(output_root / "commands" / "command_to_run_seed1_signal_fix_9.sh", _build_sampled10_group_script(specs[1], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1))
+        _write_text(output_root / "commands" / "command_to_run_seed1_generated_signal_7.sh", _build_sampled10_group_script(specs[2], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1))
+        _write_text(output_root / "commands" / "command_to_run_smoke30_seed1_current_main_12.sh", _build_sampled10_group_script(specs[0], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1, sim_duration=30, smoke_root=True))
+        _write_text(output_root / "commands" / "command_to_run_smoke30_seed1_signal_fix_9.sh", _build_sampled10_group_script(specs[1], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1, sim_duration=30, smoke_root=True))
+        _write_text(output_root / "commands" / "command_to_run_smoke30_seed1_generated_signal_7.sh", _build_sampled10_group_script(specs[2], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1, sim_duration=30, smoke_root=True))
     else:
         _write_text(output_root / "commands" / "command_to_run_30seed_current_main_12.sh", _build_group_script(specs[0], output_root, single_csv_root))
         _write_text(output_root / "commands" / "command_to_run_30seed_signal_fix_9.sh", _build_group_script(specs[1], output_root, single_csv_root))
@@ -2457,9 +2601,14 @@ def _write_prepare_outputs(
     if len(specs) > 3:
         if sampled10:
             _write_text(output_root / "commands" / "command_to_run_30seed_p1_p4_recovery_6.sh", _build_sampled10_group_script(specs[3], output_root, single_csv_root, nets_dir))
+            _write_text(output_root / "commands" / "command_to_run_seed1_p1_p4_recovery_6.sh", _build_sampled10_group_script(specs[3], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1))
+            _write_text(output_root / "commands" / "command_to_run_smoke30_seed1_p1_p4_recovery_6.sh", _build_sampled10_group_script(specs[3], output_root, single_csv_root, nets_dir, seed_start=1, seed_end=1, sim_duration=30, smoke_root=True))
         else:
             _write_text(output_root / "commands" / "command_to_run_30seed_p1_p4_recovery_6.sh", _build_group_script(specs[3], output_root, single_csv_root))
     _write_text(output_root / "commands" / "command_to_run_30seed_all_groups.sh", _build_sampled10_all_groups_script(output_root) if sampled10 else _build_all_groups_script(output_root))
+    if sampled10:
+        _write_text(output_root / "commands" / "command_to_run_seed1_all_groups.sh", _build_sampled10_all_groups_script(output_root, seed1_only=True))
+        _write_text(output_root / "commands" / "command_to_run_smoke30_seed1_all_groups.sh", _build_sampled10_all_groups_script(output_root, smoke30=True))
     _write_text(output_root / "commands" / "command_to_standardize_30seed_outputs.sh", _build_standardize_script(output_root))
     _write_text(output_root / "commands" / "command_to_check_30seed_results.sh", _build_check_script(output_root))
     _write_text(output_root / "commands" / "command_to_open_30seed_summary.sh", _build_open_script(output_root))

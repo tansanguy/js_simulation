@@ -8,11 +8,11 @@ RESULT_ROOT="$PROJECT_ROOT/result"
 ACTIVE_ROOT="$RESULT_ROOT/active"
 NETS_DIR="$ACTIVE_ROOT/nets"
 FIGURES_DIR="$PIPELINE_ROOT/figures"
-RUN_ROOT="$PIPELINE_ROOT/runs/p1_p4_recovery_6"
-LOG_ROOT="$PIPELINE_ROOT/logs/p1_p4_recovery_6"
-SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/p1_p4_recovery_6"
-BASELINE_CSV="$PIPELINE_ROOT/manifests/p1_p4_recovery_6_candidates.csv"
-NET_FILE="$NETS_DIR/p1_p4_recovery_6.net.xml"
+RUN_ROOT="$PIPELINE_ROOT/runs/signal_fix_9"
+LOG_ROOT="$PIPELINE_ROOT/logs/signal_fix_9"
+SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/signal_fix_9"
+BASELINE_CSV="$PIPELINE_ROOT/manifests/signal_fix_9_candidates.csv"
+NET_FILE="$NETS_DIR/signal_fix_9.net.xml"
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then
   export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
@@ -149,19 +149,19 @@ run_sampled() {
   verify_report_outputs "$out_dir"
 }
 
-echo "[p1_p4_recovery_6] baseline seed1-30 (sampled10)"
-for seed in $(seq 1 30); do
+echo "[signal_fix_9] baseline seed1 (sampled10)"
+for seed in $(seq 1 1); do
   out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
   log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
-  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_P1_P4_RECOVERY_6"
+  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_SIGNAL_FIX_9"
 done
 
-SMART_IDS=("NODE_10060" "NODE_122781" "NODE_14937" "NODE_5647" "NODE_6342" "NODE_5938")
-echo "[p1_p4_recovery_6] smart seed1-30 per candidate (sampled10)"
+SMART_IDS=("LINK_249048" "NODE_5837" "LINK_10218" "LINK_140740" "NODE_9634" "LINK_194891" "NODE_10378" "NODE_5681" "NODE_10262")
+echo "[signal_fix_9] smart seed1 per candidate (sampled10)"
 for i in "${!SMART_IDS[@]}"; do
   crosswalk_id="${SMART_IDS[$i]}"
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
-  for seed in $(seq 1 30); do
+  for seed in $(seq 1 1); do
     out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
     log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
     run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
