@@ -1225,10 +1225,33 @@ def _write_delta_figure(delta_df: pd.DataFrame, figures_dir: Path) -> None:
     plt.close()
 
 
+def _load_run_metrics_exact(output_dir: Path) -> bool | None:
+    for run_metadata_path in (output_dir.parent / "run_metadata.json", output_dir / "run_metadata.json"):
+        if not run_metadata_path.exists():
+            continue
+        try:
+            payload = json.loads(run_metadata_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                metrics_exact = payload.get("metrics_exact")
+                if isinstance(metrics_exact, bool):
+                    return metrics_exact
+                experiment_mode = str(payload.get("experiment_mode", "") or "").strip().lower()
+                if experiment_mode in {"sampled", "exact"}:
+                    return experiment_mode == "exact"
+                args = payload.get("args", {})
+                metric_interval = float(args.get("metric_sample_interval", 0.0) or 0.0)
+                vehicle_interval = float(args.get("vehicle_sample_interval", 0.0) or 0.0)
+                return metric_interval == 0.0 and vehicle_interval == 0.0
+        except Exception:
+            continue
+    return None
+
+
 def _build_baseline_delta(
     summary_df: pd.DataFrame,
     key_column: str,
     smart_scenario: str = "smart_selected",
+    metrics_exact: bool | None = None,
 ) -> pd.DataFrame:
     if summary_df.empty:
         return pd.DataFrame()
@@ -1258,6 +1281,8 @@ def _build_baseline_delta(
             - baseline.loc[common, "vehicle_delay_cost"].to_numpy(),
             "extension_count_smart": smart.loc[common, "extension_count"].to_numpy(),
             "total_extension_sec_smart": smart.loc[common, "total_extension_sec"].to_numpy(),
+            "traffic_metric_scope": "global_500m",
+            "metrics_exact": metrics_exact if metrics_exact is not None else pd.NA,
         }
     ).sort_values(key_column)
 
@@ -2226,6 +2251,9 @@ def collect_integrated_metrics(
     sensitivity_config: dict[str, Any] | None = None,
     enable_risk_event_collection: bool = False,
     risk_event_sample_interval_s: float = 1.0,
+    metric_sample_interval_s: float = 0.0,
+    vehicle_sample_interval_s: float = 0.0,
+    progress_interval_s: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     output_dir = Path(output_dir)
     run_name = output_dir.parent.name if output_dir.parent.name else output_dir.name
@@ -2408,6 +2436,9 @@ def collect_integrated_metrics(
                     sensitivity_config,
                     enable_risk_event_collection=enable_risk_event_collection,
                     risk_event_sample_interval_s=risk_event_sample_interval_s,
+                    metric_sample_interval_s=metric_sample_interval_s,
+                    vehicle_sample_interval_s=vehicle_sample_interval_s,
+                    progress_interval_s=progress_interval_s,
                 )
             except Exception as exc:
                 trace(
@@ -2530,11 +2561,12 @@ def generate_integrated_reports(
     figures_dir = Path(figures_dir)
     per_crosswalk_summary = pd.read_csv(output_dir / "per_crosswalk_simulation_results.csv")
     network_summary = pd.read_csv(output_dir / "network_simulation_summary.csv")
-    per_crosswalk_delta = _build_baseline_delta(per_crosswalk_summary, "crosswalk_id")
+    metrics_exact = _load_run_metrics_exact(output_dir)
+    per_crosswalk_delta = _build_baseline_delta(per_crosswalk_summary, "crosswalk_id", metrics_exact=metrics_exact)
     if not network_summary.empty and "scenario_group" not in network_summary.columns:
         network_summary = network_summary.copy()
         network_summary["scenario_group"] = "integrated_network"
-    network_delta = _build_baseline_delta(network_summary, "scenario_group")
+    network_delta = _build_baseline_delta(network_summary, "scenario_group", metrics_exact=metrics_exact)
 
     write_csv_utf8_sig(per_crosswalk_delta, output_dir / "baseline_vs_smart_summary.csv")
     write_csv_utf8_sig(network_delta, output_dir / "network_baseline_vs_smart_summary.csv")

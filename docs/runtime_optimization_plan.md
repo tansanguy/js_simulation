@@ -319,7 +319,8 @@ time python3 -m smart_crosswalk_sumo.run_phase6_recovery_smoke \
 
 ## Implementation Note
 
-- `run_simulations.py`에 step-local lane/vehicle cache를 넣고, `--metric-sample-interval`을 추가했다.
-- `main.py`는 `--reuse_nets_dir`, `--reuse_demand_dir`, `--force_demand`, `--metric-sample-interval`을 받아 benchmark timing을 `benchmark_timing.json`으로 남긴다.
+- `run_simulations.py`에 step-local lane/vehicle cache를 넣고, `--metric-sample-interval`, `--vehicle-sample-interval`, `--progress-interval`을 추가했다.
+- `main.py`는 `--reuse_nets_dir`, `--reuse_demand_dir`, `--force_demand`, `--metric-sample-interval`, `--vehicle-sample-interval`, `--progress-interval`을 받아 benchmark timing을 `benchmark_timing.json`으로 남긴다.
 - `build_networks.py`와 `generate_demand.py`는 provenance 및 hash를 기준으로 재사용 여부를 판정한다.
 - full default 동작은 그대로 유지되며, sampling과 reuse는 옵션을 명시한 경우에만 동작한다.
+- final safety/PET/report용 결과는 `--metric-sample-interval 0 --vehicle-sample-interval 0`일 때만 exact로 취급한다.

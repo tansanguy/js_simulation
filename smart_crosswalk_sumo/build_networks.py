@@ -555,29 +555,24 @@ def build_network(
     )
 
     warnings = corridor_boundary_warning(osm_file, bbox_tuple, corridor_whitelist)
-    if force or not osm_file.exists():
-        try:
-            download_osm_bbox(bbox, osm_file)
-        except Exception:
-            if osm_file.exists() and osm_file.stat().st_size > 0:
-                warnings.append(
-                    {
-                        "warning_type": "overpass_cache_fallback",
-                        "road_name": "",
-                        "message": "OSM 재다운로드 실패로 기존 캐시 map.osm을 재사용합니다.",
-                    }
-                )
-            else:
-                raise
 
     admin_polygon_resolved = resolve_admin_polygon_path(normalized_mode, admin_polygon_path)
-    reuse_source_dir = Path(reuse_nets_dir).expanduser().resolve() / f"cw_{cw_id}" if reuse_nets_dir else None
     reuse_reason = ""
     reused_from = ""
     reuse_checked_dirs = [output_dir]
-    if reuse_source_dir is not None and reuse_source_dir != output_dir:
-        reuse_checked_dirs.append(reuse_source_dir)
     if not force:
+        reuse_source_dirs: list[Path] = []
+        if reuse_nets_dir:
+            reuse_root = Path(reuse_nets_dir).expanduser().resolve()
+            reuse_source_dirs.extend(
+                [
+                    reuse_root / f"cw_{cw_id}",
+                    reuse_root / "sumo_nets" / f"cw_{cw_id}",
+                ]
+            )
+        for reuse_source_dir in reuse_source_dirs:
+            if reuse_source_dir != output_dir and reuse_source_dir not in reuse_checked_dirs:
+                reuse_checked_dirs.append(reuse_source_dir)
         for candidate_dir in reuse_checked_dirs:
             candidate_net = candidate_dir / "network.net.xml"
             candidate_metadata = _read_json_file(candidate_dir / "metadata.json")
@@ -609,6 +604,21 @@ def build_network(
                         "message": f"network 재사용 불일치로 재생성합니다: {reason}",
                     }
                 )
+
+    if not reuse_reason and (force or not osm_file.exists()):
+        try:
+            download_osm_bbox(bbox, osm_file)
+        except Exception:
+            if osm_file.exists() and osm_file.stat().st_size > 0:
+                warnings.append(
+                    {
+                        "warning_type": "overpass_cache_fallback",
+                        "road_name": "",
+                        "message": "OSM 재다운로드 실패로 기존 캐시 map.osm을 재사용합니다.",
+                    }
+                )
+            else:
+                raise
 
     sanitize_report: dict[str, Any] | None = None
     connection_sanitize_report: dict[str, Any] | None = None

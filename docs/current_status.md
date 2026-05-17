@@ -19,6 +19,9 @@ Status key:
 | Vehicle flow policy validation | pass | `main_realistic_stress`, `20,877 vph`, `3,480 / 600s`, passenger only | Current vehicle policy is implemented |
 | Vehicle global coverage validation | pass | edge/grid coverage checks passed in checked artifact | Broad network coverage is validated, not uniform edge traffic |
 | Baseline/smart same route/trip/net validation | pass | `sumocfg` parsing returns `true` / `false` / `not_checked` | Smart should differ only by signal policy |
+| Sampled traffic report semantics | partial | `metric_sample_interval=10`, `vehicle_sample_interval=10` in the checked run | Sampled 10s is the official repeated experiment mode; exact `0/0` is audit-only for a few candidates |
+| Trade-off scope definition | pass | `baseline_vs_smart_summary.csv` stays global-500m; `local_tradeoff_summary.csv` adds local approach / affected-route fields | Trade-off analysis must separate global dilution from local impact |
+| Legacy `vehicle_count` label | deprecated | `vehicle_count` in legacy seed summaries is the toy queue arrival count, not route demand volume | Use `generated_vehicle_count`, `network_arrived_vehicles`, or `toy_queue_vehicle_arrivals` instead |
 | Network provenance and representativeness validation | partial | Jung-gu boundary + about 1 km buffer experimental network | Current network is representative, not 1:1 identical to Jung-gu roads |
 | Result/csv organization validation | pass | `result/active/real_30seed_runs/`, `result/active/pedestrian_assumption/`, `result/active/validation/` | Current artifact tree is organized |
 | Runtime optimization rollout | partial | runtime optimization options added, benchmark pending | Step-local caches and reuse flags are in place, but the benchmark still needs fresh measurement |
@@ -31,6 +34,7 @@ Status key:
 | Uniform traffic on every edge | not_checked | Current vehicle validation checks coverage, not equal distribution |
 | Full source OSM chain from smoke-run JSON alone | not_checked | Smoke-run metadata does not fully embed source provenance |
 | Final experiment-scale vehicle policy effect | not_checked | Current checked artifact proves policy implementation, not final-scale effect |
+| Exact traffic/safety final report for sampled run | not_checked | The checked run used sampled vehicle and metric intervals, so the exact final report still needs a rerun |
 
 ## Current Risks
 
@@ -49,6 +53,8 @@ Status key:
 4. Use edge/grid coverage for vehicle flow checks, not uniformity language.
 5. Keep `ROAD_RANK` out of candidate selection and vehicle allocation language.
 6. Keep current claims inside `pass` or `partial` only, never promote `partial` to `pass` without new evidence.
+7. Treat sampled 10s runs as the official repeated experiment mode; exact `0/0` is audit-only.
+8. Use local approach / affected-route trade-off metrics when judging vehicle cost, not only global 500m averages.
 
 ## Evidence Files
 

@@ -16,8 +16,14 @@ from typing import Any
 
 import pandas as pd
 
-from smart_crosswalk_sumo.network_utils import discover_network_metadata_from_net, pedestrian_link_indices, read_net
-from smart_crosswalk_sumo.network_utils import pedestrian_route_from_crossing
+from smart_crosswalk_sumo.network_utils import (
+    discover_network_metadata_from_net,
+    edge_function,
+    lane_allows,
+    pedestrian_link_indices,
+    pedestrian_route_from_crossing,
+    read_net,
+)
 
 try:
     import traci  # type: ignore
@@ -318,6 +324,237 @@ def _candidate_crossing_roads(node_id: str, crossing_edge_id: str) -> set[str]:
     roads.discard("nan")
     roads.discard("None")
     return {road for road in roads if road}
+
+
+def _safe_net_edge(net: Any, edge_id: str) -> Any | None:
+    if not net or not edge_id:
+        return None
+    try:
+        return net.getEdge(str(edge_id))
+    except Exception:
+        return None
+
+
+def _passenger_depart_allowed(edge: Any | None) -> bool:
+    if edge is None:
+        return False
+    if str(edge_function(edge)).lower() != "normal":
+        return False
+    try:
+        lanes = list(edge.getLanes())
+    except Exception:
+        lanes = []
+    return any(lane_allows(lane, "passenger") for lane in lanes)
+
+
+def _nearby_passenger_edges(
+    net: Any,
+    seed_edge_ids: list[str],
+    *,
+    max_depth: int = 2,
+) -> list[str]:
+    candidates: list[str] = []
+    seen_edges: set[str] = set()
+    seen_nodes: set[str] = set()
+    queue: list[tuple[Any, int]] = []
+
+    def enqueue_node(node: Any, depth: int) -> None:
+        if node is None:
+            return
+        node_id = str(getattr(node, "getID", lambda: "")() or "")
+        if not node_id or node_id in seen_nodes or depth > max_depth:
+            return
+        seen_nodes.add(node_id)
+        queue.append((node, depth))
+
+    for edge_id in seed_edge_ids:
+        edge = _safe_net_edge(net, edge_id)
+        if edge is None:
+            continue
+        if _passenger_depart_allowed(edge):
+            normalized_id = str(edge.getID())
+            if normalized_id not in seen_edges:
+                seen_edges.add(normalized_id)
+                candidates.append(normalized_id)
+        enqueue_node(edge.getFromNode(), 0)
+        enqueue_node(edge.getToNode(), 0)
+
+    idx = 0
+    while idx < len(queue):
+        node, depth = queue[idx]
+        idx += 1
+        connected_edges = list(node.getIncoming()) + list(node.getOutgoing())
+        for edge in connected_edges:
+            edge_id = str(edge.getID())
+            if _passenger_depart_allowed(edge) and edge_id not in seen_edges:
+                seen_edges.add(edge_id)
+                candidates.append(edge_id)
+            if depth >= max_depth:
+                continue
+            try:
+                neighbor_nodes = [edge.getFromNode(), edge.getToNode()]
+            except Exception:
+                neighbor_nodes = []
+            for neighbor in neighbor_nodes:
+                enqueue_node(neighbor, depth + 1)
+
+    return candidates
+
+
+def _vehicle_route_path(net: Any, from_edge_id: str, to_edge_id: str) -> list[str]:
+    from_edge = _safe_net_edge(net, from_edge_id)
+    to_edge = _safe_net_edge(net, to_edge_id)
+    if from_edge is None or to_edge is None:
+        return []
+    if not _passenger_depart_allowed(from_edge) or not _passenger_depart_allowed(to_edge):
+        return []
+    try:
+        path_edges, _cost = net.getShortestPath(from_edge, to_edge, vClass="passenger", withInternal=False)
+    except Exception:
+        return []
+    if not path_edges:
+        return []
+    return [str(edge.getID()) for edge in path_edges]
+
+
+def _passenger_lane_count_for_route(net: Any, route_edges_text: str) -> int:
+    count = 0
+    seen: set[str] = set()
+    for edge_id in str(route_edges_text or "").split():
+        edge = _safe_net_edge(net, edge_id)
+        if edge is None:
+            continue
+        normalized_edge_id = str(edge.getID())
+        if normalized_edge_id in seen:
+            continue
+        seen.add(normalized_edge_id)
+        try:
+            lanes = list(edge.getLanes())
+        except Exception:
+            lanes = []
+        count += sum(1 for lane in lanes if lane_allows(lane, "passenger"))
+    return count
+
+
+def _resolve_vehicle_route(
+    net: Any,
+    row: Any,
+    seed: int,
+    vehicle_index: int,
+) -> dict[str, Any]:
+    vehicle_id = f"veh_{vehicle_index}_{getattr(row, 'crosswalk_id')}"
+    original_depart = str(getattr(row, "route_from_edge", "") or "")
+    original_arrive = str(getattr(row, "route_to_edge", "") or "")
+    crossing_edge = str(getattr(row, "crossing_edge_id", "") or getattr(row, "crossing_id", "") or "")
+
+    depart_edge = _safe_net_edge(net, original_depart)
+    depart_exists = depart_edge is not None
+    passenger_allowed = _passenger_depart_allowed(depart_edge)
+
+    depart_candidates = _nearby_passenger_edges(net, [original_depart, crossing_edge, original_arrive])
+    arrive_candidates = _nearby_passenger_edges(net, [original_arrive, crossing_edge, original_depart])
+    if not arrive_candidates:
+        arrive_candidates = list(depart_candidates)
+
+    chosen_depart = ""
+    chosen_arrive = ""
+    chosen_path: list[str] = []
+    reason = ""
+
+    for depart_candidate in depart_candidates:
+        for arrive_candidate in arrive_candidates:
+            if depart_candidate == arrive_candidate:
+                continue
+            path_ids = _vehicle_route_path(net, depart_candidate, arrive_candidate)
+            if path_ids:
+                chosen_depart = depart_candidate
+                chosen_arrive = arrive_candidate
+                chosen_path = path_ids
+                reason = (
+                    "original_depart_valid"
+                    if depart_candidate == original_depart and arrive_candidate == original_arrive
+                    else "replaced_with_nearby_passenger_path"
+                )
+                break
+        if chosen_path:
+            break
+
+    if not chosen_path:
+        for depart_candidate in depart_candidates:
+            path_ids = _vehicle_route_path(net, depart_candidate, depart_candidate)
+            if path_ids:
+                chosen_depart = depart_candidate
+                chosen_arrive = depart_candidate
+                chosen_path = path_ids
+                reason = "single_edge_passenger_fallback"
+                break
+
+    action = "generate_vehicle" if chosen_path else "skip_vehicle"
+    if not reason:
+        reason = "no_passenger_allowed_route_near_candidate"
+
+    return {
+        "crosswalk_id": str(getattr(row, "crosswalk_id")),
+        "seed": int(seed),
+        "vehicle_id": vehicle_id,
+        "depart_edge": original_depart,
+        "depart_edge_exists": bool(depart_exists),
+        "passenger_allowed": bool(passenger_allowed),
+        "replacement_edge": chosen_depart,
+        "action": action,
+        "reason": reason,
+        "vehicle_route_from_edge": chosen_depart,
+        "vehicle_route_to_edge": chosen_arrive,
+        "vehicle_route_edges": " ".join(chosen_path),
+    }
+
+
+def _prepare_vehicle_route_plan(
+    candidate_df: pd.DataFrame,
+    net_file: Path,
+    seed: int,
+    out_dir: Path,
+    include_vehicles: bool,
+) -> pd.DataFrame:
+    out = candidate_df.copy()
+    out["vehicle_route_from_edge"] = ""
+    out["vehicle_route_to_edge"] = ""
+    out["vehicle_route_edges"] = ""
+    out["vehicle_generation_action"] = "skip_vehicle"
+    out["vehicle_generation_reason"] = "include_vehicles_disabled"
+
+    audit_columns = [
+        "crosswalk_id",
+        "seed",
+        "vehicle_id",
+        "depart_edge",
+        "depart_edge_exists",
+        "passenger_allowed",
+        "replacement_edge",
+        "action",
+        "reason",
+    ]
+    if not include_vehicles:
+        pd.DataFrame(columns=audit_columns).to_csv(out_dir / "sampled10_vehicle_depart_edge_audit.csv", index=False)
+        return out
+
+    net = read_net(net_file)
+    audit_rows: list[dict[str, Any]] = []
+    for pos, row in enumerate(out.itertuples(index=False), start=1):
+        plan = _resolve_vehicle_route(net, row, seed, pos)
+        row_index = out.index[pos - 1]
+        audit_rows.append({column: plan[column] for column in audit_columns})
+        out.at[row_index, "vehicle_route_from_edge"] = str(plan["vehicle_route_from_edge"])
+        out.at[row_index, "vehicle_route_to_edge"] = str(plan["vehicle_route_to_edge"])
+        out.at[row_index, "vehicle_route_edges"] = str(plan["vehicle_route_edges"])
+        out.at[row_index, "vehicle_generation_action"] = str(plan["action"])
+        out.at[row_index, "vehicle_generation_reason"] = str(plan["reason"])
+
+    pd.DataFrame(audit_rows, columns=audit_columns).to_csv(
+        out_dir / "sampled10_vehicle_depart_edge_audit.csv",
+        index=False,
+    )
+    return out
 
 
 def _normalize_road_alias(road_id: str) -> set[str]:
@@ -875,9 +1112,13 @@ def _write_routes(
                 }
             )
         if include_vehicles:
+            vehicle_route_edges = str(getattr(row, "vehicle_route_edges", "") or "").strip()
+            vehicle_action = str(getattr(row, "vehicle_generation_action", "") or "")
+            if vehicle_action != "generate_vehicle" or not vehicle_route_edges:
+                continue
             veh_depart = round(5.0 + (idx - 1) * 40.0 + rng.uniform(-2.0, 2.0), 1)
             veh_lines.append(
-                f'    <route id="veh_route_{idx}" edges="{row.route_from_edge} {row.route_to_edge}"/>'
+                f'    <route id="veh_route_{idx}" edges="{vehicle_route_edges}"/>'
             )
             veh_lines.append(
                 f'    <vehicle id="veh_{idx}_{row.crosswalk_id}" type="car" route="veh_route_{idx}" depart="{max(1.0, veh_depart)}"/>'
@@ -990,6 +1231,7 @@ def _run_scenario(
     run_start_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
     run_start_perf = time.perf_counter()
 
+    candidate_df = _prepare_vehicle_route_plan(candidate_df, net_file, seed, out_dir, include_vehicles)
     ped_file, veh_file, ped_summary_path, ped_records = _write_routes(candidate_df, out_dir, seed, duration, include_vehicles)
     cfg_path = _write_sumocfg(out_dir / f"phase6_smoke_{scenario}.sumocfg", net_file, ped_file, veh_file, duration, step_length)
 
@@ -1011,6 +1253,26 @@ def _run_scenario(
     extension_trigger_debug_rows: list[dict[str, Any]] = []
     signal_phase_rows: list[dict[str, Any]] = []
     route_diag_by_person: dict[str, dict[str, Any]] = {}
+    generated_vehicle_count = 0
+    network_arrived_vehicle_ids: set[str] = set()
+    network_departed_vehicle_ids: set[str] = set()
+    surrounding_lane_count = 0
+    generated_vehicle_route_file = str(veh_file) if veh_file is not None and veh_file.exists() else ""
+    if include_vehicles:
+        generated_vehicle_count = int(
+            (candidate_df.get("vehicle_generation_action", pd.Series(dtype=str)) == "generate_vehicle").sum()
+        )
+        try:
+            net = read_net(net_file)
+            surrounding_lane_count = int(
+                sum(
+                    _passenger_lane_count_for_route(net, str(getattr(row, "vehicle_route_edges", "") or ""))
+                    for row in candidate_df.itertuples(index=False)
+                    if str(getattr(row, "vehicle_generation_action", "") or "") == "generate_vehicle"
+                )
+            )
+        except Exception:
+            surrounding_lane_count = 0
 
     # per-candidate tracking
     departure_times: dict[str, float] = {}
@@ -1029,8 +1291,9 @@ def _run_scenario(
     veh_delays: dict[str, list[float]] = {cid: [] for cid in candidate_df["crosswalk_id"].astype(str).tolist()}
 
     step = 0
+    t = 0.0
     try:
-        while step < duration:
+        while t < float(duration):
             traci.simulationStep()
             t = float(traci.simulation.getTime())
             ped_ids = list(traci.person.getIDList())
@@ -1039,6 +1302,10 @@ def _run_scenario(
 
             for pid in traci.simulation.getDepartedPersonIDList():
                 departure_times[str(pid)] = t
+            for vid in traci.simulation.getDepartedIDList():
+                network_departed_vehicle_ids.add(str(vid))
+            for vid in traci.simulation.getArrivedIDList():
+                network_arrived_vehicle_ids.add(str(vid))
 
             for cid, meta in candidate_meta.items():
                 tls_id = meta["tls_id"]
@@ -1339,6 +1606,11 @@ def _run_scenario(
                 "veh_delay_mean": round(sum(delays) / len(delays), 2) if delays else None,
                 "veh_delay_max": round(max(delays), 2) if delays else None,
                 "extension_count": len([e for e in extension_events if e.get("crosswalk_id") == cid]),
+                "generated_vehicle_count": int(generated_vehicle_count),
+                "network_arrived_vehicles": int(len(network_arrived_vehicle_ids)),
+                "total_vehicle_arrivals": int(len(network_departed_vehicle_ids)),
+                "generated_vehicle_route_file": generated_vehicle_route_file,
+                "surrounding_lane_count": int(surrounding_lane_count),
                 "batch_network_file": meta["batch_network_file"],
                 "route_reason": meta["route_reason"],
             }

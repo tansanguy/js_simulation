@@ -96,8 +96,20 @@ python3 -m smart_crosswalk_sumo.run_phase6_vehicle_flow --candidate-csv result/p
 
 - `python3 -m smart_crosswalk_sumo.main`
 - This umbrella runner supports preprocessing, demand generation, simulation, reporting, and validation flags.
-- Runtime options added for reuse/sampling: `--reuse_nets_dir`, `--reuse_demand_dir`, `--force_demand`, `--metric-sample-interval`.
-- `--metric-sample-interval 0` keeps the current full-step behavior; nonzero values only affect lane-heavy sampling.
+- Runtime options added for reuse/sampling/heartbeat: `--reuse_nets_dir`, `--reuse_demand_dir`, `--force_demand`, `--metric-sample-interval`, `--vehicle-sample-interval`, `--progress-interval`.
+- `--metric-sample-interval 0` and `--vehicle-sample-interval 0` keep the current full-step behavior; nonzero values only affect sampled metric collection and should not be used for final exact safety/PET reporting.
+
+### Sampled / Exact Experiment Mode
+
+- `metric_sample_interval=10` and `vehicle_sample_interval=10` are the official repeated experiment mode.
+- `metric_sample_interval=0` and `vehicle_sample_interval=0` are exact audit runs for a small number of candidates.
+- Final reports should label sampled outputs as `sampled estimate`.
+- Global `baseline_vs_smart_summary.csv` is not enough by itself; check `local_tradeoff_summary.csv` for local approach and affected-route trade-offs too.
+- Recommended run order:
+  1. sampled top1 1seed
+  2. sampled 34 candidates 1seed
+  3. sampled selected candidates 30seed
+  4. exact 1~2 candidates audit
 
 ## Main Outputs
 

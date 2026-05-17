@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import time
 from datetime import datetime
@@ -79,6 +80,7 @@ def resolve_run_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]
 
 def write_run_metadata(args: argparse.Namespace, run_dir: Path, output_dir: Path, nets_dir: Path, figures_dir: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
+    experiment_metadata = _build_experiment_metadata(args)
     metadata = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
@@ -86,6 +88,7 @@ def write_run_metadata(args: argparse.Namespace, run_dir: Path, output_dir: Path
         "nets_dir": str(nets_dir),
         "figures_dir": str(figures_dir),
         "args": vars(args),
+        **experiment_metadata,
     }
     (run_dir / "run_metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -98,6 +101,100 @@ def write_benchmark_timing(run_dir: Path, timing: dict[str, object]) -> None:
         json.dumps(timing, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _build_experiment_metadata(args: argparse.Namespace) -> dict[str, object]:
+    metric_sample_interval_s = float(getattr(args, "metric_sample_interval", 0.0) or 0.0)
+    vehicle_sample_interval_s = float(getattr(args, "vehicle_sample_interval", 0.0) or 0.0)
+    metrics_exact = metric_sample_interval_s == 0.0 and vehicle_sample_interval_s == 0.0
+    return {
+        "experiment_mode": "exact" if metrics_exact else "sampled",
+        "metric_sample_interval_s": metric_sample_interval_s,
+        "vehicle_sample_interval_s": vehicle_sample_interval_s,
+        "metrics_exact": metrics_exact,
+        "metrics_interpretation": (
+            "exact values; use for exact PET/instantaneous queue claims"
+            if metrics_exact
+            else "sampled estimate; use for repeated paired comparisons, not exact PET/instantaneous queue claims"
+        ),
+    }
+
+
+def _count_csv_data_rows(csv_path: Path) -> int:
+    if not csv_path.exists():
+        return 0
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            if header is None:
+                return 0
+            return sum(1 for row in reader if any(str(cell).strip() for cell in row))
+    except Exception:
+        return 0
+
+
+def _count_csv_rows_by_value(csv_path: Path, column_name: str, expected_value: str) -> int:
+    if not csv_path.exists():
+        return 0
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames:
+                return 0
+            count = 0
+            for row in reader:
+                if not any(str(value).strip() for value in row.values() if value is not None):
+                    continue
+                if str(row.get(column_name, "")).strip() == expected_value:
+                    count += 1
+            return count
+    except Exception:
+        return 0
+
+
+def _resolve_results_seed_csv(output_dir: Path) -> Path:
+    primary = output_dir / "simulation_results_seed.csv"
+    if primary.exists():
+        return primary
+    fallback = output_dir / "per_crosswalk_simulation_results_seed.csv"
+    if fallback.exists():
+        return fallback
+    return primary
+
+
+def _evaluate_run_outcome(output_dir: Path, interrupted: bool) -> dict[str, object]:
+    failed_cases_count = _count_csv_data_rows(output_dir / "failed_cases.csv")
+    results_seed_csv = _resolve_results_seed_csv(output_dir)
+    result_rows = _count_csv_data_rows(results_seed_csv)
+    baseline_result_rows = _count_csv_rows_by_value(results_seed_csv, "scenario", "baseline")
+    smart_result_rows = _count_csv_rows_by_value(results_seed_csv, "scenario", "smart")
+    run_success = (
+        failed_cases_count == 0
+        and baseline_result_rows >= 1
+        and smart_result_rows >= 1
+        and not interrupted
+    )
+    failure_parts: list[str] = []
+    if interrupted:
+        failure_parts.append("interrupted=true")
+    if failed_cases_count > 0:
+        failure_parts.append(f"failed_cases_count={failed_cases_count}")
+    if result_rows == 0:
+        failure_parts.append("result_rows=0")
+    if baseline_result_rows < 1:
+        failure_parts.append(f"baseline_result_rows={baseline_result_rows}")
+    if smart_result_rows < 1:
+        failure_parts.append(f"smart_result_rows={smart_result_rows}")
+    return {
+        "run_success": run_success,
+        "failure_reason": "" if run_success else ";".join(failure_parts),
+        "failed_cases_count": failed_cases_count,
+        "result_rows": result_rows,
+        "baseline_result_rows": baseline_result_rows,
+        "smart_result_rows": smart_result_rows,
+        "partial": not run_success,
+    }
 
 
 def _maybe_validate_demand(args: argparse.Namespace, run_dir: Path, output_dir: Path) -> None:
@@ -114,6 +211,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     write_run_metadata(args, run_dir, output_dir, nets_dir, figures_dir)
     print(f"Result run directory: {run_dir}")
     pipeline_t0 = time.perf_counter()
+    experiment_metadata = _build_experiment_metadata(args)
     benchmark_timing: dict[str, object] = {
         "network_build_sec": None,
         "demand_generation_sec": None,
@@ -121,6 +219,17 @@ def run_pipeline(args: argparse.Namespace) -> None:
         "simulation_smart_sec": None,
         "post_validation_sec": None,
         "total_sec": None,
+        "partial": True,
+        "interrupted": False,
+        "completed_scenarios": [],
+        "current_scenario": "",
+        **experiment_metadata,
+        "run_success": False,
+        "failure_reason": "",
+        "failed_cases_count": 0,
+        "result_rows": 0,
+        "baseline_result_rows": 0,
+        "smart_result_rows": 0,
     }
     assumptions_path = getattr(args, "model_assumptions", None) or getattr(args, "model_parameters", None)
     simulation_mode = getattr(args, "simulation_mode", "per_candidate")
@@ -201,6 +310,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             return
         manifest_path = Path(nets_dir) / "integrated_selected" / "smart_crosswalk_manifest.json"
         if not args.skip_networks:
+            benchmark_timing["current_scenario"] = "network_build"
             network_t0 = time.perf_counter()
             manifest_path, _, manifest_df = build_integrated_network_manifest(
                 selected,
@@ -219,12 +329,16 @@ def run_pipeline(args: argparse.Namespace) -> None:
             )
             benchmark_timing["network_build_sec"] = float(time.perf_counter() - network_t0)
             valid_ids = {str(crosswalk_id) for crosswalk_id in manifest_df["crosswalk_id"].astype(str)}
+            cast_list = benchmark_timing.get("completed_scenarios")
+            if isinstance(cast_list, list):
+                cast_list.append("network_build")
             selected = selected[selected["crosswalk_id"].astype(str).isin(valid_ids)].reset_index(drop=True)
             if selected.empty:
                 raise ValueError("실행 가능한 integrated_selected 후보가 없습니다. excluded report를 확인하세요.")
         if not manifest_path.exists():
             raise FileNotFoundError(f"통합망 manifest가 없습니다: {manifest_path}")
         if not args.skip_demand:
+            benchmark_timing["current_scenario"] = "demand_generation"
             demand_t0 = time.perf_counter()
             generate_integrated_demand(
                 selected,
@@ -241,16 +355,173 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 vehicle_only=getattr(args, "vehicle_only", False),
             )
             benchmark_timing["demand_generation_sec"] = float(time.perf_counter() - demand_t0)
+            cast_list = benchmark_timing.get("completed_scenarios")
+            if isinstance(cast_list, list):
+                cast_list.append("demand_generation")
         if args.disruption_scenario is not None:
             args.incident_scenario = args.disruption_scenario
         if args.extension_increment is not None:
             args.smart_extension_sec = args.extension_increment
         if not args.skip_run:
+            benchmark_timing["current_scenario"] = "simulation"
             simulation_t0 = time.perf_counter()
-            collect_integrated_metrics(
-                selected,
-                manifest_path,
+            try:
+                collect_integrated_metrics(
+                    selected,
+                    manifest_path,
+                    output_dir,
+                    args.sim_duration,
+                    args.warmup,
+                    tuple(args.seeds),
+                    getattr(args, "traci_step_length", 0.1),
+                    getattr(args, "traffic_measure_radius_m", 500.0),
+                    getattr(args, "smart_extension_sec", None),
+                    getattr(args, "max_extensions", None),
+                    getattr(args, "vehicle_arrival_rate_per_hour", None),
+                    getattr(args, "saturation_flow_rate_per_hour", 1900.0),
+                    getattr(args, "vehicle_arrival_model", "poisson"),
+                    getattr(args, "incident_scenario", "best_case"),
+                    getattr(args, "enable_random_disruptions", False),
+                    getattr(args, "bus_stop_rate_per_hour", 0.0),
+                    getattr(args, "illegal_parking_rate_per_hour", 0.0),
+                    getattr(args, "minor_incident_rate_per_hour", 0.0),
+                    getattr(args, "accident_rate_per_hour", 0.0),
+                    assumptions_path,
+                    getattr(args, "export_fcd", False),
+                    getattr(args, "vehicle_only", False),
+                    enable_risk_event_collection=getattr(args, "enable_risk_event_collection", False),
+                    risk_event_sample_interval_s=getattr(args, "risk_event_sample_interval_s", 1.0),
+                    metric_sample_interval_s=getattr(args, "metric_sample_interval", 0.0),
+                    vehicle_sample_interval_s=getattr(args, "vehicle_sample_interval", 0.0),
+                    progress_interval_s=getattr(args, "progress_interval", 0.0),
+                )
+            except KeyboardInterrupt:
+                benchmark_timing["interrupted"] = True
+                benchmark_timing["partial"] = True
+                write_benchmark_timing(run_dir, benchmark_timing)
+                raise
+            except Exception:
+                benchmark_timing["partial"] = True
+                write_benchmark_timing(run_dir, benchmark_timing)
+                raise
+            benchmark_timing["simulation_baseline_sec"] = None
+            benchmark_timing["simulation_smart_sec"] = None
+            benchmark_timing["integrated_simulation_sec"] = float(time.perf_counter() - simulation_t0)
+            cast_list = benchmark_timing.get("completed_scenarios")
+            if isinstance(cast_list, list):
+                cast_list.append("simulation")
+        try:
+            dump_parameter_table(
+                load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
+                output_dir / "model_assumptions_used.csv",
+            )
+            (output_dir / "calibration_report.csv").write_text("", encoding="utf-8")
+            (output_dir / "calibration_summary.md").write_text("", encoding="utf-8")
+            if not args.skip_reports:
+                generate_integrated_reports(
+                    selected,
+                    output_dir,
+                    figures_dir,
+                    assumptions_path,
+                )
+            validation_t0 = time.perf_counter()
+            _maybe_validate_demand(args, run_dir, output_dir)
+            benchmark_timing["post_validation_sec"] = float(time.perf_counter() - validation_t0)
+            cast_list = benchmark_timing.get("completed_scenarios")
+            if isinstance(cast_list, list):
+                cast_list.append("post_validation")
+            benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
+            benchmark_timing["current_scenario"] = ""
+            benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
+            write_benchmark_timing(run_dir, benchmark_timing)
+        except KeyboardInterrupt:
+            benchmark_timing["interrupted"] = True
+            benchmark_timing.update(_evaluate_run_outcome(output_dir, True))
+            benchmark_timing["partial"] = True
+            write_benchmark_timing(run_dir, benchmark_timing)
+            raise
+        except Exception as exc:
+            benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
+            exception_reason = f"exception={exc.__class__.__name__}:{exc}"
+            existing_reason = str(benchmark_timing.get("failure_reason") or "")
+            benchmark_timing["run_success"] = False
+            benchmark_timing["failure_reason"] = (
+                f"{exception_reason};{existing_reason}" if existing_reason else exception_reason
+            )
+            benchmark_timing["partial"] = True
+            write_benchmark_timing(run_dir, benchmark_timing)
+            raise
+        return
+
+    candidates, _, _ = preprocess_inputs(
+        args.t1,
+        args.t2,
+        output_dir,
+        args.top_n,
+        getattr(args, "target_crosswalk_ids", None),
+    )
+    candidates_csv = output_dir / "candidates.csv"
+
+    if args.preprocess_only:
+        return
+
+    if not args.skip_networks:
+        benchmark_timing["current_scenario"] = "network_build"
+        network_t0 = time.perf_counter()
+        build_all_networks(
+            candidates_csv,
+            nets_dir,
+            output_dir,
+            force=args.force_networks,
+            reuse_nets_dir=getattr(args, "reuse_nets_dir", None),
+            network_radius_m=getattr(args, "network_radius_m", None),
+            network_mode=getattr(args, "network_mode", "local_radius"),
+            admin_polygon_path=getattr(args, "admin_polygon_path", None),
+            buffer_m=getattr(args, "buffer_m", 1000.0),
+            corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
+        )
+        benchmark_timing["network_build_sec"] = float(time.perf_counter() - network_t0)
+        cast_list = benchmark_timing.get("completed_scenarios")
+        if isinstance(cast_list, list):
+            cast_list.append("network_build")
+
+    if not args.skip_demand:
+        benchmark_timing["current_scenario"] = "demand_generation"
+        demand_t0 = time.perf_counter()
+        generate_for_candidates(
+            candidates_csv,
+            nets_dir,
+            output_dir,
+            tuple(args.seeds),
+            args.sim_duration,
+            args.warmup,
+            step_length=getattr(args, "sumo_step_length", 1.0),
+            scenario_name=getattr(args, "scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
+            traffic_counts_csv=getattr(args, "traffic_counts", None),
+            representative_day_id=getattr(args, "representative_day_id", None),
+            model_parameters_path=assumptions_path,
+            vehicle_only=getattr(args, "vehicle_only", False),
+            reuse_demand_dir=getattr(args, "reuse_demand_dir", None),
+            force_demand=getattr(args, "force_demand", False),
+        )
+        benchmark_timing["demand_generation_sec"] = float(time.perf_counter() - demand_t0)
+        cast_list = benchmark_timing.get("completed_scenarios")
+        if isinstance(cast_list, list):
+            cast_list.append("demand_generation")
+
+    if args.disruption_scenario is not None:
+        args.incident_scenario = args.disruption_scenario
+    if args.extension_increment is not None:
+        args.smart_extension_sec = args.extension_increment
+
+    if not args.skip_run:
+        benchmark_timing["current_scenario"] = "simulation"
+        simulation_t0 = time.perf_counter()
+        try:
+            _, _, simulation_timing = collect_all(
+                candidates_csv,
                 output_dir,
+                nets_dir,
                 args.sim_duration,
                 args.warmup,
                 tuple(args.seeds),
@@ -270,160 +541,94 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 assumptions_path,
                 getattr(args, "export_fcd", False),
                 getattr(args, "vehicle_only", False),
-                enable_risk_event_collection=getattr(args, "enable_risk_event_collection", False),
-                risk_event_sample_interval_s=getattr(args, "risk_event_sample_interval_s", 1.0),
+                metric_sample_interval_s=getattr(args, "metric_sample_interval", 0.0),
+                vehicle_sample_interval_s=getattr(args, "vehicle_sample_interval", 0.0),
+                progress_interval_s=getattr(args, "progress_interval", 0.0),
             )
-            benchmark_timing["simulation_baseline_sec"] = None
-            benchmark_timing["simulation_smart_sec"] = None
-            benchmark_timing["integrated_simulation_sec"] = float(time.perf_counter() - simulation_t0)
+        except KeyboardInterrupt:
+            benchmark_timing["interrupted"] = True
+            benchmark_timing["partial"] = True
+            write_benchmark_timing(run_dir, benchmark_timing)
+            raise
+        except Exception:
+            benchmark_timing["partial"] = True
+            write_benchmark_timing(run_dir, benchmark_timing)
+            raise
+        benchmark_timing["simulation_baseline_sec"] = simulation_timing.get("simulation_baseline_sec")
+        benchmark_timing["simulation_smart_sec"] = simulation_timing.get("simulation_smart_sec")
+        benchmark_timing["simulation_total_sec"] = float(time.perf_counter() - simulation_t0)
+        cast_list = benchmark_timing.get("completed_scenarios")
+        if isinstance(cast_list, list):
+            cast_list.append("simulation")
+
+    try:
         dump_parameter_table(
             load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
             output_dir / "model_assumptions_used.csv",
         )
-        (output_dir / "calibration_report.csv").write_text("", encoding="utf-8")
-        (output_dir / "calibration_summary.md").write_text("", encoding="utf-8")
+
+        calib_counts = getattr(args, "traffic_counts", None)
+        calib_day = getattr(args, "representative_day_id", None)
+        if getattr(args, "calibration_config", None):
+            try:
+                calib_cfg = load_model_parameters_file(args.calibration_config)
+                calib_counts = calib_cfg.get("observed_counts", {}).get("value", calib_counts)
+                calib_day = calib_cfg.get("representative_day_id", {}).get("value", calib_day)
+            except Exception:
+                pass
+
+        calibrate(
+            output_dir,
+            calib_counts,
+            calib_day,
+        )
+
+        if getattr(args, "export_gui", False):
+            export_visual_assets(
+                output_dir,
+                nets_dir,
+                figures_dir,
+                candidates_csv,
+                tuple(args.seeds),
+            )
+
         if not args.skip_reports:
-            generate_integrated_reports(
-                selected,
+            generate_all_reports(
                 output_dir,
                 figures_dir,
+                candidates_csv,
+                nets_dir,
                 assumptions_path,
             )
+
+        benchmark_timing["current_scenario"] = "post_validation"
         validation_t0 = time.perf_counter()
         _maybe_validate_demand(args, run_dir, output_dir)
         benchmark_timing["post_validation_sec"] = float(time.perf_counter() - validation_t0)
+        cast_list = benchmark_timing.get("completed_scenarios")
+        if isinstance(cast_list, list):
+            cast_list.append("post_validation")
         benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
+        benchmark_timing["current_scenario"] = ""
+        benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
         write_benchmark_timing(run_dir, benchmark_timing)
-        return
-
-    candidates, _, _ = preprocess_inputs(
-        args.t1,
-        args.t2,
-        output_dir,
-        args.top_n,
-        getattr(args, "target_crosswalk_ids", None),
-    )
-    candidates_csv = output_dir / "candidates.csv"
-
-    if args.preprocess_only:
-        return
-
-    if not args.skip_networks:
-        network_t0 = time.perf_counter()
-        build_all_networks(
-            candidates_csv,
-            nets_dir,
-            output_dir,
-            force=args.force_networks,
-            reuse_nets_dir=getattr(args, "reuse_nets_dir", None),
-            network_radius_m=getattr(args, "network_radius_m", None),
-            network_mode=getattr(args, "network_mode", "local_radius"),
-            admin_polygon_path=getattr(args, "admin_polygon_path", None),
-            buffer_m=getattr(args, "buffer_m", 1000.0),
-            corridor_whitelist=getattr(args, "corridor_road_whitelist", None),
+    except KeyboardInterrupt:
+        benchmark_timing["interrupted"] = True
+        benchmark_timing.update(_evaluate_run_outcome(output_dir, True))
+        benchmark_timing["partial"] = True
+        write_benchmark_timing(run_dir, benchmark_timing)
+        raise
+    except Exception as exc:
+        benchmark_timing.update(_evaluate_run_outcome(output_dir, bool(benchmark_timing.get("interrupted", False))))
+        exception_reason = f"exception={exc.__class__.__name__}:{exc}"
+        existing_reason = str(benchmark_timing.get("failure_reason") or "")
+        benchmark_timing["run_success"] = False
+        benchmark_timing["failure_reason"] = (
+            f"{exception_reason};{existing_reason}" if existing_reason else exception_reason
         )
-        benchmark_timing["network_build_sec"] = float(time.perf_counter() - network_t0)
-
-    if not args.skip_demand:
-        demand_t0 = time.perf_counter()
-        generate_for_candidates(
-            candidates_csv,
-            nets_dir,
-            output_dir,
-            tuple(args.seeds),
-            args.sim_duration,
-            args.warmup,
-            step_length=getattr(args, "sumo_step_length", 1.0),
-            scenario_name=getattr(args, "scenario_name", DEFAULT_DEMAND_SCENARIO_NAME),
-            traffic_counts_csv=getattr(args, "traffic_counts", None),
-            representative_day_id=getattr(args, "representative_day_id", None),
-            model_parameters_path=assumptions_path,
-            vehicle_only=getattr(args, "vehicle_only", False),
-            reuse_demand_dir=getattr(args, "reuse_demand_dir", None),
-            force_demand=getattr(args, "force_demand", False),
-        )
-        benchmark_timing["demand_generation_sec"] = float(time.perf_counter() - demand_t0)
-
-    if args.disruption_scenario is not None:
-        args.incident_scenario = args.disruption_scenario
-    if args.extension_increment is not None:
-        args.smart_extension_sec = args.extension_increment
-
-    if not args.skip_run:
-        simulation_t0 = time.perf_counter()
-        _, _, simulation_timing = collect_all(
-            candidates_csv,
-            output_dir,
-            nets_dir,
-            args.sim_duration,
-            args.warmup,
-            tuple(args.seeds),
-            getattr(args, "traci_step_length", 0.1),
-            getattr(args, "traffic_measure_radius_m", 500.0),
-            getattr(args, "smart_extension_sec", None),
-            getattr(args, "max_extensions", None),
-            getattr(args, "vehicle_arrival_rate_per_hour", None),
-            getattr(args, "saturation_flow_rate_per_hour", 1900.0),
-            getattr(args, "vehicle_arrival_model", "poisson"),
-            getattr(args, "incident_scenario", "best_case"),
-            getattr(args, "enable_random_disruptions", False),
-            getattr(args, "bus_stop_rate_per_hour", 0.0),
-            getattr(args, "illegal_parking_rate_per_hour", 0.0),
-            getattr(args, "minor_incident_rate_per_hour", 0.0),
-            getattr(args, "accident_rate_per_hour", 0.0),
-            assumptions_path,
-            getattr(args, "export_fcd", False),
-            getattr(args, "vehicle_only", False),
-            metric_sample_interval_s=getattr(args, "metric_sample_interval", 0.0),
-        )
-        benchmark_timing["simulation_baseline_sec"] = simulation_timing.get("simulation_baseline_sec")
-        benchmark_timing["simulation_smart_sec"] = simulation_timing.get("simulation_smart_sec")
-        benchmark_timing["simulation_total_sec"] = float(time.perf_counter() - simulation_t0)
-
-    dump_parameter_table(
-        load_model_parameters_file(assumptions_path) if assumptions_path else load_model_parameters_file(None),
-        output_dir / "model_assumptions_used.csv",
-    )
-
-    calib_counts = getattr(args, "traffic_counts", None)
-    calib_day = getattr(args, "representative_day_id", None)
-    if getattr(args, "calibration_config", None):
-        try:
-            calib_cfg = load_model_parameters_file(args.calibration_config)
-            calib_counts = calib_cfg.get("observed_counts", {}).get("value", calib_counts)
-            calib_day = calib_cfg.get("representative_day_id", {}).get("value", calib_day)
-        except Exception:
-            pass
-
-    calibrate(
-        output_dir,
-        calib_counts,
-        calib_day,
-    )
-
-    if getattr(args, "export_gui", False):
-        export_visual_assets(
-            output_dir,
-            nets_dir,
-            figures_dir,
-            candidates_csv,
-            tuple(args.seeds),
-        )
-
-    if not args.skip_reports:
-        generate_all_reports(
-            output_dir,
-            figures_dir,
-            candidates_csv,
-            nets_dir,
-            assumptions_path,
-        )
-
-    validation_t0 = time.perf_counter()
-    _maybe_validate_demand(args, run_dir, output_dir)
-    benchmark_timing["post_validation_sec"] = float(time.perf_counter() - validation_t0)
-    benchmark_timing["total_sec"] = float(time.perf_counter() - pipeline_t0)
-    write_benchmark_timing(run_dir, benchmark_timing)
+        benchmark_timing["partial"] = True
+        write_benchmark_timing(run_dir, benchmark_timing)
+        raise
 
 
 def parse_args() -> argparse.Namespace:
@@ -538,6 +743,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Lane-level heavy metrics sampling interval in seconds. 0 means every step.",
+    )
+    parser.add_argument(
+        "--vehicle-sample-interval",
+        type=float,
+        default=0.0,
+        help="Vehicle-heavy metric sampling interval in seconds. 0 means every step.",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=0.0,
+        help="Progress heartbeat interval in seconds. 0 disables progress logging.",
     )
     parser.add_argument("--preprocess_only", action="store_true")
     parser.add_argument("--skip_networks", action="store_true")

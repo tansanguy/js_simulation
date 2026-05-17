@@ -84,6 +84,14 @@ SUMMARY_METRIC_CANDIDATES = [
     "mean_pet",
 ]
 
+SAMPLED10_METRIC_SAMPLE_INTERVAL = 10
+SAMPLED10_VEHICLE_SAMPLE_INTERVAL = 10
+SAMPLED10_PROGRESS_INTERVAL = 60
+SAMPLED10_EXTENSION_SEC = 5.0
+SAMPLED10_SIM_DURATION = 600
+SAMPLED10_WARMUP = 0
+SAMPLED10_STEP_LENGTH = 0.1
+
 
 @dataclass(frozen=True)
 class GroupSpec:
@@ -185,6 +193,64 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _as_int(value: Any, default: int = -1) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, float) and np.isnan(value):
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def _benchmark_outcome(summary_path: Path, manifest_row: pd.Series) -> dict[str, Any]:
+    output_dir = Path(str(manifest_row.get("output_dir", summary_path.parent)))
+    benchmark_path = output_dir / "benchmark_timing.json"
+    payload = _read_json(benchmark_path)
+    failed_cases_count = _as_int(payload.get("failed_cases_count"), -1)
+    if failed_cases_count < 0:
+        failed_cases_count = _read_csv_meta(output_dir / "failed_cases.csv")[0]
+    result_rows = _as_int(payload.get("result_rows"), -1)
+    baseline_result_rows = _as_int(payload.get("baseline_result_rows"), -1)
+    smart_result_rows = _as_int(payload.get("smart_result_rows"), -1)
+    run_success = payload.get("run_success") is True
+    completed = bool(
+        summary_path.exists()
+        and benchmark_path.exists()
+        and run_success
+        and failed_cases_count == 0
+        and baseline_result_rows >= 1
+        and smart_result_rows >= 1
+    )
+    if not benchmark_path.exists():
+        failure_reason = "benchmark_timing.json missing"
+    else:
+        failure_reason = str(payload.get("failure_reason") or "")
+    return {
+        "completed": completed,
+        "benchmark_timing_path": str(benchmark_path),
+        "benchmark_timing_exists": benchmark_path.exists(),
+        "run_success": run_success,
+        "failure_reason": failure_reason,
+        "failed_cases_count": failed_cases_count,
+        "result_rows": result_rows,
+        "baseline_result_rows": baseline_result_rows,
+        "smart_result_rows": smart_result_rows,
+        "experiment_mode": payload.get("experiment_mode", ""),
+        "metrics_exact": payload.get("metrics_exact", pd.NA),
+    }
+
+
+def _completed_manifest_count(run_level_df: pd.DataFrame) -> int:
+    if run_level_df.empty or "completed" not in run_level_df.columns:
+        return 0
+    if "manifest_run_id" in run_level_df.columns:
+        run_rows = run_level_df.drop_duplicates("manifest_run_id")
+        return int(run_rows["completed"].fillna(False).astype(bool).sum())
+    return int(run_level_df["completed"].fillna(False).astype(bool).sum())
 
 
 def _safe_str(value: Any) -> str:
@@ -569,7 +635,178 @@ def _build_all_groups_script(output_root: Path) -> str:
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            "",
+            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_current_main_12.sh"',
+            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_signal_fix_9.sh"',
+            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_generated_signal_7.sh"',
+            'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_p1_p4_recovery_6.sh"',
+            "",
+        ]
+    )
+
+
+def _build_sampled10_command_lines(spec: GroupSpec, output_root: Path, single_csv_root: Path, nets_dir: Path) -> dict[str, str]:
+    run_prefix = (
+        "python3 -m smart_crosswalk_sumo.run_sampled10_group "
+        "--candidate-csv \"$candidate_csv\" --net-file \"$NET_FILE\" "
+        "--seed \"$seed\" --output-dir \"$out_dir\" "
+        f"--sim-duration {SAMPLED10_SIM_DURATION} --warmup {SAMPLED10_WARMUP} "
+        f"--traci_step_length {SAMPLED10_STEP_LENGTH} --traffic_measure_radius_m 500.0 "
+        f"--extension_increment {SAMPLED10_EXTENSION_SEC} --max_extensions 1 "
+        f"--metric-sample-interval {SAMPLED10_METRIC_SAMPLE_INTERVAL} "
+        f"--vehicle-sample-interval {SAMPLED10_VEHICLE_SAMPLE_INTERVAL} "
+        f"--progress-interval {SAMPLED10_PROGRESS_INTERVAL} "
+        "--phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 "
+        "--include-vehicles "
+        "--manifest-row-role \"$manifest_row_role\" "
+        "--manifest-crosswalk-id \"$manifest_crosswalk_id\""
+    )
+    report_prefix = (
+        "python3 -m smart_crosswalk_sumo.generate_reports "
+        f"--figures_dir \"$FIGURES_DIR\""
+    )
+    return {
+        "run_prefix": run_prefix,
+        "report_prefix": report_prefix,
+    }
+
+
+def _build_sampled10_group_script(spec: GroupSpec, output_root: Path, single_csv_root: Path, nets_dir: Path) -> str:
+    ctx = _build_sampled10_command_lines(spec, output_root, single_csv_root, nets_dir)
+    ids = [str(v).strip() for v in spec.smart_candidates.get("crosswalk_id", pd.Series(dtype=str)).tolist()]
+    id_array = " ".join(f'"{v}"' for v in ids)
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "",
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            'PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"',
+            'RESULT_ROOT="$PROJECT_ROOT/result"',
+            'ACTIVE_ROOT="$RESULT_ROOT/active"',
+            'NETS_DIR="$ACTIVE_ROOT/nets"',
+            'FIGURES_DIR="$PIPELINE_ROOT/figures"',
+            f'RUN_ROOT="$PIPELINE_ROOT/runs/{spec.run_group}"',
+            f'LOG_ROOT="$PIPELINE_ROOT/logs/{spec.run_group}"',
+            f'SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/{spec.run_group}"',
+            f'BASELINE_CSV="$PIPELINE_ROOT/manifests/{spec.run_group}_candidates.csv"',
+            f'NET_FILE="$NETS_DIR/{spec.run_group}.net.xml"',
+            'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
+            "",
+            'if [[ -z "${SUMO_HOME:-}" ]]; then',
+            '  if command -v sumo >/dev/null 2>&1; then',
+            '    :',
+            '  elif [[ -d "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO" ]]; then',
+            '    export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"',
+            '    export PATH="$SUMO_HOME/bin:$PATH"',
+            '    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"',
+            '  else',
+            '    echo "SUMO_HOME is not set and sumo is not on PATH" >&2',
+            '    exit 1',
+            '  fi',
+            'else',
+            '  export PATH="$SUMO_HOME/bin:$PATH"',
+            '  if [[ -z "${PROJ_LIB:-}" && -d "$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj" ]]; then',
+            '    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"',
+            '  fi',
+            'fi',
+            "",
+            "mkdir -p \"$RUN_ROOT\" \"$LOG_ROOT\" \"$FIGURES_DIR\"",
+            "if [[ ! -f \"$NET_FILE\" ]]; then",
+            "  echo \"missing group net input: $NET_FILE\" >&2",
+            "  exit 1",
+            "fi",
+            "",
+            "verify_run_success() {",
+            "  local benchmark_json=\"$1/benchmark_timing.json\"",
+            "  python3 - \"$benchmark_json\" <<'PY'",
+            "import json",
+            "import sys",
+            "from pathlib import Path",
+            "path = Path(sys.argv[1])",
+            "if not path.exists():",
+            "    print(f\"missing benchmark_timing.json: {path}\", file=sys.stderr)",
+            "    sys.exit(1)",
+            "payload = json.loads(path.read_text(encoding=\"utf-8\"))",
+            "def as_int(name):",
+            "    try:",
+            "        return int(payload.get(name, -1))",
+            "    except Exception:",
+            "        return -1",
+            "ok = (",
+            "    payload.get(\"run_success\") is True",
+            "    and as_int(\"failed_cases_count\") == 0",
+            "    and as_int(\"baseline_result_rows\") >= 1",
+            "    and as_int(\"smart_result_rows\") >= 1",
+            ")",
+            "if not ok:",
+            "    reason = payload.get(\"failure_reason\") or \"run_success=false\"",
+            "    print(f\"sampled10 run failed: {reason}\", file=sys.stderr)",
+            "    sys.exit(1)",
+            "PY",
+            "}",
+            "",
+            "is_successful_run() {",
+            "  local out_dir=\"$1\"",
+            "  [[ -f \"$out_dir/simulation_summary.csv\" ]] || return 1",
+            "  [[ -f \"$out_dir/baseline_smart_seed_results.csv\" ]] || return 1",
+            "  [[ -f \"$out_dir/baseline_smart_summary.csv\" ]] || return 1",
+            "  [[ -f \"$out_dir/local_tradeoff_summary.csv\" ]] || return 1",
+            "  [[ -f \"$out_dir/tradeoff_summary.csv\" ]] || return 1",
+            "  verify_run_success \"$out_dir\" >/dev/null 2>&1",
+            "}",
+            "",
+            "run_sampled() {",
+            "  local candidate_csv=\"$1\"",
+            "  local out_dir=\"$2\"",
+            "  local log_file=\"$3\"",
+            "  local seed=\"$4\"",
+            "  local manifest_row_role=\"$5\"",
+            "  local manifest_crosswalk_id=\"$6\"",
+            "  mkdir -p \"$out_dir\" \"$(dirname \"$log_file\")\"",
+            "  if is_successful_run \"$out_dir\"; then",
+            "    echo \"skip seed$seed $out_dir\"",
+            "    return 0",
+            "  fi",
+            f"  {ctx['run_prefix']} >>\"$log_file\" 2>&1",
+            "  verify_run_success \"$out_dir\"",
+            f"  {ctx['report_prefix']} --output_dir \"$out_dir\" --candidates \"$candidate_csv\" --nets_dir \"$NETS_DIR\" >>\"$log_file\" 2>&1",
+            "}",
+            "",
+            f"echo \"[{spec.run_group}] baseline 30 seed (sampled10)\"",
+            "for seed in $(seq 1 30); do",
+            '  out_dir="$RUN_ROOT/baseline/seed$(printf \'%02d\' "$seed")"',
+            '  log_file="$LOG_ROOT/baseline/seed$(printf \'%02d\' "$seed").log"',
+            f"  run_sampled \"$BASELINE_CSV\" \"$out_dir\" \"$log_file\" \"$seed\" \"baseline_placeholder\" \"{spec.baseline_placeholder_crosswalk_id}\"",
+            "done",
+            "",
+            f"SMART_IDS=({id_array})",
+            f"echo \"[{spec.run_group}] smart 30 seed per candidate (sampled10)\"",
+            "for i in \"${!SMART_IDS[@]}\"; do",
+            "  crosswalk_id=\"${SMART_IDS[$i]}\"",
+            '  candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"',
+            "  for seed in $(seq 1 30); do",
+            '    out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf \'%02d\' "$seed")"',
+            '    log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf \'%02d\' "$seed").log"',
+            "    run_sampled \"$candidate_csv\" \"$out_dir\" \"$log_file\" \"$seed\" \"smart_candidate\" \"$crosswalk_id\"",
+            "  done",
+            "done",
+            "",
+        ]
+    )
+
+
+def _build_sampled10_all_groups_script(output_root: Path) -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "",
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
             "",
             'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_current_main_12.sh"',
             'bash "$PIPELINE_ROOT/commands/command_to_run_30seed_signal_fix_9.sh"',
@@ -586,12 +823,27 @@ def _build_standardize_script(output_root: Path) -> str:
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            'export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"',
-            'export PATH="$SUMO_HOME/bin:$PATH"',
-            'export PROJ_LIB="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/framework/EclipseSUMO.framework/Resources/proj"',
-            'export PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}"',
-            "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            'PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"',
+            'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
+            'if [[ -z "${SUMO_HOME:-}" ]]; then',
+            '  if command -v sumo >/dev/null 2>&1; then',
+            '    :',
+            '  elif [[ -d "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO" ]]; then',
+            '    export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"',
+            '    export PATH="$SUMO_HOME/bin:$PATH"',
+            '    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"',
+            '  else',
+            '    echo "SUMO_HOME is not set and sumo is not on PATH" >&2',
+            '    exit 1',
+            '  fi',
+            'else',
+            '  export PATH="$SUMO_HOME/bin:$PATH"',
+            '  if [[ -z "${PROJ_LIB:-}" && -d "$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj" ]]; then',
+            '    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"',
+            '  fi',
+            'fi',
             "",
             'python3 -m smart_crosswalk_sumo.reporting.aggregate_30seed_results aggregate --pipeline-root "$PIPELINE_ROOT" --copy-xml --copy-logs',
             "",
@@ -605,9 +857,10 @@ def _build_check_script(output_root: Path) -> str:
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            'export PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}"',
-            "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            'PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"',
+            'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
             "",
             'python3 -m smart_crosswalk_sumo.reporting.aggregate_30seed_results status --pipeline-root "$PIPELINE_ROOT"',
             "",
@@ -621,7 +874,8 @@ def _build_open_script(output_root: Path) -> str:
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
             "open \"$PIPELINE_ROOT/README.md\"",
             "open \"$PIPELINE_ROOT/csv/seed30_group_summary.csv\" || true",
             "",
@@ -635,10 +889,11 @@ def _build_cleanup_scripts(output_root: Path, result_root: Path) -> tuple[str, s
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            'export PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}"',
-            "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
-            f'RESULT_ROOT="{result_root.as_posix()}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            'PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"',
+            'RESULT_ROOT="$PROJECT_ROOT/result"',
+            'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
             "",
             'python3 -m smart_crosswalk_sumo.reporting.aggregate_30seed_results cleanup --result-root "$RESULT_ROOT" --pipeline-root "$PIPELINE_ROOT"',
             "",
@@ -649,10 +904,11 @@ def _build_cleanup_scripts(output_root: Path, result_root: Path) -> tuple[str, s
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            'export PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}"',
-            "",
-            f'PIPELINE_ROOT="{output_root.as_posix()}"',
-            f'RESULT_ROOT="{result_root.as_posix()}"',
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'PIPELINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"',
+            'PROJECT_ROOT="$(cd "$PIPELINE_ROOT/../../.." && pwd)"',
+            'RESULT_ROOT="$PROJECT_ROOT/result"',
+            'export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"',
             "",
             'if [[ "${APPLY:-0}" != "1" ]]; then',
             '  echo "Dry-run only. Set APPLY=1 to archive safe files."',
@@ -1225,13 +1481,16 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
                 smart_out = output_root / "runs" / spec.run_group / "smart" / crosswalk_id / f"seed{seed:02d}"
                 smart_log = output_root / "logs" / spec.run_group / "smart" / crosswalk_id / f"seed{seed:02d}.log"
                 smart_rows.append(
-                    {
-                        "run_id": f"{spec.run_group}_smart_{crosswalk_id}_seed{seed:02d}",
-                        "run_group": spec.run_group,
-                        "net_group": spec.net_group,
-                        "scenario": "smart",
-                        "seed": seed,
-                        "crosswalk_id": crosswalk_id,
+	                    {
+	                        "run_id": f"{spec.run_group}_smart_{crosswalk_id}_seed{seed:02d}",
+	                        "run_group": spec.run_group,
+	                        "net_group": spec.net_group,
+	                        "scenario": "smart",
+	                        "manifest_row_role": "smart_candidate",
+	                        "execution_unit": "paired_group_net",
+	                        "network_input_mode": "group_net_file",
+	                        "seed": seed,
+	                        "crosswalk_id": crosswalk_id,
                         "candidate_csv": str(single_csv_root / spec.run_group / f"{crosswalk_id}.csv"),
                         "net_file": net_file,
                         "output_dir": str(smart_out),
@@ -1273,6 +1532,110 @@ def _build_run_manifest(specs: list[GroupSpec], output_root: Path) -> tuple[pd.D
                         "--sim-duration 600 --warmup 0 --step-length 0.5 --extension-sec 0 "
                         "--phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 "
                         f"--output-dir \"{base_out}\" >\"{base_log}\" 2>&1"
+                    ),
+                }
+            )
+    baseline_df = pd.DataFrame(baseline_rows)
+    smart_df = pd.DataFrame(smart_rows)
+    run_manifest_df = pd.concat([baseline_df, smart_df], ignore_index=True)
+    return run_manifest_df, baseline_df, smart_df
+
+
+def _build_run_manifest_sampled10(specs: list[GroupSpec], output_root: Path, nets_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    baseline_rows: list[dict[str, Any]] = []
+    smart_rows: list[dict[str, Any]] = []
+    single_csv_root = output_root / "manifests" / "single_candidates"
+    for spec in specs:
+        _ensure_dir(single_csv_root / spec.run_group)
+        full_csv = spec.full_candidate_csv.as_posix()
+        net_file = spec.baseline_net_file.as_posix()
+        candidate_df = spec.smart_candidates.copy()
+        if candidate_df.empty:
+            continue
+        candidate_df = candidate_df.reset_index(drop=True)
+        _write_csv(candidate_df, spec.full_candidate_csv)
+        for _, row in candidate_df.iterrows():
+            crosswalk_id = str(row.get("crosswalk_id", "")).strip()
+            _write_csv(pd.DataFrame([row.to_dict()]), single_csv_root / spec.run_group / f"{crosswalk_id}.csv")
+            for seed in range(1, 31):
+                smart_out = output_root / "runs" / spec.run_group / "smart" / crosswalk_id / f"seed{seed:02d}"
+                smart_log = output_root / "logs" / spec.run_group / "smart" / crosswalk_id / f"seed{seed:02d}.log"
+                smart_rows.append(
+                    {
+                        "run_id": f"{spec.run_group}_smart_{crosswalk_id}_seed{seed:02d}",
+                        "run_group": spec.run_group,
+                        "net_group": spec.net_group,
+                        "scenario": "smart",
+                        "manifest_row_role": "smart_candidate",
+                        "execution_unit": "paired_group_net",
+                        "network_input_mode": "group_net_file",
+                        "seed": seed,
+                        "crosswalk_id": crosswalk_id,
+                        "candidate_csv": str(single_csv_root / spec.run_group / f"{crosswalk_id}.csv"),
+                        "net_file": net_file,
+                        "output_dir": str(smart_out),
+                        "log_file": str(smart_log),
+                        "expected_summary_csv": str(smart_out / "simulation_results_seed.csv"),
+                        "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
+                        "skip_if_exists": True,
+                        "command": (
+                            "python3 -m smart_crosswalk_sumo.run_sampled10_group "
+                            "--candidate-csv \"$candidate_csv\" --net-file \"$NET_FILE\" "
+                            "--seed \"$seed\" --output-dir \"$out_dir\" "
+                            "--sim-duration 600 --warmup 0 "
+                            "--traci_step_length 0.1 --traffic_measure_radius_m 500.0 "
+                            "--extension_increment 5.0 --max_extensions 1 "
+                            "--metric-sample-interval 10 "
+                            "--vehicle-sample-interval 10 "
+                            "--progress-interval 60 "
+                            "--phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 "
+                            "--include-vehicles "
+                            "--manifest-row-role \"smart_candidate\" "
+                            "--manifest-crosswalk-id \"$crosswalk_id\" "
+                            "&& python3 -m smart_crosswalk_sumo.generate_reports "
+                            "--output_dir \"$out_dir\" --figures_dir \"$FIGURES_DIR\" "
+                            "--candidates \"$candidate_csv\" --nets_dir \"$NETS_DIR\""
+                        ),
+                    }
+                )
+        for seed in range(1, 31):
+            base_out = output_root / "runs" / spec.run_group / "baseline" / f"seed{seed:02d}"
+            base_log = output_root / "logs" / spec.run_group / "baseline" / f"seed{seed:02d}.log"
+            baseline_rows.append(
+                {
+                    "run_id": f"{spec.run_group}_baseline_seed{seed:02d}",
+                    "run_group": spec.run_group,
+                    "net_group": spec.net_group,
+                    "scenario": "baseline",
+                    "manifest_row_role": "baseline_placeholder",
+                    "execution_unit": "paired_group_net",
+                    "network_input_mode": "group_net_file",
+                    "seed": seed,
+                    "crosswalk_id": spec.baseline_placeholder_crosswalk_id,
+                    "candidate_csv": full_csv,
+                    "net_file": net_file,
+                    "output_dir": str(base_out),
+                    "log_file": str(base_log),
+                    "expected_summary_csv": str(base_out / "simulation_results_seed.csv"),
+                    "validation_manifest": str(output_root / "manifests" / "run_validation_manifest.csv"),
+                    "skip_if_exists": True,
+                    "command": (
+                        "python3 -m smart_crosswalk_sumo.run_sampled10_group "
+                        "--candidate-csv \"$BASELINE_CSV\" --net-file \"$NET_FILE\" "
+                        "--seed \"$seed\" --output-dir \"$out_dir\" "
+                        "--sim-duration 600 --warmup 0 "
+                        "--traci_step_length 0.1 --traffic_measure_radius_m 500.0 "
+                        "--extension_increment 5.0 --max_extensions 1 "
+                        "--metric-sample-interval 10 "
+                        "--vehicle-sample-interval 10 "
+                        "--progress-interval 60 "
+                        "--phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 "
+                        "--include-vehicles "
+                        "--manifest-row-role \"baseline_placeholder\" "
+                        f"--manifest-crosswalk-id \"{spec.baseline_placeholder_crosswalk_id}\" "
+                        "&& python3 -m smart_crosswalk_sumo.generate_reports "
+                        "--output_dir \"$out_dir\" --figures_dir \"$FIGURES_DIR\" "
+                        "--candidates \"$BASELINE_CSV\" --nets_dir \"$NETS_DIR\""
                     ),
                 }
             )
@@ -1489,6 +1852,15 @@ def _build_run_completion_summary(run_manifest_df: pd.DataFrame, output_root: Pa
 
 def _load_run_summary(path: Path, manifest_row: pd.Series) -> pd.DataFrame:
     summary = _read_csv(path)
+    outcome = _benchmark_outcome(path, manifest_row)
+    manifest_fields = {
+        "manifest_run_id": manifest_row["run_id"],
+        "manifest_scenario": manifest_row["scenario"],
+        "manifest_crosswalk_id": manifest_row["crosswalk_id"],
+        "manifest_row_role": manifest_row.get("manifest_row_role", ""),
+        "execution_unit": manifest_row.get("execution_unit", ""),
+        "network_input_mode": manifest_row.get("network_input_mode", ""),
+    }
     if summary.empty:
         return pd.DataFrame(
             [
@@ -1507,7 +1879,9 @@ def _load_run_summary(path: Path, manifest_row: pd.Series) -> pd.DataFrame:
                     "elapsed_sec": np.nan,
                     "completed": False,
                     "output_dir": manifest_row["output_dir"],
-                    "note": "missing_phase6_smoke_summary.csv",
+                    "note": "missing_expected_summary_csv",
+                    **manifest_fields,
+                    **outcome,
                 }
             ]
         )
@@ -1524,15 +1898,21 @@ def _load_run_summary(path: Path, manifest_row: pd.Series) -> pd.DataFrame:
     for col, value in {
         "run_group": manifest_row["run_group"],
         "net_group": manifest_row["net_group"],
-        "scenario": manifest_row["scenario"],
         "seed": int(manifest_row["seed"]),
         "sim_duration": 600,
         "warmup": 0,
-        "step_length": 0.5,
+        "step_length": SAMPLED10_STEP_LENGTH if str(manifest_row.get("execution_unit", "")) == "paired_group_net" else 0.5,
         "output_dir": manifest_row["output_dir"],
+        "run_start_time": "",
+        "run_end_time": "",
+        "elapsed_sec": np.nan,
     }.items():
         if col not in summary.columns:
             summary[col] = value
+    for col, value in manifest_fields.items():
+        summary[col] = value
+    for col, value in outcome.items():
+        summary[col] = value
     return summary
 
 
@@ -1560,6 +1940,20 @@ def _build_run_level_results(run_manifest_df: pd.DataFrame) -> pd.DataFrame:
         "elapsed_sec",
         "completed",
         "output_dir",
+        "manifest_run_id",
+        "manifest_scenario",
+        "manifest_crosswalk_id",
+        "manifest_row_role",
+        "execution_unit",
+        "network_input_mode",
+        "run_success",
+        "failure_reason",
+        "failed_cases_count",
+        "result_rows",
+        "baseline_result_rows",
+        "smart_result_rows",
+        "experiment_mode",
+        "metrics_exact",
     ]:
         if col not in merged.columns:
             merged[col] = np.nan
@@ -1593,9 +1987,14 @@ def _comparison_rows(run_level_df: pd.DataFrame, run_manifest_df: pd.DataFrame) 
         )
         return empty, empty
 
+    if "manifest_scenario" in run_level_df.columns:
+        comparison_source_df = run_level_df[run_level_df["manifest_scenario"].astype(str) == "smart"].copy()
+    else:
+        comparison_source_df = run_level_df.copy()
+
     baseline_map: dict[tuple[str, str, int, str], pd.Series] = {}
     smart_map: dict[tuple[str, str, int, str], pd.Series] = {}
-    for _, row in run_level_df.iterrows():
+    for _, row in comparison_source_df.iterrows():
         key = (
             str(row.get("run_group", "")),
             str(row.get("net_group", "")),
@@ -1667,8 +2066,9 @@ def _comparison_rows(run_level_df: pd.DataFrame, run_manifest_df: pd.DataFrame) 
     comparison_df = pd.DataFrame(comparison_rows)
 
     metric_rows: list[dict[str, Any]] = []
-    if not comparison_df.empty:
-        for (run_group, net_group, crosswalk_id), sub in comparison_df.groupby(["run_group", "net_group", "crosswalk_id"], dropna=False):
+    ready_comparison_df = comparison_df[comparison_df["comparison_status"] == "ready"].copy() if not comparison_df.empty and "comparison_status" in comparison_df.columns else comparison_df
+    if not ready_comparison_df.empty:
+        for (run_group, net_group, crosswalk_id), sub in ready_comparison_df.groupby(["run_group", "net_group", "crosswalk_id"], dropna=False):
             for metric in SUMMARY_METRIC_CANDIDATES:
                 base_col = f"baseline_{metric}"
                 smart_col = f"smart_{metric}"
@@ -1733,6 +2133,7 @@ def _group_summary_df(run_level_df: pd.DataFrame, comparison_df: pd.DataFrame, s
     rows: list[dict[str, Any]] = []
     for spec in specs:
         group_runs = run_level_df[run_level_df["run_group"] == spec.run_group].copy()
+        group_run_count_df = group_runs.drop_duplicates("manifest_run_id") if "manifest_run_id" in group_runs.columns else group_runs
         comp = comparison_df[comparison_df["run_group"] == spec.run_group].copy() if not comparison_df.empty else pd.DataFrame()
         rows.append(
             {
@@ -1742,7 +2143,7 @@ def _group_summary_df(run_level_df: pd.DataFrame, comparison_df: pd.DataFrame, s
                 "expected_baseline_runs": 30,
                 "expected_smart_runs": int(len(spec.smart_candidates)) * 30,
                 "expected_total_runs": 30 + int(len(spec.smart_candidates)) * 30,
-                "completed_runs": int(group_runs["completed"].fillna(False).astype(bool).sum()) if not group_runs.empty and "completed" in group_runs.columns else 0,
+                "completed_runs": int(group_run_count_df["completed"].fillna(False).astype(bool).sum()) if not group_run_count_df.empty and "completed" in group_run_count_df.columns else 0,
                 "comparison_ready_runs": int((comp["comparison_status"] == "ready").sum()) if not comp.empty and "comparison_status" in comp.columns else 0,
                 "baseline_mean_elapsed_sec": float(pd.to_numeric(group_runs[group_runs["scenario"] == "baseline"]["elapsed_sec"], errors="coerce").dropna().mean()) if not group_runs.empty else np.nan,
                 "smart_mean_elapsed_sec": float(pd.to_numeric(group_runs[group_runs["scenario"] == "smart"]["elapsed_sec"], errors="coerce").dropna().mean()) if not group_runs.empty else np.nan,
@@ -1752,9 +2153,7 @@ def _group_summary_df(run_level_df: pd.DataFrame, comparison_df: pd.DataFrame, s
 
 
 def _run_completion_summary_df(run_manifest_df: pd.DataFrame, run_level_df: pd.DataFrame, output_root: Path) -> pd.DataFrame:
-    completed_outputs = 0
-    if not run_level_df.empty and "output_dir" in run_level_df.columns and "completed" in run_level_df.columns:
-        completed_outputs = int(run_level_df["completed"].fillna(False).astype(bool).sum())
+    completed_outputs = _completed_manifest_count(run_level_df)
     return pd.DataFrame(
         [
             {
@@ -1824,6 +2223,9 @@ def _write_prepare_outputs(
     output_root: Path,
     result_root: Path,
     specs: list[GroupSpec],
+    *,
+    sampled10: bool = False,
+    nets_dir: Path | None = None,
 ) -> dict[str, pd.DataFrame]:
     _ensure_dir(output_root)
     for rel in ["csv", "xml", "logs", "readme", "commands", "manifests", "figures", "runs"]:
@@ -1833,7 +2235,12 @@ def _write_prepare_outputs(
     for spec in specs:
         _build_single_candidate_csvs(spec, single_csv_root)
 
-    run_manifest_df, baseline_df, smart_df = _build_run_manifest(specs, output_root)
+    if sampled10:
+        if nets_dir is None:
+            raise ValueError("nets_dir is required for sampled10 prepare mode")
+        run_manifest_df, baseline_df, smart_df = _build_run_manifest_sampled10(specs, output_root, nets_dir)
+    else:
+        run_manifest_df, baseline_df, smart_df = _build_run_manifest(specs, output_root)
     candidate_metadata_df = _build_candidate_metadata(
         specs,
         _default_candidate_metadata_source(),
@@ -1845,11 +2252,19 @@ def _write_prepare_outputs(
     group_summary_df = _group_summary_df(run_level_summary, comparison_df, specs)
     completion_summary_df = _run_completion_summary_df(run_manifest_df, run_level_summary, output_root)
 
-    inventory_df = _inventory_csvs(result_root, exclude_root=output_root)
-    presence_df = _presence_check_df(inventory_df, result_root) if not inventory_df.empty else pd.DataFrame()
+    if sampled10:
+        inventory_df = pd.DataFrame()
+        presence_df = pd.DataFrame()
+    else:
+        inventory_df = _inventory_csvs(result_root, exclude_root=output_root)
+        presence_df = _presence_check_df(inventory_df, result_root) if not inventory_df.empty else pd.DataFrame()
     safety_summary_df, safety_missing_df = _safety_surrogate_summary(run_level_summary)
-    cleanup_scan_tmp = Path(tempfile.mkdtemp(prefix="cleanup_scan_"))
-    cleanup_audit_df = build_cleanup_audit(result_root, cleanup_scan_tmp) if result_root.exists() else pd.DataFrame()
+    cleanup_scan_tmp = None
+    if sampled10:
+        cleanup_audit_df = pd.DataFrame(columns=["file_path", "type", "size_bytes", "size_mb", "cleanup_status", "reason", "suggested_action", "safe_to_delete"])
+    else:
+        cleanup_scan_tmp = Path(tempfile.mkdtemp(prefix="cleanup_scan_"))
+        cleanup_audit_df = build_cleanup_audit(result_root, cleanup_scan_tmp) if result_root.exists() else pd.DataFrame()
     if not cleanup_audit_df.empty:
         cleanup_audit_df = cleanup_audit_df.rename(
             columns={
@@ -2031,12 +2446,20 @@ def _write_prepare_outputs(
     )
 
     # Command files.
-    _write_text(output_root / "commands" / "command_to_run_30seed_current_main_12.sh", _build_group_script(specs[0], output_root, single_csv_root))
-    _write_text(output_root / "commands" / "command_to_run_30seed_signal_fix_9.sh", _build_group_script(specs[1], output_root, single_csv_root))
-    _write_text(output_root / "commands" / "command_to_run_30seed_generated_signal_7.sh", _build_group_script(specs[2], output_root, single_csv_root))
+    if sampled10:
+        _write_text(output_root / "commands" / "command_to_run_30seed_current_main_12.sh", _build_sampled10_group_script(specs[0], output_root, single_csv_root, nets_dir))
+        _write_text(output_root / "commands" / "command_to_run_30seed_signal_fix_9.sh", _build_sampled10_group_script(specs[1], output_root, single_csv_root, nets_dir))
+        _write_text(output_root / "commands" / "command_to_run_30seed_generated_signal_7.sh", _build_sampled10_group_script(specs[2], output_root, single_csv_root, nets_dir))
+    else:
+        _write_text(output_root / "commands" / "command_to_run_30seed_current_main_12.sh", _build_group_script(specs[0], output_root, single_csv_root))
+        _write_text(output_root / "commands" / "command_to_run_30seed_signal_fix_9.sh", _build_group_script(specs[1], output_root, single_csv_root))
+        _write_text(output_root / "commands" / "command_to_run_30seed_generated_signal_7.sh", _build_group_script(specs[2], output_root, single_csv_root))
     if len(specs) > 3:
-        _write_text(output_root / "commands" / "command_to_run_30seed_p1_p4_recovery_6.sh", _build_group_script(specs[3], output_root, single_csv_root))
-    _write_text(output_root / "commands" / "command_to_run_30seed_all_groups.sh", _build_all_groups_script(output_root))
+        if sampled10:
+            _write_text(output_root / "commands" / "command_to_run_30seed_p1_p4_recovery_6.sh", _build_sampled10_group_script(specs[3], output_root, single_csv_root, nets_dir))
+        else:
+            _write_text(output_root / "commands" / "command_to_run_30seed_p1_p4_recovery_6.sh", _build_group_script(specs[3], output_root, single_csv_root))
+    _write_text(output_root / "commands" / "command_to_run_30seed_all_groups.sh", _build_sampled10_all_groups_script(output_root) if sampled10 else _build_all_groups_script(output_root))
     _write_text(output_root / "commands" / "command_to_standardize_30seed_outputs.sh", _build_standardize_script(output_root))
     _write_text(output_root / "commands" / "command_to_check_30seed_results.sh", _build_check_script(output_root))
     _write_text(output_root / "commands" / "command_to_open_30seed_summary.sh", _build_open_script(output_root))
@@ -2044,7 +2467,8 @@ def _write_prepare_outputs(
     _write_text(output_root / "commands" / "command_to_cleanup_result_dry_run.sh", dry_run_script)
     _write_text(output_root / "commands" / "command_to_cleanup_result_apply.sh", apply_script)
 
-    shutil.rmtree(cleanup_scan_tmp, ignore_errors=True)
+    if cleanup_scan_tmp is not None:
+        shutil.rmtree(cleanup_scan_tmp, ignore_errors=True)
 
     for script in (output_root / "commands").glob("*.sh"):
         script.chmod(0o755)
@@ -2120,12 +2544,12 @@ def _copy_xml_like(result_root: Path, output_root: Path, copy_logs: bool = False
 def _status_report(pipeline_root: Path) -> dict[str, Any]:
     run_manifest = _read_csv(pipeline_root / "run_manifest.csv")
     run_level = _read_csv(pipeline_root / "csv" / "seed30_run_level_results.csv")
-    completed = int(run_level["completed"].fillna(False).astype(bool).sum()) if not run_level.empty and "completed" in run_level.columns else 0
+    completed = _completed_manifest_count(run_level)
     missing = max(int(len(run_manifest)) - completed, 0)
     group_counts = {}
     if not run_level.empty and {"run_group", "completed"}.issubset(run_level.columns):
         for group, sub in run_level.groupby("run_group", dropna=False):
-            group_counts[str(group)] = int(sub["completed"].fillna(False).astype(bool).sum())
+            group_counts[str(group)] = _completed_manifest_count(sub)
     baseline_ok = True
     smart_ok = True
     if not run_level.empty:
@@ -2192,6 +2616,36 @@ def cmd_prepare(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_sampled10(args: argparse.Namespace) -> None:
+    input_root = Path(args.input_root).expanduser().resolve()
+    result_root = Path(args.result_root).expanduser().resolve()
+    output_root = (
+        Path(args.output_root).expanduser().resolve()
+        if args.output_root
+        else result_root / "active" / "real_30seed_runs_sampled10"
+    )
+    active_root = Path(args.active_root).expanduser().resolve() if args.active_root else result_root / "active"
+    nets_dir = active_root / "nets"
+    specs = _load_group_specs(input_root, output_root, active_root=active_root)
+    _write_prepare_outputs(input_root, output_root, result_root, specs, sampled10=True, nets_dir=nets_dir)
+    total_runs = sum(30 + len(s.smart_candidates) * 30 for s in specs)
+    print(
+        json.dumps(
+            {
+                "output_root": str(output_root),
+                "planned_total_runs": total_runs,
+                "group_count": len(specs),
+                "experiment_mode": "sampled",
+                "metric_sample_interval_s": SAMPLED10_METRIC_SAMPLE_INTERVAL,
+                "vehicle_sample_interval_s": SAMPLED10_VEHICLE_SAMPLE_INTERVAL,
+                "progress_interval_s": SAMPLED10_PROGRESS_INTERVAL,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_aggregate(args: argparse.Namespace) -> None:
     pipeline_root = Path(args.pipeline_root).expanduser().resolve()
     run_manifest = _read_csv(pipeline_root / "run_manifest.csv")
@@ -2201,11 +2655,15 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
     run_level_df = _build_run_level_results(run_manifest)
     comparison_df, metric_df = _comparison_rows(run_level_df, run_manifest)
     specs = _load_group_specs(Path(args.input_root).expanduser().resolve() if args.input_root else pipeline_root.parent / "phase_next_top50_max_installation_recovery_20260516_002620", pipeline_root)
-    candidate_metadata_df = _build_candidate_metadata(
-        specs,
-        _default_candidate_metadata_source(),
-        expected_smart_ids=set(str(v).strip() for v in run_manifest.loc[run_manifest["scenario"] == "smart", "crosswalk_id"].astype(str).tolist()),
-    )
+    candidate_metadata_path = pipeline_root / "manifests" / "candidate_metadata.csv"
+    if candidate_metadata_path.exists():
+        candidate_metadata_df = _read_csv(candidate_metadata_path)
+    else:
+        candidate_metadata_df = _build_candidate_metadata(
+            specs,
+            _default_candidate_metadata_source(),
+            expected_smart_ids=set(str(v).strip() for v in run_manifest.loc[run_manifest["scenario"] == "smart", "crosswalk_id"].astype(str).tolist()),
+        )
     group_summary_df = _group_summary_df(run_level_df, comparison_df, specs)
     completion_summary_df = _run_completion_summary_df(run_manifest, run_level_df, pipeline_root)
     _write_csv(run_level_df, pipeline_root / "csv" / "seed30_run_level_results.csv")
@@ -2215,10 +2673,16 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
     _write_csv(group_summary_df, pipeline_root / "csv" / "seed30_group_summary.csv")
     _write_csv(completion_summary_df, pipeline_root / "csv" / "run_completion_summary.csv")
     _write_csv(completion_summary_df, pipeline_root / "run_completion_summary.csv")
-    inventory_df = _inventory_csvs(result_root, exclude_root=pipeline_root)
-    presence_df = _presence_check_df(inventory_df, result_root) if not inventory_df.empty else pd.DataFrame()
-    cleanup_scan_tmp = Path(tempfile.mkdtemp(prefix="cleanup_scan_"))
-    cleanup_audit_df = build_cleanup_audit(result_root, cleanup_scan_tmp) if result_root.exists() else pd.DataFrame()
+    if pipeline_root.name.endswith("sampled10"):
+        inventory_df = pd.DataFrame()
+        presence_df = pd.DataFrame()
+        cleanup_scan_tmp = None
+        cleanup_audit_df = pd.DataFrame(columns=["file_path", "type", "size_bytes", "size_mb", "cleanup_status", "reason", "suggested_action", "safe_to_delete"])
+    else:
+        inventory_df = _inventory_csvs(result_root, exclude_root=pipeline_root)
+        presence_df = _presence_check_df(inventory_df, result_root) if not inventory_df.empty else pd.DataFrame()
+        cleanup_scan_tmp = Path(tempfile.mkdtemp(prefix="cleanup_scan_"))
+        cleanup_audit_df = build_cleanup_audit(result_root, cleanup_scan_tmp) if result_root.exists() else pd.DataFrame()
     if not cleanup_audit_df.empty:
         cleanup_audit_df = cleanup_audit_df.rename(columns={"path": "file_path", "category": "cleanup_status"})
         try:
@@ -2283,10 +2747,11 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
         {"candidate_metadata.csv": candidate_metadata_df},
         {"candidate_metadata.csv": "Candidate metadata preserved separately from the execution manifest. One row per smart candidate."},
     )
-    shutil.rmtree(cleanup_scan_tmp, ignore_errors=True)
+    if cleanup_scan_tmp is not None:
+        shutil.rmtree(cleanup_scan_tmp, ignore_errors=True)
     if args.copy_xml:
         _copy_xml_like(pipeline_root / "runs", pipeline_root, copy_logs=args.copy_logs)
-    print(json.dumps({"output_root": str(pipeline_root), "completed_runs": int(run_level_df["completed"].fillna(False).astype(bool).sum()) if not run_level_df.empty and "completed" in run_level_df.columns else 0}, ensure_ascii=False, indent=2))
+    print(json.dumps({"output_root": str(pipeline_root), "completed_runs": _completed_manifest_count(run_level_df)}, ensure_ascii=False, indent=2))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -2574,6 +3039,15 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Explicit path to result/active/ (preferred source of truth for nets/csv). "
                               "Overrides legacy input-root CSV/net lookup.")
     prepare.set_defaults(func=cmd_prepare)
+
+    prepare_sampled10 = sub.add_parser("prepare-sampled10", help="build sampled10 manifests, cleanup inventory, command scripts, and README files")
+    prepare_sampled10.add_argument("--input-root", default="result/phase_next_top50_max_installation_recovery_20260516_002620")
+    prepare_sampled10.add_argument("--result-root", default="result")
+    prepare_sampled10.add_argument("--output-root", default=None)
+    prepare_sampled10.add_argument("--active-root", default=None,
+                                   help="Explicit path to result/active/ (preferred source of truth for nets/csv). "
+                                        "Overrides legacy input-root CSV/net lookup.")
+    prepare_sampled10.set_defaults(func=cmd_prepare_sampled10)
 
     aggregate = sub.add_parser("aggregate", help="aggregate completed 30-seed run outputs")
     aggregate.add_argument("--pipeline-root", required=True)

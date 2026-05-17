@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +71,21 @@ def _load_demand_lookup(output_dir: Path) -> dict[tuple[str, str], dict[str, Any
     return lookup
 
 
+def _experiment_metadata(metric_sample_interval_s: float, vehicle_sample_interval_s: float) -> dict[str, object]:
+    metrics_exact = metric_sample_interval_s == 0.0 and vehicle_sample_interval_s == 0.0
+    return {
+        "experiment_mode": "exact" if metrics_exact else "sampled",
+        "metric_sample_interval_s": float(metric_sample_interval_s),
+        "vehicle_sample_interval_s": float(vehicle_sample_interval_s),
+        "metrics_exact": metrics_exact,
+        "metrics_interpretation": (
+            "exact values; use for exact PET/instantaneous queue claims"
+            if metrics_exact
+            else "sampled estimate; use for repeated paired comparisons, not exact PET/instantaneous queue claims"
+        ),
+    }
+
+
 def collect_all(
     candidates_csv: str | Path,
     output_dir: str | Path = "outputs",
@@ -94,7 +111,10 @@ def collect_all(
     vehicle_only: bool = False,
     sensitivity_config: dict[str, Any] | None = None,
     metric_sample_interval_s: float = 0.0,
+    vehicle_sample_interval_s: float = 0.0,
+    progress_interval_s: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float | str | None]]:
+    t0 = time.perf_counter()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     demand_lookup = _load_demand_lookup(output_dir)
@@ -235,6 +255,8 @@ def collect_all(
                         vehicle_only,
                         sensitivity_config,
                         metric_sample_interval_s=metric_sample_interval_s,
+                        vehicle_sample_interval_s=vehicle_sample_interval_s,
+                        progress_interval_s=progress_interval_s,
                     )
                     timing_key = f"simulation_{scenario}_sec"
                     timing[timing_key] = float(timing.get(timing_key, 0.0) or 0.0) + float(
@@ -419,6 +441,62 @@ def collect_all(
     english_output_columns(seed_df).to_csv(output_dir / "simulation_results_seed.csv", index=False)
     english_output_columns(avg_df).to_csv(output_dir / "simulation_results.csv", index=False)
 
+    experiment_metadata = _experiment_metadata(metric_sample_interval_s, vehicle_sample_interval_s)
+    failed_cases_count = int(len(failures))
+    result_rows = int(len(seed_df))
+    baseline_result_rows = int((seed_df["scenario"] == "baseline").sum()) if not seed_df.empty and "scenario" in seed_df.columns else 0
+    smart_result_rows = int((seed_df["scenario"] == "smart").sum()) if not seed_df.empty and "scenario" in seed_df.columns else 0
+    run_success = failed_cases_count == 0 and baseline_result_rows >= 1 and smart_result_rows >= 1
+    failure_parts: list[str] = []
+    if failed_cases_count > 0:
+        failure_parts.append(f"failed_cases_count={failed_cases_count}")
+    if result_rows == 0:
+        failure_parts.append("result_rows=0")
+    if baseline_result_rows < 1:
+        failure_parts.append(f"baseline_result_rows={baseline_result_rows}")
+    if smart_result_rows < 1:
+        failure_parts.append(f"smart_result_rows={smart_result_rows}")
+
+    run_metadata = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "run_dir": str(output_dir),
+        "output_dir": str(output_dir),
+        "args": {
+            "candidates": str(candidates_csv),
+            "nets_dir": str(nets_dir),
+            "sim_duration": int(sim_duration),
+            "warmup": int(warmup),
+            "seeds": list(seeds),
+            "metric_sample_interval": float(metric_sample_interval_s),
+            "vehicle_sample_interval": float(vehicle_sample_interval_s),
+            "progress_interval": float(progress_interval_s),
+        },
+        **experiment_metadata,
+    }
+    (output_dir / "run_metadata.json").write_text(json.dumps(run_metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    benchmark_timing = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "network_build_sec": None,
+        "demand_generation_sec": None,
+        "simulation_baseline_sec": timing.get("simulation_baseline_sec"),
+        "simulation_smart_sec": timing.get("simulation_smart_sec"),
+        "post_validation_sec": None,
+        "total_sec": float(time.perf_counter() - t0),
+        "partial": not run_success,
+        "interrupted": False,
+        "completed_scenarios": ["simulation"],
+        "current_scenario": "",
+        **experiment_metadata,
+        "run_success": run_success,
+        "failure_reason": "" if run_success else ";".join(failure_parts),
+        "failed_cases_count": failed_cases_count,
+        "result_rows": result_rows,
+        "baseline_result_rows": baseline_result_rows,
+        "smart_result_rows": smart_result_rows,
+    }
+    (output_dir / "benchmark_timing.json").write_text(json.dumps(benchmark_timing, ensure_ascii=False, indent=2), encoding="utf-8")
+
     extension_debug = pd.DataFrame(
         extension_rows,
         columns=[
@@ -426,6 +504,10 @@ def collect_all(
             "crosswalk_id",
             "tls_id",
             "phase_index",
+            "tls_state",
+            "ped_link_indices",
+            "vehicle_green_link_count",
+            "is_ped_only_phase",
             "remaining_before_extension",
             "extension_sec",
             "ped_count_on_crossing",
@@ -509,6 +591,8 @@ def main() -> None:
     parser.add_argument("--sensitivity_scenarios", default=None)
     parser.add_argument("--sensitivity_case", default=None)
     parser.add_argument("--metric-sample-interval", type=float, default=0.0)
+    parser.add_argument("--vehicle-sample-interval", type=float, default=0.0)
+    parser.add_argument("--progress-interval", type=float, default=0.0)
     args = parser.parse_args()
     sensitivity_config = None
     if args.sensitivity_case:
@@ -539,6 +623,8 @@ def main() -> None:
         args.vehicle_only,
         sensitivity_config,
         metric_sample_interval_s=args.metric_sample_interval,
+        vehicle_sample_interval_s=args.vehicle_sample_interval,
+        progress_interval_s=args.progress_interval,
     )
 
 

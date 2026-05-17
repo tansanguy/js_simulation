@@ -86,3 +86,83 @@ def test_prepare_builds_pipeline_pack_without_running_sumo(tmp_path: Path) -> No
     cleanup = pd.read_csv(output_root / "csv" / "result_cleanup_inventory.csv")
     assert "old_smoke/sample.csv" in set(cleanup["file_path"].astype(str))
     assert (cleanup["file_path"].astype(str).str.startswith("phase_next_30seed_28_ready_pipeline_test")).sum() == 0
+
+
+def test_prepare_sampled10_builds_new_root(tmp_path: Path) -> None:
+    result_root = tmp_path / "result"
+    output_root = result_root / "active" / "real_30seed_runs_sampled10"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "smart_crosswalk_sumo.reporting.aggregate_30seed_results",
+            "prepare-sampled10",
+            "--input-root",
+            str(INPUT_ROOT),
+            "--result-root",
+            str(result_root),
+            "--output-root",
+            str(output_root),
+            "--active-root",
+            str(ROOT / "result" / "active"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    manifest = pd.read_csv(output_root / "run_manifest.csv")
+    baseline_manifest = pd.read_csv(output_root / "manifests" / "baseline_run_manifest.csv")
+    smart_manifest = pd.read_csv(output_root / "manifests" / "smart_run_manifest.csv")
+    all_commands = manifest["command"].astype(str)
+
+    assert manifest.shape[0] == 1140
+    assert baseline_manifest.shape[0] == 120
+    assert smart_manifest.shape[0] == 1020
+    assert manifest["scenario"].eq("baseline").sum() == 120
+    assert manifest["scenario"].eq("smart").sum() == 1020
+    assert manifest["seed"].min() == 1
+    assert manifest["seed"].max() == 30
+    assert smart_manifest["crosswalk_id"].astype(str).nunique() == 34
+    assert baseline_manifest["crosswalk_id"].astype(str).nunique() == 4
+    assert all_commands.str.contains("--metric-sample-interval 10").sum() == 1140
+    assert all_commands.str.contains("--vehicle-sample-interval 10").sum() == 1140
+    assert all_commands.str.contains("--progress-interval 60").sum() == 1140
+    assert all_commands.str.contains("--skip_reports").sum() == 0
+    assert not all_commands.str.contains("phase6_smoke_summary.csv").any()
+    assert manifest["expected_summary_csv"].astype(str).str.contains("phase6_smoke_summary.csv").sum() == 0
+    assert (output_root / "commands" / "command_to_run_30seed_all_groups.sh").is_file()
+
+    status_proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "smart_crosswalk_sumo.reporting.aggregate_30seed_results",
+            "status",
+            "--pipeline-root",
+            str(output_root),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert status_proc.returncode == 0, status_proc.stderr
+
+    aggregate_proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "smart_crosswalk_sumo.reporting.aggregate_30seed_results",
+            "aggregate",
+            "--pipeline-root",
+            str(output_root),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert aggregate_proc.returncode == 0, aggregate_proc.stderr

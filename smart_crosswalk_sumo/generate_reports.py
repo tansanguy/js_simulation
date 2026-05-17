@@ -49,6 +49,8 @@ BASELINE_SMART_COLUMNS = [
     "vehicle_delay_cost_delta",
     "extension_count_smart",
     "total_extension_sec_smart",
+    "traffic_metric_scope",
+    "metrics_exact",
 ]
 
 
@@ -85,6 +87,82 @@ def ensure_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return frame[columns]
 
 
+def _load_run_experiment_metadata(output_dir: Path) -> dict[str, Any]:
+    for run_metadata_path in (output_dir.parent / "run_metadata.json", output_dir / "run_metadata.json"):
+        if not run_metadata_path.exists():
+            continue
+        try:
+            payload = json.loads(run_metadata_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            continue
+    return {}
+
+
+def _load_run_metrics_exact(output_dir: Path) -> bool | None:
+    payload = _load_run_experiment_metadata(output_dir)
+    if payload:
+        try:
+            metrics_exact = payload.get("metrics_exact")
+            if isinstance(metrics_exact, bool):
+                return metrics_exact
+            experiment_mode = str(payload.get("experiment_mode", "") or "").strip().lower()
+            if experiment_mode in {"sampled", "exact"}:
+                return experiment_mode == "exact"
+        except Exception:
+            pass
+        try:
+            args = payload.get("args", {})
+            metric_interval = float(args.get("metric_sample_interval", 0.0) or 0.0)
+            vehicle_interval = float(args.get("vehicle_sample_interval", 0.0) or 0.0)
+            return metric_interval == 0.0 and vehicle_interval == 0.0
+        except Exception:
+            pass
+    return None
+
+
+def _count_affected_route_vehicles(
+    route_file: str | Path | None,
+    vehicle_conflict_edges: set[str],
+) -> int | None:
+    if not route_file:
+        return None
+    route_path = Path(route_file)
+    if not route_path.exists() or not vehicle_conflict_edges:
+        return None
+    try:
+        root = ET.parse(route_path).getroot()
+    except Exception:
+        return None
+    conflict_edges = {str(edge) for edge in vehicle_conflict_edges if str(edge)}
+    if not conflict_edges:
+        return None
+    count = 0
+    for vehicle in root.findall("vehicle"):
+        route = vehicle.find("route")
+        if route is None:
+            continue
+        edges = str(route.attrib.get("edges", "")).split()
+        if any(edge in conflict_edges for edge in edges):
+            count += 1
+    return count
+
+
+def _load_vehicle_conflict_edges(nets_dir: Path | None, crosswalk_id: str) -> set[str]:
+    if nets_dir is None:
+        return set()
+    metadata_path = nets_dir / f"cw_{crosswalk_id}" / "metadata.json"
+    if not metadata_path.exists():
+        return set()
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    conflict_edges = payload.get("vehicle_conflict_edges", []) if isinstance(payload, dict) else []
+    return {str(edge) for edge in conflict_edges if str(edge)}
+
+
 def build_simulation_summary(avg_df: pd.DataFrame, seed_df: pd.DataFrame) -> pd.DataFrame:
     if avg_df.empty:
         return pd.DataFrame(columns=SIMULATION_SUMMARY_COLUMNS)
@@ -104,7 +182,10 @@ def build_simulation_summary(avg_df: pd.DataFrame, seed_df: pd.DataFrame) -> pd.
     )
 
 
-def build_baseline_vs_smart_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
+def build_baseline_vs_smart_summary(
+    summary_df: pd.DataFrame,
+    metrics_exact: bool | None = None,
+) -> pd.DataFrame:
     if summary_df.empty:
         return pd.DataFrame(columns=BASELINE_SMART_COLUMNS)
 
@@ -135,9 +216,43 @@ def build_baseline_vs_smart_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
             - baseline.loc[common, "vehicle_delay_cost"].to_numpy(),
             "extension_count_smart": smart.loc[common, "extension_count"].to_numpy(),
             "total_extension_sec_smart": smart.loc[common, "total_extension_sec"].to_numpy(),
+            "traffic_metric_scope": "global_500m",
+            "metrics_exact": metrics_exact if metrics_exact is not None else pd.NA,
         }
     )
     return ensure_columns(result, BASELINE_SMART_COLUMNS).sort_values("crosswalk_id")
+
+
+def build_local_tradeoff_summary(seed_tradeoff: pd.DataFrame) -> pd.DataFrame:
+    if seed_tradeoff.empty:
+        return pd.DataFrame()
+    required = {"candidate_id", "seed"}
+    if not required.issubset(seed_tradeoff.columns):
+        return pd.DataFrame()
+
+    grouped = (
+        seed_tradeoff.groupby("candidate_id", as_index=False)
+        .agg(
+            seed_count=("seed", "nunique"),
+            metrics_exact=("metrics_exact", "first"),
+            experiment_mode=("experiment_mode", "first"),
+            generated_vehicle_count=("generated_vehicle_count", "mean"),
+            network_arrived_vehicles=("network_arrived_vehicles", "mean"),
+            toy_queue_vehicle_arrivals=("toy_queue_vehicle_arrivals", "mean"),
+            affected_route_vehicle_count=("affected_route_vehicle_count", "mean"),
+            affected_route_vehicle_share=("affected_route_vehicle_share", "mean"),
+            local_approach_queue_avg_baseline=("local_approach_queue_avg_baseline", "mean"),
+            local_approach_queue_avg_smart=("local_approach_queue_avg_smart", "mean"),
+            local_approach_queue_delta=("local_approach_queue_delta", "mean"),
+            local_approach_queue_max_baseline=("local_approach_queue_max_baseline", "mean"),
+            local_approach_queue_max_smart=("local_approach_queue_max_smart", "mean"),
+            local_approach_queue_max_delta=("local_approach_queue_max_delta", "mean"),
+            surrounding_lane_count=("surrounding_lane_count", "mean"),
+        )
+        .sort_values("candidate_id")
+    )
+    grouped["traffic_metric_scope"] = "local_approach+affected_route"
+    return grouped
 
 
 def write_methodology_report(
@@ -399,6 +514,12 @@ def safe_div(a: float, b: float) -> float:
     return float(a / b) if b and not math.isclose(b, 0.0) else float("nan")
 
 
+def numeric_series(frame: pd.DataFrame, column: str, default: float = np.nan) -> pd.Series:
+    if column in frame.columns:
+        return pd.to_numeric(frame[column], errors="coerce")
+    return pd.Series([default] * len(frame), index=frame.index, dtype="float64")
+
+
 def build_seed_level_tradeoff(seed_df: pd.DataFrame) -> pd.DataFrame:
     if seed_df.empty:
         return pd.DataFrame()
@@ -417,27 +538,21 @@ def build_seed_level_tradeoff(seed_df: pd.DataFrame) -> pd.DataFrame:
     out["seed"] = merged["seed"]
     out["scenario"] = "baseline_vs_smart"
 
-    out["pedestrian_waiting_time_mean_baseline"] = pd.to_numeric(
-        merged.get("average_pedestrian_wait_time_baseline"), errors="coerce"
-    )
-    out["pedestrian_waiting_time_mean_smart"] = pd.to_numeric(
-        merged.get("average_pedestrian_wait_time_smart"), errors="coerce"
-    )
+    out["pedestrian_waiting_time_mean_baseline"] = numeric_series(merged, "average_pedestrian_wait_time_baseline")
+    out["pedestrian_waiting_time_mean_smart"] = numeric_series(merged, "average_pedestrian_wait_time_smart")
     out["pedestrian_waiting_time_mean"] = out["pedestrian_waiting_time_mean_smart"]
     out["pedestrian_waiting_time_p95"] = np.nan
-    out["vehicle_mean_time_loss"] = pd.to_numeric(merged.get("veh_avg_delay_sec_smart"), errors="coerce")
-    out["vehicle_mean_travel_time"] = pd.to_numeric(
-        merged.get("surrounding_avg_travel_time_sec_smart"), errors="coerce"
-    )
-    out["vehicle_mean_speed"] = pd.to_numeric(merged.get("surrounding_mean_speed_mps_smart"), errors="coerce")
-    out["throughput"] = pd.to_numeric(merged.get("surrounding_throughput_veh_per_hour_smart"), errors="coerce")
+    out["vehicle_mean_time_loss"] = numeric_series(merged, "veh_avg_delay_sec_smart")
+    out["vehicle_mean_travel_time"] = numeric_series(merged, "surrounding_avg_travel_time_sec_smart")
+    out["vehicle_mean_speed"] = numeric_series(merged, "surrounding_mean_speed_mps_smart")
+    out["throughput"] = numeric_series(merged, "surrounding_throughput_veh_per_hour_smart")
 
     b_wait = out["pedestrian_waiting_time_mean_baseline"]
     s_wait = out["pedestrian_waiting_time_mean_smart"]
-    b_loss = pd.to_numeric(merged.get("veh_avg_delay_sec_baseline"), errors="coerce")
-    s_loss = pd.to_numeric(merged.get("veh_avg_delay_sec_smart"), errors="coerce")
-    b_spd = pd.to_numeric(merged.get("surrounding_mean_speed_mps_baseline"), errors="coerce")
-    s_spd = pd.to_numeric(merged.get("surrounding_mean_speed_mps_smart"), errors="coerce")
+    b_loss = numeric_series(merged, "veh_avg_delay_sec_baseline")
+    s_loss = numeric_series(merged, "veh_avg_delay_sec_smart")
+    b_spd = numeric_series(merged, "surrounding_mean_speed_mps_baseline")
+    s_spd = numeric_series(merged, "surrounding_mean_speed_mps_smart")
 
     out["safety_metric_delta_abs"] = b_wait - s_wait
     out["safety_metric_delta_pct"] = (b_wait - s_wait) / b_wait.replace(0, np.nan) * 100.0
@@ -448,27 +563,54 @@ def build_seed_level_tradeoff(seed_df: pd.DataFrame) -> pd.DataFrame:
     out["traffic_degradation_pct"] = (out["traffic_metric_delta_pct"] + speed_drop_pct) / 2.0
     out["tradeoff_ratio"] = out["safety_improvement_pct"] / out["traffic_degradation_pct"].replace(0, np.nan)
 
-    out["pedestrian_completed_count"] = pd.to_numeric(merged.get("PET_A_proxy_count_smart"), errors="coerce")
-    out["pedestrian_unserved_count"] = pd.to_numeric(merged.get("elderly_incomplete_cross_smart"), errors="coerce")
-    out["pedestrian_red_wait_exposure"] = pd.to_numeric(merged.get("max_pedestrian_wait_time_smart"), errors="coerce")
-    out["pedestrian_green_extension_count"] = pd.to_numeric(
-        merged.get("pedestrian_green_extension_count_smart"), errors="coerce"
-    )
-    out["pedestrian_green_shortage_count"] = pd.to_numeric(
-        merged.get("PET_B_surrogate_severe_smart"), errors="coerce"
-    )
-    out["pedestrian_safety_score"] = pd.to_numeric(merged.get("safety_risk_score_smart"), errors="coerce")
+    out["pedestrian_completed_count"] = numeric_series(merged, "PET_A_proxy_count_smart")
+    out["pedestrian_unserved_count"] = numeric_series(merged, "elderly_incomplete_cross_smart")
+    out["pedestrian_red_wait_exposure"] = numeric_series(merged, "max_pedestrian_wait_time_smart")
+    out["pedestrian_green_extension_count"] = numeric_series(merged, "pedestrian_green_extension_count_smart")
+    out["pedestrian_green_shortage_count"] = numeric_series(merged, "PET_B_surrogate_severe_smart")
+    out["pedestrian_safety_score"] = numeric_series(merged, "safety_risk_score_smart")
 
-    out["vehicle_count"] = pd.to_numeric(merged.get("total_vehicle_arrivals_smart"), errors="coerce")
+    out["traffic_metric_scope"] = "global_500m"
+    out["generated_vehicle_count"] = numeric_series(merged, "generated_vehicle_count_smart")
+    out["network_arrived_vehicles"] = numeric_series(merged, "network_arrived_vehicles_smart")
+    out["toy_queue_vehicle_arrivals"] = numeric_series(merged, "total_vehicle_arrivals_smart")
+    out["vehicle_count"] = out["toy_queue_vehicle_arrivals"]
+    out["vehicle_count_semantics"] = "toy_queue_vehicle_arrivals"
+    out["arrived_count"] = out["network_arrived_vehicles"]
+    out["arrived_count_semantics"] = "network_arrived_vehicles"
+
+    route_files = merged.get("generated_vehicle_route_file_smart")
+    if route_files is None:
+        route_files = merged.get("generated_vehicle_route_file_baseline")
+    if isinstance(route_files, pd.Series):
+        route_files = route_files.iloc[0]
+    route_file = str(route_files) if route_files is not None else ""
+    conflict_edges = set()
+    if "candidate_id" in merged.columns:
+        conflict_edges = _load_vehicle_conflict_edges(None, str(merged["crosswalk_id"].iloc[0]))
+    out["affected_route_vehicle_count"] = _count_affected_route_vehicles(route_file, conflict_edges)
+    generated_vehicle_count = numeric_series(merged, "generated_vehicle_count_smart")
+    out["affected_route_vehicle_share"] = (
+        pd.to_numeric(out["affected_route_vehicle_count"], errors="coerce")
+        / generated_vehicle_count.replace(0, np.nan)
+        if isinstance(generated_vehicle_count, pd.Series)
+        else np.nan
+    )
+    out["local_approach_queue_avg_baseline"] = numeric_series(merged, "avg_queue_length_baseline")
+    out["local_approach_queue_avg_smart"] = numeric_series(merged, "avg_queue_length_smart")
+    out["local_approach_queue_delta"] = out["local_approach_queue_avg_smart"] - out["local_approach_queue_avg_baseline"]
+    out["local_approach_queue_max_baseline"] = numeric_series(merged, "max_queue_length_baseline")
+    out["local_approach_queue_max_smart"] = numeric_series(merged, "max_queue_length_smart")
+    out["local_approach_queue_max_delta"] = out["local_approach_queue_max_smart"] - out["local_approach_queue_max_baseline"]
+    out["surrounding_lane_count"] = numeric_series(merged, "surrounding_lane_count_smart")
     out["mean_travel_time"] = out["vehicle_mean_travel_time"]
-    out["mean_delay"] = pd.to_numeric(merged.get("veh_avg_delay_sec_smart"), errors="coerce")
-    out["mean_time_loss"] = pd.to_numeric(merged.get("avg_vehicle_delay_sec_smart"), errors="coerce")
-    out["mean_waiting_time"] = pd.to_numeric(merged.get("surrounding_veh_avg_delay_sec_smart"), errors="coerce")
+    out["mean_delay"] = numeric_series(merged, "veh_avg_delay_sec_smart")
+    out["mean_time_loss"] = numeric_series(merged, "avg_vehicle_delay_sec_smart")
+    out["mean_waiting_time"] = numeric_series(merged, "surrounding_veh_avg_delay_sec_smart")
     out["mean_speed"] = out["vehicle_mean_speed"]
-    out["queue_length_mean"] = pd.to_numeric(merged.get("surrounding_queue_total_avg_smart"), errors="coerce")
+    out["queue_length_mean"] = numeric_series(merged, "surrounding_queue_total_avg_smart")
     out["queue_length_p95"] = np.nan
-    out["stop_count_mean"] = pd.to_numeric(merged.get("queue_avg_smart"), errors="coerce")
-    out["arrived_count"] = pd.to_numeric(merged.get("network_arrived_vehicles_smart"), errors="coerce")
+    out["stop_count_mean"] = numeric_series(merged, "queue_avg_smart")
     out["teleported_count"] = np.nan
     out["vehicle_efficiency_score"] = out["throughput"] / out["mean_delay"].replace(0, np.nan)
     return out
@@ -530,14 +672,43 @@ def write_required_outputs(
     nets_dir: Path | None,
     seed_df: pd.DataFrame,
 ) -> None:
-    results_dir = Path.cwd() / "results"
-    docs_dir = Path.cwd() / "docs"
-    figs_dir = results_dir / "figures"
+    results_dir = output_dir
+    docs_dir = output_dir / "docs"
+    figs_dir = figures_dir
     results_dir.mkdir(parents=True, exist_ok=True)
     docs_dir.mkdir(parents=True, exist_ok=True)
     figs_dir.mkdir(parents=True, exist_ok=True)
 
+    experiment_metadata = _load_run_experiment_metadata(output_dir)
+    metrics_exact = _load_run_metrics_exact(output_dir)
+    experiment_mode = str(experiment_metadata.get("experiment_mode", "") or "")
     seed_tradeoff = build_seed_level_tradeoff(seed_df)
+    if not seed_tradeoff.empty:
+        seed_tradeoff["metrics_exact"] = metrics_exact if metrics_exact is not None else pd.NA
+        seed_tradeoff["experiment_mode"] = experiment_mode if experiment_mode else pd.NA
+        if nets_dir is not None:
+            for idx, row in seed_tradeoff.iterrows():
+                cw_id = str(row.get("candidate_id", ""))
+                conflict_edges = _load_vehicle_conflict_edges(nets_dir, cw_id)
+                if not conflict_edges:
+                    continue
+                route_candidates = seed_df[
+                    (seed_df["crosswalk_id"].astype(str) == cw_id)
+                    & (seed_df["scenario"] == "smart")
+                ]["generated_vehicle_route_file"]
+                route_file = str(route_candidates.iloc[0]) if not route_candidates.empty else ""
+                affected_count = _count_affected_route_vehicles(route_file, conflict_edges)
+                if affected_count is None:
+                    continue
+                generated_count_series = seed_df[
+                    (seed_df["crosswalk_id"].astype(str) == cw_id)
+                    & (seed_df["scenario"] == "smart")
+                ]["generated_vehicle_count"]
+                generated_count = float(generated_count_series.iloc[0]) if not generated_count_series.empty else np.nan
+                seed_tradeoff.at[idx, "affected_route_vehicle_count"] = affected_count
+                seed_tradeoff.at[idx, "affected_route_vehicle_share"] = (
+                    float(affected_count) / generated_count if generated_count and not np.isnan(generated_count) else np.nan
+                )
     write_csv_utf8_sig(seed_tradeoff, results_dir / "baseline_smart_seed_results.csv")
 
     summary = (
@@ -554,11 +725,21 @@ def write_required_outputs(
             vehicle_mean_speed=("vehicle_mean_speed", "mean"),
             pedestrian_waiting_time_mean=("pedestrian_waiting_time_mean", "mean"),
             pedestrian_waiting_time_p95=("pedestrian_waiting_time_p95", "mean"),
+            traffic_metric_scope=("traffic_metric_scope", "first"),
+            metrics_exact=("metrics_exact", "first"),
+            experiment_mode=("experiment_mode", "first"),
+            generated_vehicle_count=("generated_vehicle_count", "mean"),
+            network_arrived_vehicles=("network_arrived_vehicles", "mean"),
+            toy_queue_vehicle_arrivals=("toy_queue_vehicle_arrivals", "mean"),
+            vehicle_count=("vehicle_count", "mean"),
+            arrived_count=("arrived_count", "mean"),
         )
         if not seed_tradeoff.empty
         else pd.DataFrame()
     )
     write_csv_utf8_sig(summary, results_dir / "baseline_smart_summary.csv")
+    local_tradeoff_summary = build_local_tradeoff_summary(seed_tradeoff)
+    write_csv_utf8_sig(local_tradeoff_summary, results_dir / "local_tradeoff_summary.csv")
 
     quality = pd.DataFrame()
     if candidates_csv and candidates_csv.exists() and nets_dir and nets_dir.exists():
@@ -675,7 +856,7 @@ def generate_all_reports(
         seed_df = pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"])
     model_params = load_model_parameters(model_parameters_path)
     simulation_summary = build_simulation_summary(avg_df, seed_df)
-    delta_summary = build_baseline_vs_smart_summary(simulation_summary)
+    delta_summary = build_baseline_vs_smart_summary(simulation_summary, _load_run_metrics_exact(output_dir))
     write_csv_utf8_sig(simulation_summary, output_dir / "simulation_summary.csv")
     write_csv_utf8_sig(delta_summary, output_dir / "baseline_vs_smart_summary.csv")
     write_methodology_report(output_dir, model_params, simulation_summary, delta_summary)
