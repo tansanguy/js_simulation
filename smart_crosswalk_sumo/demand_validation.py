@@ -169,17 +169,19 @@ def _load_trip_records(trip_file: Path) -> tuple[list[dict[str, Any]], list[floa
     return rows, depart_times, vehicle_types
 
 
-def _load_pedestrian_route_records(route_file: Path) -> tuple[list[dict[str, Any]], list[float], dict[str, int], list[str]]:
+def _load_pedestrian_route_records(route_file: Path) -> tuple[list[dict[str, Any]], list[float], dict[str, int], list[str], dict[str, int]]:
     root = _parse_xml(route_file)
     if root is None:
-        return [], [], {}, []
+        return [], [], {}, [], {}
     rows: list[dict[str, Any]] = []
     depart_times: list[float] = []
     crosswalk_counts: Counter[str] = Counter()
     walk_edges: list[str] = []
+    type_counts: Counter[str] = Counter()
     for person in root.findall("person"):
         depart = float(person.attrib.get("depart", 0.0) or 0.0)
         person_id = str(person.attrib.get("id", ""))
+        person_type = str(person.attrib.get("type", "") or "")
         route_elem = person.find("walk")
         from_edge = str(route_elem.attrib.get("from", "") if route_elem is not None else "")
         to_edge = str(route_elem.attrib.get("to", "") if route_elem is not None else "")
@@ -187,6 +189,7 @@ def _load_pedestrian_route_records(route_file: Path) -> tuple[list[dict[str, Any
             {
                 "id": person_id,
                 "depart": depart,
+                "type": person_type,
                 "from": from_edge,
                 "to": to_edge,
             }
@@ -195,8 +198,10 @@ def _load_pedestrian_route_records(route_file: Path) -> tuple[list[dict[str, Any
         crosswalk_id = _extract_crosswalk_id(person_id)
         if crosswalk_id:
             crosswalk_counts[crosswalk_id] += 1
+        if person_type:
+            type_counts[person_type] += 1
         walk_edges.extend([from_edge, to_edge])
-    return rows, depart_times, dict(crosswalk_counts), walk_edges
+    return rows, depart_times, dict(crosswalk_counts), walk_edges, dict(type_counts)
 
 
 def _load_driveable_edge_count(net_file: Path) -> tuple[int, dict[str, Any], dict[str, Any]]:
@@ -425,8 +430,11 @@ def _summarize_pedestrian_validation_group(
 
     policy_expected_600s = int(pd.to_numeric(group.get("pedestrian_count_600s", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
     expected_count = int(pd.to_numeric(group.get("generated_pedestrian_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-    rows, depart_times, crosswalk_counts, walk_edges = _load_pedestrian_route_records(ped_route_file)
+    rows, depart_times, crosswalk_counts, walk_edges, type_counts = _load_pedestrian_route_records(ped_route_file)
     generated_count = int(len(rows))
+    normal_pedestrian_count = int(type_counts.get("adult", 0))
+    elderly_pedestrian_count = int(type_counts.get("elderly", 0))
+    slow_elderly_pedestrian_count = int(type_counts.get("slow_elderly", 0))
     count_diff = generated_count - expected_count
     count_diff_ratio = (count_diff / expected_count) if expected_count else 0.0
     trip_file = ped_route_file.with_name(ped_route_file.name.replace(".rou.xml", ".trips.xml"))
@@ -493,6 +501,11 @@ def _summarize_pedestrian_validation_group(
         "reason": _final_reason(reasons),
         "scenario_name": scenario_name,
         "seed": seed,
+        "pedestrian_demand_expected": expected_count,
+        "pedestrian_route_count": generated_count,
+        "normal_pedestrian_count": normal_pedestrian_count,
+        "elderly_pedestrian_count": elderly_pedestrian_count,
+        "slow_elderly_pedestrian_count": slow_elderly_pedestrian_count,
         "expected_count": expected_count,
         "generated_count": generated_count,
         "count_diff": count_diff,
@@ -643,6 +656,7 @@ def _summarize_vehicle_validation_group(
     grid_cells_used = ""
     grid_cells_total = ""
     grid_coverage_ratio = ""
+    major_road_flow_coverage = 0.0
     candidate_buffer_vehicle_share: float | str = ""
     dominant_crosswalk_id = ""
     dominant_crosswalk_share = 0.0
@@ -669,6 +683,8 @@ def _summarize_vehicle_validation_group(
         candidate_edges = _load_candidate_buffer_edges(vehicle_route_file, output_dir)
         if candidate_edges:
             candidate_buffer_vehicle_share = round(len(route_edge_set & candidate_edges) / float(max(len(route_edge_set), 1)), 6)
+    if expected_count > 0:
+        major_road_flow_coverage = round(float(road_group_allocation_sum) / float(expected_count), 6)
     crosswalk_counts: Counter[str] = Counter()
     if "crosswalk_id" in group.columns:
         for crosswalk_id, count in group["crosswalk_id"].astype(str).value_counts().items():
@@ -705,6 +721,12 @@ def _summarize_vehicle_validation_group(
         "reason": _final_reason(reasons),
         "scenario_name": scenario_name,
         "seed": seed,
+        "vehicle_demand_expected": expected_count,
+        "vehicle_route_count": generated_count,
+        "network_vehicle_edge_coverage_count": int(used_vehicle_edges),
+        "network_vehicle_edge_coverage_ratio": round(float(coverage_ratio), 6),
+        "vehicle_bbox_coverage": route_bbox_area_ratio,
+        "major_road_flow_coverage": major_road_flow_coverage,
         "expected_count": expected_count,
         "generated_count": generated_count,
         "count_diff": count_diff,

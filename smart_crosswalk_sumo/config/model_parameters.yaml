@@ -13,18 +13,32 @@ pedestrian_arrival_distribution:
   fallback: true
 
 normal_ped_speed_mps:
-  value: 1.2
+  value: 1.0
   unit: m/s
-  source_type: literature
-  source_note: "FHWA/HCM 계열 보행자 횡단속도 기준 범위에서 기본값 설정."
-  fallback: true
+  source_type: policy_fixed
+  source_note: "최종 보행자 정책 기본값."
+  fallback: false
 
 elderly_ped_speed_mps:
-  value: 0.9
+  value: 0.85
   unit: m/s
-  source_type: literature
-  source_note: "고령 보행자 민감도 반영을 위한 보수값."
-  fallback: true
+  source_type: policy_fixed
+  source_note: "최종 보행자 정책 고령자 속도."
+  fallback: false
+
+slow_elderly_ped_speed_mps:
+  value: 0.73
+  unit: m/s
+  source_type: policy_fixed
+  source_note: "최종 보행자 정책 느린 고령자 속도."
+  fallback: false
+
+slow_elderly_share_within_elderly:
+  value: 0.20
+  unit: ratio
+  source_type: policy_fixed
+  source_note: "고령자 내부에서 느린 고령자 비율."
+  fallback: false
 
 elderly_startup_delay_sec:
   value: 1.5

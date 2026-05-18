@@ -31,20 +31,36 @@ bus_stop_event_distribution:
   fallback: true
 
 normal_ped_speed_mps:
-  value: 1.2
+  value: 1.0
   unit: m/s
-  source_type: literature
-  source_note: "일반 보행자 횡단속도 기본값."
-  used_in: pedestrian crossing completion model
-  fallback: true
+  source_type: policy_fixed
+  source_note: "최종 보행자 정책 기본값."
+  used_in: pedestrian demand generation
+  fallback: false
 
 elderly_ped_speed_mps:
-  value: 0.9
+  value: 0.85
   unit: m/s
-  source_type: literature
-  source_note: "고령자 횡단속도 관련 선행연구 또는 보행신호 지침 기반. 정확한 출처는 보고서에서 보완."
-  used_in: pedestrian crossing completion model
-  fallback: true
+  source_type: policy_fixed
+  source_note: "최종 보행자 정책 고령자 속도."
+  used_in: pedestrian demand generation
+  fallback: false
+
+slow_elderly_ped_speed_mps:
+  value: 0.73
+  unit: m/s
+  source_type: policy_fixed
+  source_note: "최종 보행자 정책 느린 고령자 속도."
+  used_in: pedestrian demand generation
+  fallback: false
+
+slow_elderly_share_within_elderly:
+  value: 0.20
+  unit: ratio
+  source_type: policy_fixed
+  source_note: "고령자 내부에서 느린 고령자 비율."
+  used_in: pedestrian demand generation
+  fallback: false
 
 elderly_startup_delay_sec:
   value: 1.5

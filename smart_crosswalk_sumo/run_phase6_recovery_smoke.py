@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import shutil
 import socket
@@ -14,9 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from smart_crosswalk_sumo.network_utils import (
+    distance_to_edge_shape,
+    edge_center,
     discover_network_metadata_from_net,
     edge_function,
     lane_allows,
@@ -51,6 +55,18 @@ class Candidate:
     ped_repeat_spacing_sec: float
     source_file: str
     batch_network_file: str
+
+
+def _mean(values: list[float]) -> float:
+    arr = np.asarray(values, dtype=float)
+    return float(np.nanmean(arr)) if arr.size else float("nan")
+
+
+def _percentile(values: list[float], q: float) -> float:
+    arr = np.asarray(values, dtype=float)
+    if not arr.size:
+        return float("nan")
+    return float(np.nanpercentile(arr, q))
 
 
 def _parse_edges(value: Any) -> list[str]:
@@ -436,6 +452,52 @@ def _passenger_lane_count_for_route(net: Any, route_edges_text: str) -> int:
     return count
 
 
+def _vehicle_route_diversity_metrics(route_file: Path | None) -> dict[str, float | int]:
+    if route_file is None or not route_file.exists():
+        return {
+            "vehicle_route_count": 0,
+            "unique_vehicle_route_count": 0,
+            "duplicate_factor": 0.0,
+            "unique_vehicle_route_ratio": 0.0,
+            "used_vehicle_edges": 0,
+        }
+    try:
+        root = ET.parse(route_file).getroot()
+    except Exception:
+        return {
+            "vehicle_route_count": 0,
+            "unique_vehicle_route_count": 0,
+            "duplicate_factor": 0.0,
+            "unique_vehicle_route_ratio": 0.0,
+            "used_vehicle_edges": 0,
+        }
+    route_defs = {
+        str(route.attrib.get("id", "")): str(route.attrib.get("edges", "")).strip()
+        for route in root.findall("route")
+    }
+    routes: list[str] = []
+    used_edges: set[str] = set()
+    for vehicle in root.findall("vehicle"):
+        route_elem = vehicle.find("route")
+        if route_elem is not None:
+            edges = str(route_elem.attrib.get("edges", "")).strip()
+        else:
+            edges = route_defs.get(str(vehicle.attrib.get("route", "")), "")
+        if not edges:
+            continue
+        routes.append(edges)
+        used_edges.update(part for part in edges.split() if part)
+    route_count = len(routes)
+    unique_count = len(set(routes))
+    return {
+        "vehicle_route_count": int(route_count),
+        "unique_vehicle_route_count": int(unique_count),
+        "duplicate_factor": float(route_count / max(unique_count, 1)) if route_count else 0.0,
+        "unique_vehicle_route_ratio": float(unique_count / max(route_count, 1)) if route_count else 0.0,
+        "used_vehicle_edges": int(len(used_edges)),
+    }
+
+
 def _resolve_vehicle_route(
     net: Any,
     row: Any,
@@ -571,6 +633,328 @@ def _normalize_road_alias(road_id: str) -> set[str]:
 
 def _route_path_text(path_ids: list[str]) -> str:
     return "|".join(path_ids)
+
+
+def _edge_id_aliases(edge_id: str) -> set[str]:
+    return _normalize_road_alias(edge_id)
+
+
+def _build_local_scope(
+    net: Any,
+    crossing_edge_id: str,
+    radius_m: float,
+    conflict_radius_m: float = 35.0,
+) -> dict[str, Any]:
+    crossing_edge = _safe_net_edge(net, crossing_edge_id)
+    if crossing_edge is None:
+        return {
+            "crossing_xy": (0.0, 0.0),
+            "local_lane_ids": set(),
+            "local_edge_ids": set(),
+            "local_edge_aliases": set(),
+            "conflict_edge_ids": set(),
+            "conflict_edge_aliases": set(),
+            "bbox": None,
+        }
+    crossing_xy = edge_center(crossing_edge)
+    local_lane_ids: set[str] = set()
+    local_edge_ids: set[str] = set()
+    conflict_edge_ids: set[str] = set()
+    for edge in net.getEdges():
+        if str(edge_function(edge)).lower() != "normal":
+            continue
+        if not _passenger_depart_allowed(edge):
+            continue
+        edge_id = str(edge.getID())
+        distance_m = distance_to_edge_shape(edge, crossing_xy)
+        if distance_m <= float(radius_m):
+            local_edge_ids.add(edge_id)
+            for lane in edge.getLanes():
+                if lane_allows(lane, "passenger"):
+                    local_lane_ids.add(str(lane.getID()))
+        if distance_m <= float(conflict_radius_m):
+            conflict_edge_ids.add(edge_id)
+    bbox = (
+        float(crossing_xy[0] - radius_m),
+        float(crossing_xy[1] - radius_m),
+        float(crossing_xy[0] + radius_m),
+        float(crossing_xy[1] + radius_m),
+    )
+    local_edge_aliases: set[str] = set()
+    conflict_edge_aliases: set[str] = set()
+    for edge_id in local_edge_ids:
+        local_edge_aliases.update(_edge_id_aliases(edge_id))
+    for edge_id in conflict_edge_ids:
+        conflict_edge_aliases.update(_edge_id_aliases(edge_id))
+    return {
+        "crossing_xy": crossing_xy,
+        "local_lane_ids": local_lane_ids,
+        "local_edge_ids": local_edge_ids,
+        "local_edge_aliases": local_edge_aliases,
+        "conflict_edge_ids": conflict_edge_ids,
+        "conflict_edge_aliases": conflict_edge_aliases,
+        "bbox": bbox,
+    }
+
+
+def _network_passenger_edge_ids(net: Any) -> set[str]:
+    edge_ids: set[str] = set()
+    for edge in net.getEdges():
+        if str(edge_function(edge)).lower() != "normal":
+            continue
+        if _passenger_depart_allowed(edge):
+            edge_ids.add(str(edge.getID()))
+    return edge_ids
+
+
+def _write_tripinfo_ready_sumocfg(
+    cfg_path: Path,
+    net_file: Path,
+    ped_file: Path,
+    veh_file: Path | None,
+    duration: int,
+    step_length: float,
+    out_dir: Path,
+    scenario: str,
+) -> Path:
+    route_files = [str(ped_file)]
+    if veh_file is not None:
+        route_files.append(str(veh_file))
+    tripinfo_path = out_dir / f"phase6_smoke_{scenario}_tripinfo.xml"
+    statistics_path = out_dir / f"phase6_smoke_{scenario}_statistics.xml"
+    collision_path = out_dir / f"phase6_smoke_{scenario}_collisions.xml"
+    ssm_path = out_dir / f"phase6_smoke_{scenario}_ssm.xml"
+    content = f'''<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <input>
+    <net-file value="{net_file}"/>
+    <route-files value="{','.join(route_files)}"/>
+  </input>
+  <time>
+    <begin value="0"/>
+    <end value="{duration}"/>
+    <step-length value="{step_length}"/>
+  </time>
+  <output>
+    <tripinfo-output value="{tripinfo_path}"/>
+    <statistic-output value="{statistics_path}"/>
+    <collision-output value="{collision_path}"/>
+  </output>
+  <processing>
+    <collision.action value="warn"/>
+    <intermodal-collision.action value="warn"/>
+    <time-to-teleport value="-1"/>
+  </processing>
+  <report>
+    <no-step-log value="true"/>
+    <no-warnings value="false"/>
+  </report>
+  <ssm_device>
+    <device.ssm.probability value="1"/>
+    <device.ssm.deterministic value="true"/>
+    <device.ssm.measures value="PET"/>
+    <device.ssm.extratime value="5"/>
+    <device.ssm.range value="50"/>
+    <device.ssm.write-na value="true"/>
+    <device.ssm.file value="{ssm_path}"/>
+  </ssm_device>
+</configuration>
+'''
+    cfg_path.write_text(content, encoding="utf-8")
+    return cfg_path
+
+
+def _parse_tripinfo_metrics(path: Path) -> dict[str, float]:
+    metrics = {
+        "network_mean_travel_time": float("nan"),
+        "network_mean_time_loss": float("nan"),
+        "network_avg_delay_sec": float("nan"),
+    }
+    if not path.exists():
+        return metrics
+    durations: list[float] = []
+    time_losses: list[float] = []
+    waiting_times: list[float] = []
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return metrics
+    for tripinfo in root.findall(".//tripinfo"):
+        try:
+            durations.append(float(tripinfo.attrib.get("duration", "nan")))
+        except Exception:
+            pass
+        try:
+            time_losses.append(float(tripinfo.attrib.get("timeLoss", "nan")))
+        except Exception:
+            pass
+        try:
+            waiting_times.append(float(tripinfo.attrib.get("waitingTime", "nan")))
+        except Exception:
+            pass
+    metrics["network_mean_travel_time"] = _mean(durations)
+    metrics["network_mean_time_loss"] = _mean(time_losses)
+    metrics["network_avg_delay_sec"] = _mean(waiting_times)
+    return metrics
+
+
+def _parse_collision_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return 0
+    return int(len(root.findall(".//collision")))
+
+
+def _extract_ssm_attr(attrs: dict[str, str], *names: str) -> str:
+    lowered = {str(key).lower(): str(value) for key, value in attrs.items()}
+    for name in names:
+        value = lowered.get(name.lower())
+        if value is not None:
+            return value
+    return ""
+
+
+def _parse_ssm_pet_rows(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return rows
+    for elem in root.iter():
+        attrs = {str(k): str(v) for k, v in elem.attrib.items()}
+        if not attrs:
+            continue
+        pet_text = _extract_ssm_attr(attrs, "PET", "pet", "PPET", "ppet")
+        if not pet_text or pet_text in {"NA", "nan", "None"}:
+            continue
+        try:
+            pet_value = float(pet_text)
+        except Exception:
+            continue
+        ped_id = _extract_ssm_attr(
+            attrs,
+            "pedestrian",
+            "pedestrian_id",
+            "person",
+            "person_id",
+            "foe",
+            "foeID",
+            "foe_id",
+        )
+        vehicle_id = _extract_ssm_attr(
+            attrs,
+            "vehicle",
+            "vehicle_id",
+            "ego",
+            "egoID",
+            "ego_id",
+        )
+        rows.append(
+            {
+                "pet": float(pet_value),
+                "pedestrian_id": _normalize_id_text(ped_id),
+                "vehicle_id": _normalize_id_text(vehicle_id),
+                "edge_id": _normalize_id_text(_extract_ssm_attr(attrs, "edge", "edge_id", "lane", "lane_id")),
+                "time_s": _extract_ssm_attr(attrs, "time", "time_s", "begin", "start"),
+            }
+        )
+    return rows
+
+
+def _interval_gap(a_start: float, a_end: float, b_start: float, b_end: float) -> float | None:
+    if a_end < b_start:
+        return float(b_start - a_end)
+    if b_end < a_start:
+        return float(a_start - b_end)
+    if a_start <= b_end and b_start <= a_end:
+        return 0.0
+    return None
+
+
+def _summarize_pet_values(
+    pet_values: list[float],
+    pedestrian_crossing_count: int,
+    conflict_edge_count: int,
+    *,
+    pet_source: str,
+    unavailable_reason: str = "",
+) -> dict[str, Any]:
+    values = [float(v) for v in pet_values if pd.notna(v)]
+    very_risky = int(sum(1 for value in values if value <= 1.5))
+    risky = int(sum(1 for value in values if 1.5 < value <= 3.0))
+    safe = int(sum(1 for value in values if value > 3.0))
+    low_pet = int(very_risky + risky)
+    pet_event_count = int(len(values))
+    pet_coverage_ratio = round(pet_event_count / pedestrian_crossing_count, 3) if pedestrian_crossing_count > 0 else 0.0
+    full_coverage = pedestrian_crossing_count > 0 and pet_event_count == pedestrian_crossing_count
+    if pedestrian_crossing_count <= 0 and not unavailable_reason:
+        unavailable_reason = "no_pedestrian_crossings_observed"
+    elif pet_event_count <= 0 and not unavailable_reason:
+        unavailable_reason = f"no_vehicle_person_pet_from_{pet_source}"
+    elif not full_coverage and not unavailable_reason:
+        unavailable_reason = f"partial_pet_coverage_from_{pet_source}"
+    return {
+        "pet_source": pet_source,
+        "pet_event_count": pet_event_count,
+        "very_risky_crossing_count": very_risky,
+        "risky_crossing_count": risky,
+        "safe_crossing_count": safe,
+        "low_pet_event_count": low_pet,
+        "low_pet_per_100_crossings": (
+            float(low_pet * 100.0 / pedestrian_crossing_count) if pedestrian_crossing_count > 0 else float("nan")
+        ),
+        "low_pet_per_100_conflict_candidates": (
+            float(low_pet * 100.0 / max(conflict_edge_count, 1))
+        ),
+        "pet_min": min(values) if values else float("nan"),
+        "pet_p10": _percentile(values, 10.0),
+        "pet_mean": _mean(values),
+        "pet_available": bool(full_coverage),
+        "pet_coverage_ratio": pet_coverage_ratio,
+        "pet_unavailable_reason": "" if full_coverage else unavailable_reason,
+        "accident_risk_estimate": (
+            float((very_risky * 1.0 + risky * 0.5) / pedestrian_crossing_count)
+            if pedestrian_crossing_count > 0
+            else float("nan")
+        ),
+    }
+
+
+def _summarize_local_watcher_pet(
+    ped_intervals: list[dict[str, Any]],
+    veh_intervals: list[dict[str, Any]],
+    pedestrian_crossing_count: int,
+    conflict_edge_count: int,
+) -> dict[str, Any]:
+    pet_values: list[float] = []
+    for ped in ped_intervals:
+        ped_start = float(ped.get("enter_time", 0.0))
+        ped_end = float(ped.get("exit_time", ped_start))
+        min_pet: float | None = None
+        for veh in veh_intervals:
+            gap = _interval_gap(
+                ped_start,
+                ped_end,
+                float(veh.get("enter_time", 0.0)),
+                float(veh.get("exit_time", 0.0)),
+            )
+            if gap is None:
+                continue
+            if min_pet is None or gap < min_pet:
+                min_pet = float(gap)
+        if min_pet is not None:
+            pet_values.append(float(min_pet))
+    return _summarize_pet_values(
+        pet_values,
+        pedestrian_crossing_count,
+        conflict_edge_count,
+        pet_source="local_watcher",
+    )
 
 
 def _route_pair_from_crossing_edge(net: Any, crossing_edge_id: str) -> list[tuple[str, str, str]]:
@@ -1074,12 +1458,19 @@ def _write_routes(
     seed: int,
     duration: int,
     include_vehicles: bool,
-) -> tuple[Path, Path | None, Path, list[dict[str, Any]]]:
+    global_vehicle_file: "Path | None" = None,
+) -> "tuple[Path, Path | None, Path, list[dict[str, Any]]]":
+    import shutil as _shutil
     rng = random.Random(seed)
     ped_path = out_dir / "demand_pedestrian.rou.xml"
     ped_lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">', '    <vType id="pedestrian_type" vClass="pedestrian"/>']
     veh_path = out_dir / "demand_vehicle.rou.xml" if include_vehicles else None
-    veh_lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">', '    <vType id="car" vClass="passenger" maxSpeed="15.0" accel="2.6" decel="4.5"/>'] if include_vehicles else []
+    use_global_veh = include_vehicles and global_vehicle_file is not None and Path(global_vehicle_file).exists()
+    veh_lines = (
+        ['<?xml version="1.0" encoding="UTF-8"?>', '<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">', '    <vType id="car" vClass="passenger" maxSpeed="15.0" accel="2.6" decel="4.5"/>']
+        if include_vehicles and not use_global_veh
+        else []
+    )
     ped_records: list[dict[str, Any]] = []
 
     for idx, row in enumerate(candidate_df.itertuples(index=False), start=1):
@@ -1111,7 +1502,7 @@ def _write_routes(
                     "contains_crossing_edge": bool(getattr(row, "contains_crossing_edge", False)),
                 }
             )
-        if include_vehicles:
+        if include_vehicles and not use_global_veh:
             vehicle_route_edges = str(getattr(row, "vehicle_route_edges", "") or "").strip()
             vehicle_action = str(getattr(row, "vehicle_generation_action", "") or "")
             if vehicle_action != "generate_vehicle" or not vehicle_route_edges:
@@ -1136,8 +1527,11 @@ def _write_routes(
     ped_lines.append("</routes>")
     ped_path.write_text("\n".join(ped_lines) + "\n", encoding="utf-8")
     if include_vehicles and veh_path is not None:
-        veh_lines.append("</routes>")
-        veh_path.write_text("\n".join(veh_lines) + "\n", encoding="utf-8")
+        if use_global_veh:
+            _shutil.copy2(global_vehicle_file, veh_path)
+        else:
+            veh_lines.append("</routes>")
+            veh_path.write_text("\n".join(veh_lines) + "\n", encoding="utf-8")
     ped_summary_path = out_dir / "pedestrian_route_order_debug.csv"
     ped_summary_df = pd.DataFrame(
         [
@@ -1157,33 +1551,26 @@ def _write_routes(
     return ped_path, veh_path, ped_summary_path, ped_records
 
 
-def _write_sumocfg(cfg_path: Path, net_file: Path, ped_file: Path, veh_file: Path | None, duration: int, step_length: float) -> Path:
-    route_files = [str(ped_file)]
-    if veh_file is not None:
-        route_files.append(str(veh_file))
-    content = f'''<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-  <input>
-    <net-file value="{net_file}"/>
-    <route-files value="{','.join(route_files)}"/>
-  </input>
-  <time>
-    <begin value="0"/>
-    <end value="{duration}"/>
-    <step-length value="{step_length}"/>
-  </time>
-  <processing>
-    <collision.action value="warn"/>
-    <time-to-teleport value="-1"/>
-  </processing>
-  <report>
-    <no-step-log value="true"/>
-    <no-warnings value="false"/>
-  </report>
-</configuration>
-'''
-    cfg_path.write_text(content, encoding="utf-8")
-    return cfg_path
+def _write_sumocfg(
+    cfg_path: Path,
+    net_file: Path,
+    ped_file: Path,
+    veh_file: Path | None,
+    duration: int,
+    step_length: float,
+    out_dir: Path,
+    scenario: str,
+) -> Path:
+    return _write_tripinfo_ready_sumocfg(
+        cfg_path,
+        net_file,
+        ped_file,
+        veh_file,
+        duration,
+        step_length,
+        out_dir,
+        scenario,
+    )
 
 
 def _sumo_binary() -> str:
@@ -1223,6 +1610,7 @@ def _run_scenario(
     out_dir: Path,
     include_vehicles: bool,
     extension_sec: float,
+    global_vehicle_file: "Path | None" = None,
 ) -> pd.DataFrame:
     if traci is None:
         raise RuntimeError("traci not importable")
@@ -1232,14 +1620,39 @@ def _run_scenario(
     run_start_perf = time.perf_counter()
 
     candidate_df = _prepare_vehicle_route_plan(candidate_df, net_file, seed, out_dir, include_vehicles)
-    ped_file, veh_file, ped_summary_path, ped_records = _write_routes(candidate_df, out_dir, seed, duration, include_vehicles)
-    cfg_path = _write_sumocfg(out_dir / f"phase6_smoke_{scenario}.sumocfg", net_file, ped_file, veh_file, duration, step_length)
+    ped_file, veh_file, ped_summary_path, ped_records = _write_routes(
+        candidate_df, out_dir, seed, duration, include_vehicles,
+        global_vehicle_file=global_vehicle_file,
+    )
+    cfg_path = _write_sumocfg(
+        out_dir / f"phase6_smoke_{scenario}.sumocfg",
+        net_file,
+        ped_file,
+        veh_file,
+        duration,
+        step_length,
+        out_dir,
+        scenario,
+    )
 
     cmd = [_sumo_binary(), "-c", str(cfg_path), "--no-step-log", "--collision.action", "warn", "--time-to-teleport", "-1"]
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
+    net = read_net(net_file)
+    all_network_passenger_edges = _network_passenger_edge_ids(net)
+    network_bbox = None
+    try:
+        bbox_xy = net.getBBoxXY()
+        network_bbox = (
+            float(bbox_xy[0][0]),
+            float(bbox_xy[0][1]),
+            float(bbox_xy[1][0]),
+            float(bbox_xy[1][1]),
+        )
+    except Exception:
+        network_bbox = None
     traci.start(cmd, port=port)
 
     candidate_meta = _person_routes_crossing(candidate_df)
@@ -1256,23 +1669,24 @@ def _run_scenario(
     generated_vehicle_count = 0
     network_arrived_vehicle_ids: set[str] = set()
     network_departed_vehicle_ids: set[str] = set()
+    network_seen_vehicle_edges: set[str] = set()
+    network_teleport_count = 0
     surrounding_lane_count = 0
     generated_vehicle_route_file = str(veh_file) if veh_file is not None and veh_file.exists() else ""
-    if include_vehicles:
-        generated_vehicle_count = int(
-            (candidate_df.get("vehicle_generation_action", pd.Series(dtype=str)) == "generate_vehicle").sum()
-        )
-        try:
-            net = read_net(net_file)
-            surrounding_lane_count = int(
-                sum(
-                    _passenger_lane_count_for_route(net, str(getattr(row, "vehicle_route_edges", "") or ""))
-                    for row in candidate_df.itertuples(index=False)
-                    if str(getattr(row, "vehicle_generation_action", "") or "") == "generate_vehicle"
-                )
+    generated_vehicle_count = int(
+        (candidate_df.get("vehicle_generation_action", pd.Series(dtype=str)) == "generate_vehicle").sum()
+    )
+    vehicle_route_diversity = _vehicle_route_diversity_metrics(veh_file)
+    try:
+        surrounding_lane_count = int(
+            sum(
+                _passenger_lane_count_for_route(net, str(getattr(row, "vehicle_route_edges", "") or ""))
+                for row in candidate_df.itertuples(index=False)
+                if str(getattr(row, "vehicle_generation_action", "") or "") == "generate_vehicle"
             )
-        except Exception:
-            surrounding_lane_count = 0
+        )
+    except Exception:
+        surrounding_lane_count = 0
 
     # per-candidate tracking
     departure_times: dict[str, float] = {}
@@ -1285,10 +1699,32 @@ def _run_scenario(
         for row in candidate_df.itertuples(index=False)
     }
     crossing_roads: dict[str, set[str]] = {}
+    candidate_watch: dict[str, dict[str, Any]] = {}
     for row in candidate_df.itertuples(index=False):
         cid = str(row.crosswalk_id)
         crossing_roads[cid] = _candidate_crossing_roads(str(row.nearest_junction_id), str(row.crossing_edge_id))
+        scope = _build_local_scope(net, str(row.crossing_edge_id), 500.0)
+        candidate_watch[cid] = {
+            "local_lane_ids": set(scope["local_lane_ids"]),
+            "local_edge_ids": set(scope["local_edge_ids"]),
+            "local_edge_aliases": set(scope["local_edge_aliases"]),
+            "conflict_edge_ids": set(scope["conflict_edge_ids"]),
+            "conflict_edge_aliases": set(scope["conflict_edge_aliases"]),
+            "bbox": scope["bbox"],
+            "local_seen_vehicle_ids": set(),
+            "local_speed_samples": [],
+            "local_time_loss_samples": [],
+            "local_delay_samples": [],
+            "local_queue_samples": [],
+            "local_stop_count": 0,
+            "prev_vehicle_stop_state": {},
+            "active_ped_entries": {},
+            "ped_intervals": [],
+            "active_vehicle_entries": {},
+            "vehicle_intervals": [],
+        }
     veh_delays: dict[str, list[float]] = {cid: [] for cid in candidate_df["crosswalk_id"].astype(str).tolist()}
+    next_metric_sample_t = 0.0
 
     step = 0
     t = 0.0
@@ -1299,6 +1735,11 @@ def _run_scenario(
             ped_ids = list(traci.person.getIDList())
             veh_ids = list(traci.vehicle.getIDList())
             step_crossing_hit: dict[str, bool] = {cid: False for cid in candidate_meta}
+            step_crossing_person_ids: dict[str, set[str]] = {cid: set() for cid in candidate_meta}
+            current_conflict_vehicle_ids: dict[str, set[str]] = {cid: set() for cid in candidate_meta}
+            metric_sample_due = t + 1e-9 >= next_metric_sample_t
+            if metric_sample_due:
+                next_metric_sample_t += 10.0
 
             for pid in traci.simulation.getDepartedPersonIDList():
                 departure_times[str(pid)] = t
@@ -1306,6 +1747,69 @@ def _run_scenario(
                 network_departed_vehicle_ids.add(str(vid))
             for vid in traci.simulation.getArrivedIDList():
                 network_arrived_vehicle_ids.add(str(vid))
+            try:
+                network_teleport_count += len(set(traci.simulation.getStartingTeleportIDList()))
+            except Exception:
+                pass
+
+            lane_halting_by_id: dict[str, int] = {}
+            if metric_sample_due:
+                for cid, watch in candidate_watch.items():
+                    local_queue = 0
+                    for lane_id in watch["local_lane_ids"]:
+                        try:
+                            halted = int(traci.lane.getLastStepHaltingNumber(lane_id))
+                        except Exception:
+                            halted = 0
+                        lane_halting_by_id[lane_id] = halted
+                        local_queue += halted
+                    watch["local_queue_samples"].append(int(local_queue))
+
+            vehicle_scope_hits: dict[str, list[str]] = {cid: [] for cid in candidate_meta}
+            for vid in veh_ids:
+                try:
+                    road_id = str(traci.vehicle.getRoadID(vid))
+                except Exception:
+                    continue
+                lane_id = ""
+                speed = float("nan")
+                try:
+                    lane_id = str(traci.vehicle.getLaneID(vid))
+                except Exception:
+                    lane_id = ""
+                try:
+                    speed = float(traci.vehicle.getSpeed(vid))
+                except Exception:
+                    speed = float("nan")
+                road_aliases = _normalize_road_alias(road_id) | _normalize_road_alias(lane_id)
+                if road_id in all_network_passenger_edges:
+                    network_seen_vehicle_edges.add(road_id)
+                for cid, watch in candidate_watch.items():
+                    in_local_scope = lane_id in watch["local_lane_ids"] or bool(road_aliases & watch["local_edge_aliases"])
+                    if in_local_scope:
+                        vehicle_scope_hits[cid].append(str(vid))
+                        watch["local_seen_vehicle_ids"].add(str(vid))
+                        if metric_sample_due:
+                            if pd.notna(speed):
+                                watch["local_speed_samples"].append(float(speed))
+                            try:
+                                watch["local_time_loss_samples"].append(float(traci.vehicle.getTimeLoss(vid)))
+                            except Exception:
+                                pass
+                            try:
+                                watch["local_delay_samples"].append(float(traci.vehicle.getAccumulatedWaitingTime(vid)))
+                            except Exception:
+                                pass
+                            stop_now = bool(pd.notna(speed) and float(speed) <= 0.1)
+                            prev_stop = bool(watch["prev_vehicle_stop_state"].get(str(vid), False))
+                            if stop_now and not prev_stop:
+                                watch["local_stop_count"] += 1
+                            watch["prev_vehicle_stop_state"][str(vid)] = stop_now
+                    in_conflict_zone = bool(road_aliases & watch["conflict_edge_aliases"])
+                    if in_conflict_zone:
+                        current_conflict_vehicle_ids[cid].add(str(vid))
+                        if str(vid) not in watch["active_vehicle_entries"]:
+                            watch["active_vehicle_entries"][str(vid)] = float(t)
 
             for cid, meta in candidate_meta.items():
                 tls_id = meta["tls_id"]
@@ -1429,7 +1933,7 @@ def _run_scenario(
                     }
                 )
 
-                if extension_allowed:
+                if extension_allowed and extension_sec > 0:
                     try:
                         traci.trafficlight.setPhaseDuration(tls_id, remaining + extension_sec)
                         extended_this_cycle.add(key)
@@ -1491,7 +1995,11 @@ def _run_scenario(
                     )
                     if road_match:
                         step_crossing_hit[cid] = True
+                        step_crossing_person_ids[cid].add(str(pid))
                         ped_people_seen[cid].add(str(pid))
+                        watch = candidate_watch[cid]
+                        if str(pid) not in watch["active_ped_entries"]:
+                            watch["active_ped_entries"][str(pid)] = float(t)
                         if pid not in wait_recorded:
                             depart_t = departure_times.get(str(pid), t)
                             wait_recorded.add(pid)
@@ -1526,10 +2034,35 @@ def _run_scenario(
             for cid, hit in step_crossing_hit.items():
                 if hit:
                     ped_presence_steps[cid] += 1
+                watch = candidate_watch[cid]
+                seen_peds = step_crossing_person_ids.get(cid, set())
+                for ped_id in list(watch["active_ped_entries"].keys()):
+                    if ped_id in seen_peds:
+                        continue
+                    enter_time = float(watch["active_ped_entries"].pop(ped_id))
+                    watch["ped_intervals"].append(
+                        {
+                            "pedestrian_id": ped_id,
+                            "enter_time": enter_time,
+                            "exit_time": float(t),
+                        }
+                    )
+                seen_vehicles = current_conflict_vehicle_ids.get(cid, set())
+                for veh_id in list(watch["active_vehicle_entries"].keys()):
+                    if veh_id in seen_vehicles:
+                        continue
+                    enter_time = float(watch["active_vehicle_entries"].pop(veh_id))
+                    watch["vehicle_intervals"].append(
+                        {
+                            "vehicle_id": veh_id,
+                            "enter_time": enter_time,
+                            "exit_time": float(t),
+                        }
+                    )
 
             if step % 20 == 0:
                 for cid in candidate_meta:
-                    for vid in veh_ids:
+                    for vid in vehicle_scope_hits.get(cid, veh_ids):
                         try:
                             veh_delays[cid].append(float(traci.vehicle.getAccumulatedWaitingTime(vid)))
                         except Exception:
@@ -1543,6 +2076,29 @@ def _run_scenario(
             pass
     run_end_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
     elapsed_sec = round(time.perf_counter() - run_start_perf, 3)
+    tripinfo_metrics = _parse_tripinfo_metrics(out_dir / f"phase6_smoke_{scenario}_tripinfo.xml")
+    network_collision_count = _parse_collision_count(out_dir / f"phase6_smoke_{scenario}_collisions.xml")
+    ssm_pet_rows = _parse_ssm_pet_rows(out_dir / f"phase6_smoke_{scenario}_ssm.xml")
+
+    for cid, watch in candidate_watch.items():
+        for ped_id, enter_time in list(watch["active_ped_entries"].items()):
+            watch["ped_intervals"].append(
+                {
+                    "pedestrian_id": ped_id,
+                    "enter_time": float(enter_time),
+                    "exit_time": float(t),
+                }
+            )
+        for veh_id, enter_time in list(watch["active_vehicle_entries"].items()):
+            watch["vehicle_intervals"].append(
+                {
+                    "vehicle_id": veh_id,
+                    "enter_time": float(enter_time),
+                    "exit_time": float(t),
+                }
+            )
+        watch["active_ped_entries"].clear()
+        watch["active_vehicle_entries"].clear()
 
     for rec in ped_records:
         if rec["person_id"] not in route_diag_by_person:
@@ -1572,10 +2128,47 @@ def _run_scenario(
         "reason",
     ]).to_csv(out_dir / "pedestrian_route_diagnostics.csv", index=False)
 
+    ssm_pet_by_candidate: dict[str, list[float]] = {cid: [] for cid in candidate_meta}
+    for rec in ssm_pet_rows:
+        ped_id = str(rec.get("pedestrian_id", "") or "")
+        if not ped_id or ped_id not in route_diag_by_person:
+            continue
+        cid = str(route_diag_by_person[ped_id]["crosswalk_id"])
+        ssm_pet_by_candidate.setdefault(cid, []).append(float(rec["pet"]))
+
     out_rows: list[dict[str, Any]] = []
     for cid, meta in candidate_meta.items():
         waits = [r["ped_wait_time"] for r in rows if r["crosswalk_id"] == cid and r["ped_wait_time"] is not None]
         delays = veh_delays.get(cid, [])
+        watch = candidate_watch[cid]
+        pedestrian_crossing_count = int(len(ped_people_seen.get(cid, set())))
+        ssm_values = [float(value) for value in ssm_pet_by_candidate.get(cid, [])]
+        if pedestrian_crossing_count > 0 and len(ssm_values) == pedestrian_crossing_count:
+            pet_metrics = _summarize_pet_values(
+                ssm_values,
+                pedestrian_crossing_count,
+                len(watch["conflict_edge_ids"]),
+                pet_source="ssm_pet",
+            )
+        else:
+            pet_metrics = _summarize_local_watcher_pet(
+                watch["ped_intervals"],
+                watch["vehicle_intervals"],
+                pedestrian_crossing_count,
+                len(watch["conflict_edge_ids"]),
+            )
+            if ssm_values and not pet_metrics["pet_available"]:
+                pet_metrics["pet_unavailable_reason"] = "ssm_pet_partial_or_unmapped__fallback_local_watcher"
+        local_bbox = watch.get("bbox")
+        if local_bbox is not None and network_bbox is not None:
+            local_bbox_coverage = float(
+                max(0.0, min(local_bbox[2], network_bbox[2]) - max(local_bbox[0], network_bbox[0]))
+                * max(0.0, min(local_bbox[3], network_bbox[3]) - max(local_bbox[1], network_bbox[1]))
+            )
+            denom = float(max((local_bbox[2] - local_bbox[0]) * (local_bbox[3] - local_bbox[1]), 1e-9))
+            vehicle_bbox_coverage = float(local_bbox_coverage / denom)
+        else:
+            vehicle_bbox_coverage = float("nan")
         out_rows.append(
             {
                 "run_name": run_name,
@@ -1598,21 +2191,44 @@ def _run_scenario(
                 "completed": True,
                 "step_count": step,
                 "ped_crossing_presence_steps": ped_presence_steps.get(cid, 0),
-                "ped_crossing_person_count": len(ped_people_seen.get(cid, set())),
+                "ped_crossing_person_count": pedestrian_crossing_count,
+                "pedestrian_crossing_count": pedestrian_crossing_count,
                 "expected_ped_repeat_count": expected_repeat_counts.get(cid, 1),
-                "ped_repeat_count_match": len(ped_people_seen.get(cid, set())) == expected_repeat_counts.get(cid, 1),
+                "ped_repeat_count_match": pedestrian_crossing_count == expected_repeat_counts.get(cid, 1),
                 "ped_wait_time_mean": round(sum(waits) / len(waits), 2) if waits else None,
                 "ped_wait_time_max": round(max(waits), 2) if waits else None,
                 "veh_delay_mean": round(sum(delays) / len(delays), 2) if delays else None,
                 "veh_delay_max": round(max(delays), 2) if delays else None,
                 "extension_count": len([e for e in extension_events if e.get("crosswalk_id") == cid]),
                 "generated_vehicle_count": int(generated_vehicle_count),
+                "vehicle_route_count": int(vehicle_route_diversity["vehicle_route_count"]),
+                "unique_vehicle_route_count": int(vehicle_route_diversity["unique_vehicle_route_count"]),
+                "duplicate_factor": float(vehicle_route_diversity["duplicate_factor"]),
+                "unique_vehicle_route_ratio": float(vehicle_route_diversity["unique_vehicle_route_ratio"]),
+                "used_vehicle_edges": int(vehicle_route_diversity["used_vehicle_edges"]),
                 "network_arrived_vehicles": int(len(network_arrived_vehicle_ids)),
+                "network_departed_vehicles": int(len(network_departed_vehicle_ids)),
+                "network_mean_travel_time": tripinfo_metrics["network_mean_travel_time"],
+                "network_mean_time_loss": tripinfo_metrics["network_mean_time_loss"],
+                "network_avg_delay_sec": tripinfo_metrics["network_avg_delay_sec"],
+                "network_vehicle_edge_coverage_ratio": (
+                    float(len(network_seen_vehicle_edges) / max(len(all_network_passenger_edges), 1))
+                ),
+                "network_teleport_count": int(network_teleport_count),
+                "network_collision_count": int(network_collision_count),
+                "local_500m_vehicle_count": int(len(watch["local_seen_vehicle_ids"])),
+                "local_500m_mean_speed": _mean(watch["local_speed_samples"]),
+                "local_500m_mean_time_loss": _mean(watch["local_time_loss_samples"]),
+                "local_500m_avg_delay_sec": _mean(watch["local_delay_samples"]),
+                "local_500m_queue_proxy": _mean(watch["local_queue_samples"]),
+                "local_500m_stop_count": int(watch["local_stop_count"]),
                 "total_vehicle_arrivals": int(len(network_departed_vehicle_ids)),
                 "generated_vehicle_route_file": generated_vehicle_route_file,
                 "surrounding_lane_count": int(surrounding_lane_count),
+                "vehicle_bbox_coverage": vehicle_bbox_coverage,
                 "batch_network_file": meta["batch_network_file"],
                 "route_reason": meta["route_reason"],
+                **pet_metrics,
             }
         )
 

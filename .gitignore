@@ -5,6 +5,8 @@ __pycache__/
 
 data/
 logs/
+outputs/
+.venv/
 .cache/
 .agents/
 .codex-plugins/
@@ -71,3 +73,7 @@ result/active/real_30seed_runs_sampled10/runs/**
 result/active/real_30seed_runs_sampled10/logs/**
 result/active/real_30seed_runs_sampled10/**/*.log
 result/active/real_30seed_runs_sampled10/**/*debug*.csv
+
+# Local reusable SUMO net inputs must be provided explicitly, not newly staged by default.
+result/active/nets/*.net.xml
+result/active/nets/**/*.net.xml

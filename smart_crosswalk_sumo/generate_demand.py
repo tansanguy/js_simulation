@@ -22,7 +22,9 @@ try:
         build_demand_payload,
         build_fixed_departure_times,
         build_fixed_type_assignments,
+        resolve_elderly_ratio_for_admin_dong,
         resolve_demand_scenario_name,
+        resolve_pedestrian_type_counts,
     )
     from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from .model_config import get_parameter_value, load_model_parameters
@@ -51,7 +53,9 @@ except ImportError:
         build_demand_payload,
         build_fixed_departure_times,
         build_fixed_type_assignments,
+        resolve_elderly_ratio_for_admin_dong,
         resolve_demand_scenario_name,
+        resolve_pedestrian_type_counts,
     )
     from csv_outputs import ensure_csv_output_layout, write_csv_bundle
     from vehicle_demand_policy import (
@@ -122,6 +126,20 @@ def _safe_float_value(value: Any, default: float = float("nan")) -> float:
         return default
 
 
+def _policy_demand_audit_rows(scenario_name: str) -> list[dict[str, Any]]:
+    if str(scenario_name) != DEFAULT_DEMAND_SCENARIO_NAME:
+        return []
+    summary = resolve_vehicle_policy_summary(scenario_name)
+    return [
+        {
+            "edge_id": "full_network",
+            "demand_source": "policy_fixed_full_network_background",
+            "volume": float(summary["total_vehicle_flow_vph"]),
+            "confidence_level": "policy_fixed",
+        }
+    ]
+
+
 def _resolve_reuse_sources(reuse_demand_dir: str | Path | None) -> tuple[Path | None, Path | None]:
     if not reuse_demand_dir:
         return None, None
@@ -154,6 +172,10 @@ def _demand_reuse_reason(
     walking_speed_profile: str,
     pedestrian_scale_source: str,
     elderly_ratio: float,
+    slow_elderly_share_within_elderly: float,
+    normal_ped_speed_mps: float,
+    elderly_ped_speed_mps: float,
+    slow_elderly_ped_speed_mps: float,
     veh_per_hour: float,
 ) -> str | None:
     if not source_row:
@@ -187,6 +209,18 @@ def _demand_reuse_reason(
     source_elderly_ratio = _safe_float_value(source_row.get("elderly_ratio", float("nan")))
     if not math.isfinite(source_elderly_ratio) or abs(source_elderly_ratio - float(elderly_ratio)) > 1e-9:
         return "elderly_ratio_mismatch"
+    source_slow_share = _safe_float_value(source_row.get("slow_elderly_share_within_elderly", float("nan")))
+    if not math.isfinite(source_slow_share) or abs(source_slow_share - float(slow_elderly_share_within_elderly)) > 1e-9:
+        return "slow_elderly_share_within_elderly_mismatch"
+    source_normal_speed = _safe_float_value(source_row.get("normal_ped_speed_mps", float("nan")))
+    if not math.isfinite(source_normal_speed) or abs(source_normal_speed - float(normal_ped_speed_mps)) > 1e-9:
+        return "normal_ped_speed_mps_mismatch"
+    source_elderly_speed = _safe_float_value(source_row.get("elderly_ped_speed_mps", float("nan")))
+    if not math.isfinite(source_elderly_speed) or abs(source_elderly_speed - float(elderly_ped_speed_mps)) > 1e-9:
+        return "elderly_ped_speed_mps_mismatch"
+    source_slow_elderly_speed = _safe_float_value(source_row.get("slow_elderly_ped_speed_mps", float("nan")))
+    if not math.isfinite(source_slow_elderly_speed) or abs(source_slow_elderly_speed - float(slow_elderly_ped_speed_mps)) > 1e-9:
+        return "slow_elderly_ped_speed_mps_mismatch"
     source_veh_per_hour = _safe_float_value(source_row.get("veh_per_hour", float("nan")))
     if not math.isfinite(source_veh_per_hour) or abs(source_veh_per_hour - float(veh_per_hour)) > 1e-9:
         return "veh_per_hour_mismatch"
@@ -291,7 +325,7 @@ def get_demand_params(
     if scenario_name == DEFAULT_DEMAND_SCENARIO_NAME:
         policy = vehicle_policy_summary or resolve_vehicle_policy_summary(scenario_name)
         veh_per_hour = float(policy["total_vehicle_flow_vph"])
-        veh_source = "policy_fixed_road_06_22_share"
+        veh_source = "policy_fixed_full_network_background"
     else:
         if observed_veh_per_hour is not None and observed_veh_per_hour > 0:
             veh_per_hour = float(observed_veh_per_hour)
@@ -313,9 +347,18 @@ def get_demand_params(
 
     risk_score_value = row.get("risk_score", np.nan)
     risk_score = float(risk_score_value) if pd.notna(risk_score_value) else None
+    admin_dong = str(row.get("admin_dong", "") or "").strip()
+    candidate_elderly_ratio = _safe_float_value(row.get("elderly_ratio", float("nan")), default=float("nan"))
+    if math.isfinite(candidate_elderly_ratio):
+        base_elderly_ratio, elderly_ratio_source = resolve_elderly_ratio_for_admin_dong(
+            admin_dong,
+            candidate_ratio=candidate_elderly_ratio,
+        )
+    else:
+        base_elderly_ratio, elderly_ratio_source = resolve_elderly_ratio_for_admin_dong(admin_dong)
     ped_payload = build_demand_payload(
-        str(row.get("admin_dong", "")),
-        float(row["elderly_ratio"]),
+        admin_dong,
+        float(base_elderly_ratio),
         sim_duration,
         risk_score=risk_score,
     )
@@ -323,7 +366,7 @@ def get_demand_params(
         model_params,
         (sensitivity_config or {}).get("parameter_overrides"),
     )
-    elderly_ratio = float(row["elderly_ratio"])
+    elderly_ratio = float(base_elderly_ratio)
     elderly_ratio_override = (sensitivity_config or {}).get("elderly_ratio_override")
     if elderly_ratio_override is not None:
         elderly_ratio = float(elderly_ratio_override)
@@ -333,6 +376,20 @@ def get_demand_params(
     generated_ped_count = int(ped_payload["generated_pedestrian_count"])
     ped_lambda = float(generated_ped_count * 3600.0 / max(float(sim_duration), 1.0))
     ped_mean_gap_sec = float(sim_duration / max(generated_ped_count, 1)) if generated_ped_count > 0 else 0.0
+    slow_elderly_share_within_elderly = float(
+        get_parameter_value(effective_model_params, "slow_elderly_share_within_elderly", 0.20)
+    )
+    slow_elderly_share_within_elderly = float(min(1.0, max(0.0, slow_elderly_share_within_elderly)))
+    normal_ped_speed_mps = float(get_parameter_value(effective_model_params, "normal_ped_speed_mps", 1.00))
+    elderly_ped_speed_mps = float(get_parameter_value(effective_model_params, "elderly_ped_speed_mps", 0.85))
+    slow_elderly_ped_speed_mps = float(
+        get_parameter_value(effective_model_params, "slow_elderly_ped_speed_mps", 0.73)
+    )
+    ped_type_counts = resolve_pedestrian_type_counts(
+        generated_ped_count,
+        elderly_ratio,
+        slow_elderly_share_within_elderly=slow_elderly_share_within_elderly,
+    )
 
     return {
         "scenario_name": scenario_name,
@@ -363,13 +420,15 @@ def get_demand_params(
         "generated_pedestrian_count": int(generated_ped_count),
         "ped_mean_gap_sec": float(ped_mean_gap_sec),
         "elderly_ratio": elderly_ratio,
+        "elderly_ratio_source": elderly_ratio_source,
+        "slow_elderly_share_within_elderly": slow_elderly_share_within_elderly,
+        "normal_pedestrian_count": int(ped_type_counts["adult"]),
+        "elderly_pedestrian_count": int(ped_type_counts["elderly"]),
+        "slow_elderly_pedestrian_count": int(ped_type_counts["slow_elderly"]),
         "ped_lambda": float(ped_lambda),
-        "normal_ped_speed_mps": float(
-            get_parameter_value(effective_model_params, "normal_ped_speed_mps", 1.2)
-        ),
-        "elderly_ped_speed_mps": float(
-            get_parameter_value(effective_model_params, "elderly_ped_speed_mps", 0.9)
-        ),
+        "normal_ped_speed_mps": normal_ped_speed_mps,
+        "elderly_ped_speed_mps": elderly_ped_speed_mps,
+        "slow_elderly_ped_speed_mps": slow_elderly_ped_speed_mps,
         "elderly_startup_delay_sec": float(
             get_parameter_value(effective_model_params, "elderly_startup_delay_sec", 1.5)
         ),
@@ -393,6 +452,92 @@ def random_trips_script() -> str:
         if candidate.exists():
             return str(candidate)
     raise RuntimeError(f"randomTrips.py를 찾지 못했습니다: {sumo_home}")
+
+
+def _write_xml(root: ET.Element, path: Path) -> None:
+    ET.indent(root, space="  ")
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _enforce_exact_vehicle_count(
+    route_file: Path,
+    trip_file: Path,
+    expected_count: int,
+    sim_duration: int,
+) -> int:
+    if expected_count <= 0:
+        return 0
+    route_root = ET.parse(route_file).getroot()
+    trip_root = ET.parse(trip_file).getroot()
+    route_vehicles = route_root.findall("vehicle")
+    trip_rows = trip_root.findall("trip")
+    if not route_vehicles or not trip_rows:
+        raise ValueError(f"empty vehicle route/trip output: route={route_file}, trip={trip_file}")
+
+    def _set_depart(elem: ET.Element, depart: float) -> None:
+        elem.set("depart", f"{min(max(0.0, depart), float(sim_duration) - 1e-6):.3f}")
+
+    route_vehicles = sorted(route_vehicles, key=lambda elem: float(elem.attrib.get("depart", 0.0) or 0.0))
+    trip_rows = sorted(trip_rows, key=lambda elem: float(elem.attrib.get("depart", 0.0) or 0.0))
+
+    while len(route_vehicles) > expected_count:
+        route_root.remove(route_vehicles.pop())
+    while len(trip_rows) > expected_count:
+        trip_root.remove(trip_rows.pop())
+
+    if len(route_vehicles) < expected_count or len(trip_rows) < expected_count:
+        raise ValueError(
+            "vehicle route generation under-produced routes; refusing duplicate fallback "
+            f"(route={len(route_vehicles)}, trip={len(trip_rows)}, expected={expected_count})"
+        )
+
+    depart_times = build_fixed_departure_times(expected_count, sim_duration)
+    for idx, depart in enumerate(depart_times):
+        _set_depart(route_vehicles[idx], depart)
+        _set_depart(trip_rows[idx], depart)
+    _write_xml(route_root, route_file)
+    _write_xml(trip_root, trip_file)
+    return expected_count
+
+
+def _vehicle_route_diversity_metrics(route_file: Path) -> dict[str, float | int]:
+    if not route_file.exists():
+        return {
+            "vehicle_route_count": 0,
+            "unique_vehicle_route_count": 0,
+            "duplicate_factor": 0.0,
+            "unique_vehicle_route_ratio": 0.0,
+        }
+    try:
+        root = ET.parse(route_file).getroot()
+    except Exception:
+        return {
+            "vehicle_route_count": 0,
+            "unique_vehicle_route_count": 0,
+            "duplicate_factor": 0.0,
+            "unique_vehicle_route_ratio": 0.0,
+        }
+    routes: list[str] = []
+    route_defs = {
+        str(route.attrib.get("id", "")): str(route.attrib.get("edges", "")).strip()
+        for route in root.findall("route")
+    }
+    for vehicle in root.findall("vehicle"):
+        route_elem = vehicle.find("route")
+        if route_elem is not None:
+            edges = str(route_elem.attrib.get("edges", "")).strip()
+        else:
+            edges = route_defs.get(str(vehicle.attrib.get("route", "")), "")
+        if edges:
+            routes.append(edges)
+    route_count = len(routes)
+    unique_count = len(set(routes))
+    return {
+        "vehicle_route_count": int(route_count),
+        "unique_vehicle_route_count": int(unique_count),
+        "duplicate_factor": float(route_count / max(unique_count, 1)) if route_count else 0.0,
+        "unique_vehicle_route_ratio": float(unique_count / max(route_count, 1)) if route_count else 0.0,
+    }
 
 
 def generate_vehicle_routes(
@@ -434,10 +579,15 @@ def generate_vehicle_routes(
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )
+    expected_count = int(params.get("expected_vehicle_count_for_duration", 0) or 0)
     try:
+        if expected_count > 0:
+            return _enforce_exact_vehicle_count(output_file, trip_file, expected_count, sim_duration)
         root = ET.parse(output_file).getroot()
         return int(len(root.findall("vehicle")))
     except Exception:
+        if expected_count > 0:
+            raise
         return 0
 
 
@@ -447,14 +597,25 @@ def generate_pedestrian_demand(
     output_file: str | Path,
     sim_duration: int = 1800,
     seed: int = 42,
-) -> int:
+) -> dict[str, int]:
     elderly_ratio = float(params["elderly_ratio"])
     generated_count = int(params.get("generated_pedestrian_count", 0))
     normal_speed = float(params["normal_ped_speed_mps"])
     elderly_speed = float(params["elderly_ped_speed_mps"])
+    slow_elderly_speed = float(params.get("slow_elderly_ped_speed_mps", 0.73))
     elderly_startup_delay = float(params["elderly_startup_delay_sec"])
+    slow_share = float(params.get("slow_elderly_share_within_elderly", 0.20))
     depart_times = build_fixed_departure_times(generated_count, sim_duration)
-    type_assignments = build_fixed_type_assignments(generated_count, elderly_ratio)
+    type_assignments = build_fixed_type_assignments(
+        generated_count,
+        elderly_ratio,
+        slow_elderly_share_within_elderly=slow_share,
+    )
+    type_counts = resolve_pedestrian_type_counts(
+        generated_count,
+        elderly_ratio,
+        slow_elderly_share_within_elderly=slow_share,
+    )
 
     root = ET.Element("routes")
     ET.SubElement(
@@ -485,6 +646,21 @@ def generate_pedestrian_demand(
             "color": "255,0,0",
         },
     )
+    ET.SubElement(
+        root,
+        "vType",
+        {
+            "id": "slow_elderly",
+            "vClass": "pedestrian",
+            "minGap": "0.25",
+            "width": "0.5",
+            "length": "0.25",
+            "maxSpeed": f"{slow_elderly_speed:.3f}",
+            "speedDev": "0.10",
+            "startupDelay": f"{elderly_startup_delay:.2f}",
+            "color": "255,128,0",
+        },
+    )
 
     for ped_id, (t, vtype) in enumerate(zip(depart_times, type_assignments, strict=False)):
         person = ET.SubElement(
@@ -500,15 +676,22 @@ def generate_pedestrian_demand(
 
     ET.indent(root, space="  ")
     ET.ElementTree(root).write(output_file, encoding="utf-8", xml_declaration=True)
-    return generated_count
+    return {
+        "generated_pedestrian_count": int(generated_count),
+        "normal_pedestrian_count": int(type_counts["adult"]),
+        "elderly_pedestrian_count": int(type_counts["elderly"]),
+        "slow_elderly_pedestrian_count": int(type_counts["slow_elderly"]),
+    }
 
 
 def build_calibrator_additional(
     metadata: dict[str, Any],
     counts_df: pd.DataFrame,
     output_file: Path,
+    *,
+    enable_candidate_edge_calibrators: bool = True,
 ) -> Path | None:
-    if counts_df.empty:
+    if counts_df.empty or not enable_candidate_edge_calibrators:
         return None
     target_edges = set(str(e) for e in metadata.get("vehicle_conflict_edges", []))
     if not target_edges:
@@ -635,7 +818,9 @@ def generate_for_candidates(
         observed_veh_per_hour, matched_audits = observed_vehicle_rate_for_candidate(
             metadata, counts_df, sim_duration
         )
-        if matched_audits:
+        if scenario_name == DEFAULT_DEMAND_SCENARIO_NAME:
+            demand_audit_rows.extend(_policy_demand_audit_rows(scenario_name))
+        elif matched_audits:
             demand_audit_rows.extend(matched_audits)
         else:
             for edge_id in metadata.get("vehicle_conflict_edges", []):
@@ -643,7 +828,7 @@ def generate_for_candidates(
                     {
                         "edge_id": str(edge_id),
                         "demand_source": "AADT_fallback",
-                        "volume": float(row.get("추정AADT", 0.0)),
+                        "volume": float(row.get("estimated_aadt", 0.0)),
                         "confidence_level": "low",
                     }
                 )
@@ -688,6 +873,12 @@ def generate_for_candidates(
                 source_cw_dir = reuse_nets_dir / f"cw_{cw_id}" if reuse_nets_dir is not None else None
                 reuse_reason = None
                 reuse_from = ""
+                ped_stats = {
+                    "generated_pedestrian_count": 0,
+                    "normal_pedestrian_count": 0,
+                    "elderly_pedestrian_count": 0,
+                    "slow_elderly_pedestrian_count": 0,
+                }
                 if not force_demand and source_row is not None and source_cw_dir is not None:
                     source_vehicle_file = source_cw_dir / vehicle_file.name
                     source_trip_file = source_cw_dir / vehicle_file.name.replace(".rou.xml", ".trips.xml")
@@ -717,6 +908,10 @@ def generate_for_candidates(
                             walking_speed_profile=str(params["walking_speed_profile"]),
                             pedestrian_scale_source=str(params["pedestrian_scale_source"]),
                             elderly_ratio=float(params["elderly_ratio"]),
+                            slow_elderly_share_within_elderly=float(params["slow_elderly_share_within_elderly"]),
+                            normal_ped_speed_mps=float(params["normal_ped_speed_mps"]),
+                            elderly_ped_speed_mps=float(params["elderly_ped_speed_mps"]),
+                            slow_elderly_ped_speed_mps=float(params["slow_elderly_ped_speed_mps"]),
                             veh_per_hour=float(params["veh_per_hour"]),
                         )
                         if reuse_reason is None:
@@ -746,7 +941,12 @@ def generate_for_candidates(
 
                 if reuse_reason is None and source_row is not None and source_cw_dir is not None and reuse_from:
                     generated_vehicle_count = _safe_int_value(source_row.get("generated_vehicle_count", 0), default=0)
-                    ped_count = _safe_int_value(source_row.get("generated_pedestrian_count", 0), default=0)
+                    ped_stats = {
+                        "generated_pedestrian_count": _safe_int_value(source_row.get("generated_pedestrian_count", 0), default=0),
+                        "normal_pedestrian_count": _safe_int_value(source_row.get("normal_pedestrian_count", 0), default=0),
+                        "elderly_pedestrian_count": _safe_int_value(source_row.get("elderly_pedestrian_count", 0), default=0),
+                        "slow_elderly_pedestrian_count": _safe_int_value(source_row.get("slow_elderly_pedestrian_count", 0), default=0),
+                    }
                     route_summary = summarize_vehicle_route_artifact(
                         vehicle_file,
                         net_file,
@@ -764,6 +964,12 @@ def generate_for_candidates(
                     )
                     ped_enabled = (not vehicle_only) and ped_candidate_valid
                     if not ped_enabled:
+                        ped_stats = {
+                            "generated_pedestrian_count": 0,
+                            "normal_pedestrian_count": 0,
+                            "elderly_pedestrian_count": 0,
+                            "slow_elderly_pedestrian_count": 0,
+                        }
                         ET.ElementTree(ET.Element("routes")).write(
                             pedestrian_file,
                             encoding="utf-8",
@@ -794,10 +1000,9 @@ def generate_for_candidates(
                         edge_group_mapping_status="full_network_fallback",
                         network_edge_group="full_network",
                     )
-                    ped_count = 0
                     ped_enabled = (not vehicle_only) and ped_candidate_valid
                     if ped_enabled:
-                        ped_count = generate_pedestrian_demand(
+                        ped_stats = generate_pedestrian_demand(
                             params,
                             metadata["ped_route"],
                             pedestrian_file,
@@ -813,13 +1018,18 @@ def generate_for_candidates(
                             {
                                 "stage": "post_route_generation",
                                 "seed": seed,
-                                "generated_pedestrian_count": ped_count,
+                                "generated_pedestrian_count": ped_stats["generated_pedestrian_count"],
                                 **post_validation,
                             }
                         )
                         if post_validation["validation_status"] != "valid":
                             ped_enabled = False
-                            ped_count = 0
+                            ped_stats = {
+                                "generated_pedestrian_count": 0,
+                                "normal_pedestrian_count": 0,
+                                "elderly_pedestrian_count": 0,
+                                "slow_elderly_pedestrian_count": 0,
+                            }
                             invalid_ped_rows.append(
                                 {
                                     "crosswalk_id": cw_id,
@@ -834,12 +1044,23 @@ def generate_for_candidates(
                                 xml_declaration=True,
                             )
                     else:
+                        ped_stats = {
+                            "generated_pedestrian_count": 0,
+                            "normal_pedestrian_count": 0,
+                            "elderly_pedestrian_count": 0,
+                            "slow_elderly_pedestrian_count": 0,
+                        }
                         ET.ElementTree(ET.Element("routes")).write(
                             pedestrian_file,
                             encoding="utf-8",
                             xml_declaration=True,
                         )
-                    calib_path = build_calibrator_additional(metadata, counts_df, calibrator_file)
+                    calib_path = build_calibrator_additional(
+                        metadata,
+                        counts_df,
+                        calibrator_file,
+                        enable_candidate_edge_calibrators=scenario_name != DEFAULT_DEMAND_SCENARIO_NAME,
+                    )
                     additional_files = [str(calib_path.resolve())] if calib_path else None
 
                 for scenario in ("baseline", "smart"):
@@ -875,6 +1096,7 @@ def generate_for_candidates(
                 trip_file = vehicle_file.with_name(vehicle_file.name.replace(".rou.xml", ".trips.xml"))
                 trip_file_sha256 = _sha256_file(trip_file) if trip_file.exists() else ""
                 ped_file_sha256 = _sha256_file(pedestrian_file) if pedestrian_file.exists() else ""
+                route_diversity = _vehicle_route_diversity_metrics(vehicle_file)
                 expected_vehicle_count = int(params["expected_vehicle_count_for_duration"])
                 if expected_vehicle_count > 0:
                     count_delta = abs(int(generated_vehicle_count) - expected_vehicle_count)
@@ -906,6 +1128,7 @@ def generate_for_candidates(
                         "total_vehicle_flow_vph": params["total_vehicle_flow_vph"],
                         "total_vehicle_count_600s": params["total_vehicle_count_600s"],
                         "expected_vehicle_count_for_duration": params["expected_vehicle_count_for_duration"],
+                        "vehicle_demand_expected": params["expected_vehicle_count_for_duration"],
                         "vehicle_type": params["vehicle_type"],
                         "passenger_ratio": params["passenger_ratio"],
                         "vehicle_type_split": params["vehicle_type_split"],
@@ -918,8 +1141,17 @@ def generate_for_candidates(
                         "road_allocated_flow_vph": params["road_allocated_flow_vph"],
                         "pedestrian_scale": params["pedestrian_scale"],
                         "pedestrian_count_600s": params["pedestrian_count_600s"],
-                        "generated_pedestrian_count": ped_count,
+                        "generated_pedestrian_count": ped_stats["generated_pedestrian_count"],
+                        "normal_pedestrian_count": ped_stats["normal_pedestrian_count"],
+                        "elderly_pedestrian_count": ped_stats["elderly_pedestrian_count"],
+                        "slow_elderly_pedestrian_count": ped_stats["slow_elderly_pedestrian_count"],
                         "generated_vehicle_count": generated_vehicle_count,
+                        "vehicle_route_count": route_diversity["vehicle_route_count"],
+                        "generated_vehicle_route_count": generated_vehicle_count,
+                        "unique_vehicle_route_count": route_diversity["unique_vehicle_route_count"],
+                        "duplicate_factor": route_diversity["duplicate_factor"],
+                        "unique_vehicle_route_ratio": route_diversity["unique_vehicle_route_ratio"],
+                        "generated_pedestrian_route_count": ped_stats["generated_pedestrian_count"],
                         "generated_vehicle_route_file": str(vehicle_file.resolve()),
                         "generated_vehicle_trip_file": str(trip_file.resolve()),
                         "vehicle_net_file": str(net_file.resolve()),
@@ -935,11 +1167,24 @@ def generate_for_candidates(
                         "unique_depart_edges": route_summary["unique_depart_edges"],
                         "unique_arrival_edges": route_summary["unique_arrival_edges"],
                         "unique_route_edges": route_summary["unique_route_edges"],
+                        "used_vehicle_edges": route_summary["used_vehicle_edges"],
                         "network_edge_coverage_ratio": route_summary["network_edge_coverage_ratio"],
+                        "network_vehicle_edge_coverage_ratio": route_summary["network_edge_coverage_ratio"],
+                        "route_bbox_area_ratio": route_summary["route_bbox_area_ratio"],
+                        "major_road_flow_coverage": (
+                            float(params["road_allocated_count_600s"]) / float(params["total_vehicle_count_600s"])
+                            if float(params["total_vehicle_count_600s"]) > 0
+                            else 0.0
+                        ),
                         "pedestrian_scale_source": params["pedestrian_scale_source"],
                         "ped_lambda": params["ped_lambda"],
                         "elderly_ratio": params["elderly_ratio"],
-                        "ped_count": ped_count,
+                        "elderly_ratio_source": params["elderly_ratio_source"],
+                        "slow_elderly_share_within_elderly": params["slow_elderly_share_within_elderly"],
+                        "normal_ped_speed_mps": params["normal_ped_speed_mps"],
+                        "elderly_ped_speed_mps": params["elderly_ped_speed_mps"],
+                        "slow_elderly_ped_speed_mps": params["slow_elderly_ped_speed_mps"],
+                        "ped_count": ped_stats["generated_pedestrian_count"],
                         "pedestrian_arrival_rate_multiplier": params["pedestrian_arrival_rate_multiplier"],
                         "vehicle_volume_multiplier": params["vehicle_volume_multiplier"],
                         "walking_speed_profile": params["walking_speed_profile"],
@@ -968,6 +1213,7 @@ def generate_for_candidates(
         "total_vehicle_flow_vph",
         "total_vehicle_count_600s",
         "expected_vehicle_count_for_duration",
+        "vehicle_demand_expected",
         "vehicle_type",
         "passenger_ratio",
         "vehicle_type_split",
@@ -981,7 +1227,16 @@ def generate_for_candidates(
         "pedestrian_scale",
         "pedestrian_count_600s",
         "generated_pedestrian_count",
+        "normal_pedestrian_count",
+        "elderly_pedestrian_count",
+        "slow_elderly_pedestrian_count",
         "generated_vehicle_count",
+        "vehicle_route_count",
+        "generated_vehicle_route_count",
+        "unique_vehicle_route_count",
+        "duplicate_factor",
+        "unique_vehicle_route_ratio",
+        "generated_pedestrian_route_count",
         "generated_vehicle_route_file",
         "generated_vehicle_trip_file",
         "vehicle_net_file",
@@ -997,10 +1252,19 @@ def generate_for_candidates(
         "unique_depart_edges",
         "unique_arrival_edges",
         "unique_route_edges",
+        "used_vehicle_edges",
         "network_edge_coverage_ratio",
+        "network_vehicle_edge_coverage_ratio",
+        "route_bbox_area_ratio",
+        "major_road_flow_coverage",
         "pedestrian_scale_source",
         "ped_lambda",
         "elderly_ratio",
+        "elderly_ratio_source",
+        "slow_elderly_share_within_elderly",
+        "normal_ped_speed_mps",
+        "elderly_ped_speed_mps",
+        "slow_elderly_ped_speed_mps",
         "ped_count",
         "pedestrian_arrival_rate_multiplier",
         "vehicle_volume_multiplier",

@@ -1713,7 +1713,7 @@ def _build_run_manifest_sampled10(specs: list[GroupSpec], output_root: Path, net
                         "net_file": net_file,
                         "output_dir": _portable_path(smart_out),
                         "log_file": _portable_path(smart_log),
-                        "expected_summary_csv": _portable_path(smart_out / "simulation_results_seed.csv"),
+                        "expected_summary_csv": _portable_path(smart_out / "simulation_result.csv"),
                         "validation_manifest": _portable_path(output_root / "manifests" / "run_validation_manifest.csv"),
                         "skip_if_exists": True,
                         "command": (
@@ -1754,7 +1754,7 @@ def _build_run_manifest_sampled10(specs: list[GroupSpec], output_root: Path, net
                     "net_file": net_file,
                     "output_dir": _portable_path(base_out),
                     "log_file": _portable_path(base_log),
-                    "expected_summary_csv": _portable_path(base_out / "simulation_results_seed.csv"),
+                    "expected_summary_csv": _portable_path(base_out / "simulation_result.csv"),
                     "validation_manifest": _portable_path(output_root / "manifests" / "run_validation_manifest.csv"),
                     "skip_if_exists": True,
                     "command": (

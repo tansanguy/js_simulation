@@ -12,6 +12,10 @@ GLOBAL_NETWORK_SCOPE = "global_network"
 TARGET_CROSSWALK_SCOPE = "target_crosswalk_only"
 
 
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def normalized_sumo_home() -> str | None:
     """Return the SUMO data/tools root even when SUMO_HOME points at the app root."""
     raw = os.environ.get("SUMO_HOME")
@@ -24,6 +28,62 @@ def normalized_sumo_home() -> str | None:
     if (nested / "data" / "typemap" / "osmNetconvert.typ.xml").exists():
         return str(nested)
     return raw
+
+
+def resolve_sumo_home() -> str | None:
+    """Find SUMO_HOME from env or common install locations."""
+    raw = os.environ.get("SUMO_HOME")
+    candidates: list[Path] = []
+    if raw:
+        candidates.append(Path(raw))
+
+    for key in ("SUMO_HOME", "SUMO_BIN"):
+        value = os.environ.get(key)
+        if value:
+            try:
+                resolved = Path(value).expanduser().resolve()
+            except Exception:
+                resolved = Path(value).expanduser()
+            if resolved not in candidates:
+                candidates.append(resolved)
+
+    from shutil import which
+
+    for binary in ("sumo-gui", "sumo", "netconvert"):
+        exe = which(binary)
+        if not exe:
+            continue
+        path = Path(exe).resolve()
+        candidates.extend(
+            [
+                path.parent.parent,
+                path.parent.parent.parent,
+            ]
+        )
+
+    candidates.extend(
+        [
+            Path("/opt/homebrew/opt/sumo"),
+            Path("/usr/local/opt/sumo"),
+            Path("/opt/local"),
+            Path("/usr/share/sumo"),
+            Path("/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"),
+        ]
+    )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except Exception:
+            resolved = candidate.expanduser()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if (resolved / "bin").exists() or (resolved / "share" / "sumo").exists() or (resolved / "data" / "typemap").exists():
+            return key
+    return None
 
 
 def proj_data_dir() -> str | None:
@@ -53,7 +113,7 @@ def proj_data_dir() -> str | None:
 
 def sumo_env() -> dict[str, str]:
     env = os.environ.copy()
-    normalized = normalized_sumo_home()
+    normalized = normalized_sumo_home() or resolve_sumo_home()
     if normalized:
         env["SUMO_HOME"] = normalized
     proj_dir = proj_data_dir()

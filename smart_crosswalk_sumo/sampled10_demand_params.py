@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 
 from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
-from .vehicle_demand_policy import summarize_vehicle_route_artifact
+from .vehicle_demand_policy import resolve_vehicle_policy_summary, summarize_vehicle_route_artifact
 
 
 def _sha256_file(path: Path) -> str:
@@ -53,6 +53,62 @@ def _xml_count(path: Path, tag: str) -> int:
     return sum(1 for _ in root.iter(tag))
 
 
+def _pedestrian_type_counts(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {}
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return {}
+    counts: dict[str, int] = {}
+    for person in root.findall("person"):
+        person_type = str(person.attrib.get("type", "") or "").strip()
+        if not person_type:
+            continue
+        counts[person_type] = counts.get(person_type, 0) + 1
+    return counts
+
+
+def _vehicle_route_diversity_metrics(route_file: Path) -> dict[str, float | int]:
+    if not route_file.exists():
+        return {
+            "vehicle_route_count": 0,
+            "unique_vehicle_route_count": 0,
+            "duplicate_factor": 0.0,
+            "unique_vehicle_route_ratio": 0.0,
+        }
+    try:
+        root = ET.parse(route_file).getroot()
+    except Exception:
+        return {
+            "vehicle_route_count": 0,
+            "unique_vehicle_route_count": 0,
+            "duplicate_factor": 0.0,
+            "unique_vehicle_route_ratio": 0.0,
+        }
+    route_defs = {
+        str(route.attrib.get("id", "")): str(route.attrib.get("edges", "")).strip()
+        for route in root.findall("route")
+    }
+    routes: list[str] = []
+    for vehicle in root.findall("vehicle"):
+        route_elem = vehicle.find("route")
+        if route_elem is not None:
+            edges = str(route_elem.attrib.get("edges", "")).strip()
+        else:
+            edges = route_defs.get(str(vehicle.attrib.get("route", "")), "")
+        if edges:
+            routes.append(edges)
+    route_count = len(routes)
+    unique_count = len(set(routes))
+    return {
+        "vehicle_route_count": int(route_count),
+        "unique_vehicle_route_count": int(unique_count),
+        "duplicate_factor": float(route_count / max(unique_count, 1)) if route_count else 0.0,
+        "unique_vehicle_route_ratio": float(unique_count / max(route_count, 1)) if route_count else 0.0,
+    }
+
+
 def _first_nonempty(*values: Any) -> str:
     for value in values:
         if value is None:
@@ -66,6 +122,7 @@ def _first_nonempty(*values: Any) -> str:
 def _load_route_rows(output_dir: Path) -> pd.DataFrame:
     return _load_csv_any(
         [
+            output_dir / "simulation_result.csv",
             output_dir / "simulation_results_seed.csv",
             output_dir / "baseline_smart_seed_results.csv",
             output_dir / "phase6_smoke_baseline_results.csv",
@@ -151,17 +208,29 @@ def build_sampled10_demand_params(output_dir: str | Path) -> pd.DataFrame:
     trip_count = _xml_count(trip_file, "trip")
     ped_count = _xml_count(ped_file, "person")
     walk_count = _xml_count(ped_file, "walk")
+    ped_type_counts = _pedestrian_type_counts(ped_file)
     if vehicle_count != trip_count:
         raise ValueError(f"vehicle route/trip count mismatch: route={vehicle_count}, trip={trip_count}")
     if ped_count <= 0 or walk_count <= 0 or ped_count != walk_count:
         raise ValueError(f"pedestrian route count mismatch: person={ped_count}, walk={walk_count}")
-    veh_per_hour = float(vehicle_count) * 3600.0 / max(float(sim_duration), 1.0)
+    scenario_name = str(_first_nonempty(first_seed_row.get("scenario_name"), run_metadata.get("scenario_name"), "sampled10_group"))
+    policy_summary = resolve_vehicle_policy_summary(scenario_name) if scenario_name == "main_realistic_stress" else None
+    veh_per_hour = (
+        float(policy_summary["total_vehicle_flow_vph"])
+        if policy_summary is not None
+        else float(vehicle_count) * 3600.0 / max(float(sim_duration), 1.0)
+    )
+    expected_vehicle_count = (
+        int(round(float(policy_summary["total_vehicle_count_600s"]) * float(sim_duration) / 600.0))
+        if policy_summary is not None
+        else int(vehicle_count)
+    )
     ped_lambda = float(ped_count) * 3600.0 / max(float(sim_duration), 1.0)
 
     route_summary = summarize_vehicle_route_artifact(
         route_file,
         net_path,
-        scenario_name=str(_first_nonempty(first_seed_row.get("scenario_name"), run_metadata.get("scenario_name"), "sampled10_group")),
+        scenario_name=scenario_name,
         road_allocated_count_600s=int(vehicle_count),
         road_allocated_flow_vph=float(veh_per_hour),
         vehicle_type="passenger",
@@ -181,6 +250,7 @@ def build_sampled10_demand_params(output_dir: str | Path) -> pd.DataFrame:
         "unique_route_edges": 0,
         "network_edge_coverage_ratio": 0.0,
     }
+    route_diversity = _vehicle_route_diversity_metrics(route_file)
 
     manifest_crosswalk_id = _first_nonempty(run_metadata.get("manifest_crosswalk_id"), first_seed_row.get("crosswalk_id"), "sampled10_seed")
     demand_df = pd.DataFrame(
@@ -189,8 +259,8 @@ def build_sampled10_demand_params(output_dir: str | Path) -> pd.DataFrame:
                 "crosswalk_id": manifest_crosswalk_id,
                 "seed": seed,
                 "experiment_mode": _first_nonempty(run_metadata.get("experiment_mode"), "sampled"),
-                "scenario_name": _first_nonempty(first_seed_row.get("scenario_name"), "sampled10_group"),
-                "demand_profile": _first_nonempty(first_seed_row.get("demand_profile"), "sampled10_group"),
+                "scenario_name": scenario_name,
+                "demand_profile": _first_nonempty(first_seed_row.get("demand_profile"), scenario_name),
                 "sim_duration_sec": sim_duration,
                 "warmup_sec": warmup,
                 "candidate_csv": _first_nonempty(run_metadata.get("candidate_csv")),
@@ -209,11 +279,12 @@ def build_sampled10_demand_params(output_dir: str | Path) -> pd.DataFrame:
                 "ped_repeat_spacing_sec": float(run_metadata.get("ped_repeat_spacing_sec", 2.0)),
                 "phase_aligned_ped_depart": bool(run_metadata.get("phase_aligned_ped_depart", True)),
                 "veh_per_hour": veh_per_hour,
-                "veh_source": "sampled10_route_file_count",
+                "veh_source": "sampled10_route_file_count" if policy_summary is None else "policy_fixed_full_network_background",
                 "vehicle_flow_scale": 1.0,
                 "total_vehicle_flow_vph": veh_per_hour,
-                "total_vehicle_count_600s": vehicle_count,
-                "expected_vehicle_count_for_duration": vehicle_count,
+                "total_vehicle_count_600s": int(policy_summary["total_vehicle_count_600s"]) if policy_summary is not None else vehicle_count,
+                "expected_vehicle_count_for_duration": expected_vehicle_count,
+                "vehicle_demand_expected": expected_vehicle_count,
                 "vehicle_type": "passenger",
                 "passenger_ratio": 1.0,
                 "allocation_basis": "sampled10_route_file_count",
@@ -228,7 +299,17 @@ def build_sampled10_demand_params(output_dir: str | Path) -> pd.DataFrame:
                 "pedestrian_scale": 1.0,
                 "pedestrian_count_600s": ped_count,
                 "generated_pedestrian_count": ped_count,
+                "normal_pedestrian_count": int(ped_type_counts.get("adult", 0)),
+                "elderly_pedestrian_count": int(ped_type_counts.get("elderly", 0)),
+                "slow_elderly_pedestrian_count": int(ped_type_counts.get("slow_elderly", 0)),
                 "generated_vehicle_count": vehicle_count,
+                "vehicle_route_count": route_diversity["vehicle_route_count"],
+                "unique_vehicle_route_count": route_diversity["unique_vehicle_route_count"],
+                "duplicate_factor": route_diversity["duplicate_factor"],
+                "unique_vehicle_route_ratio": route_diversity["unique_vehicle_route_ratio"],
+                "used_vehicle_edges": route_summary.get("used_vehicle_edges", 0),
+                "route_bbox_area_ratio": route_summary.get("route_bbox_area_ratio", pd.NA),
+                "major_road_flow_coverage": 1.0 if policy_summary is not None else pd.NA,
                 "generated_vehicle_route_file": str(route_file),
                 "generated_vehicle_trip_file": str(trip_file),
                 "vehicle_net_file": _first_nonempty(run_metadata.get("net_file"), str(net_path) if net_file else ""),
@@ -243,13 +324,19 @@ def build_sampled10_demand_params(output_dir: str | Path) -> pd.DataFrame:
                 "unique_arrival_edges": route_summary.get("unique_arrival_edges", 0),
                 "unique_route_edges": route_summary.get("unique_route_edges", 0),
                 "network_edge_coverage_ratio": route_summary.get("network_edge_coverage_ratio", 0.0),
+                "network_vehicle_edge_coverage_ratio": route_summary.get("network_edge_coverage_ratio", 0.0),
                 "pedestrian_scale_source": "sampled10_actual_ped_count",
                 "ped_lambda": ped_lambda,
                 "elderly_ratio": pd.NA,
+                "elderly_ratio_source": "",
+                "slow_elderly_share_within_elderly": 0.20,
                 "ped_count": ped_count,
                 "pedestrian_arrival_rate_multiplier": 1.0,
                 "vehicle_volume_multiplier": 1.0,
                 "walking_speed_profile": "base",
+                "normal_ped_speed_mps": 1.0,
+                "elderly_ped_speed_mps": 0.85,
+                "slow_elderly_ped_speed_mps": 0.73,
                 "generated_pedestrian_route_file": str(ped_file),
                 "generated_pedestrian_alias_file": str(ped_alias_file),
                 "generated_vehicle_trip_count": trip_count,
