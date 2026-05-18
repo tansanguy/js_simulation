@@ -29,7 +29,7 @@ bash commands/check_final_result.sh
 ## 환경 설정
 
 터미널을 새로 열 때마다 `SUMO_HOME`을 다시 잡아야 한다.
-이 가이드는 `SUMO 1.26.0` 기준이다.
+이 가이드는 Python 3.11.x와 `SUMO 1.26.0` 기준이다.
 
 ```bash
 export PROJECT_ROOT="/path/to/js_simulation"

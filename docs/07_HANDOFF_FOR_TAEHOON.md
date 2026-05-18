@@ -1,6 +1,7 @@
 # 태훈님 인수인계
 
 이 문서는 팀원이 바로 볼 수 있게 쓴 짧은 인수인계다. 여기서는 팀 구글드라이브에서 `XML`과 `net.xml`을 받아서 프로젝트 로컬 경로에 넣는 절차만 적는다.
+이 절차는 Python 3.11.x와 SUMO 1.26.0을 기준으로 한다.
 
 다른 준비나 실행 설명이 필요하면 아래 문서를 보면 된다.
 
@@ -10,6 +11,19 @@
 - 정책 기준: [`docs/04_PIPELINE_POLICY.md`](04_PIPELINE_POLICY.md)
 - 오류 확인: [`docs/05_TROUBLESHOOTING.md`](05_TROUBLESHOOTING.md)
 - 커밋 기준: [`docs/06_COMMIT_GUIDE.md`](06_COMMIT_GUIDE.md)
+
+## 0. 버전 확인
+
+이 절차를 시작하기 전에 Python과 SUMO 버전을 먼저 맞춘다.
+
+```bash
+python3.11 --version
+echo "$SUMO_HOME"
+```
+
+- Python은 `3.11.x`여야 한다.
+- SUMO는 `1.26.0` 설치 경로를 `SUMO_HOME`에 넣어야 한다.
+- `SUMO_HOME`을 바꾼 뒤에는 `PATH`도 같이 다시 잡아야 한다.
 
 ## 1. XML 받기
 
@@ -51,6 +65,8 @@ find result/active/nets -maxdepth 1 -type f -name "*.net.xml" | sort
 
 ## 4. 기억할 점
 
+- 이 인수인계는 Python 3.11.x와 SUMO 1.26.0 기준이다.
+- 다른 Python 또는 SUMO 버전으로는 이 흐름을 기본 지원으로 보지 않는다.
 - `result/active/nets/*.net.xml`은 Git에 올리지 않는다.
 - `XML`은 드라이브 경로를 직접 쓰지 않고 로컬 프로젝트 경로로 옮겨 둔다.
 - 실행이나 환경 설명이 더 필요하면 `docs/01_SETUP.md`와 `docs/02_RUN_GUIDE.md`를 본다.
