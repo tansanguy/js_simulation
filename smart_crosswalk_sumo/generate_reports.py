@@ -184,6 +184,13 @@ def _load_csv_any(*paths: Path) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _first_existing_path(*paths: Path) -> Path:
+    for path in paths:
+        if path.exists():
+            return path
+    return paths[0]
+
+
 def _first_nonempty(value: Any, default: Any = NA_TEXT) -> Any:
     if value is None:
         return default
@@ -290,7 +297,7 @@ def _report_guardrail_paths(output_dir: Path) -> dict[str, Path]:
         "vehicle_validation": csv_layout.results / "vehicle_flow_policy_validation.csv",
         "ped_validation": csv_layout.results / "pedestrian_flow_policy_validation.csv",
         "seed_results": csv_layout.results / "simulation_results_seed.csv",
-        "avg_results": csv_layout.results / "simulation_results.csv",
+        "avg_results": csv_layout.results / "simulation_result.csv",
     }
 
 
@@ -1268,12 +1275,16 @@ def generate_all_reports(
     output_dir = Path(output_dir)
     figures_dir = Path(figures_dir)
     csv_layout = ensure_csv_output_layout(output_dir)
-    avg_path = csv_layout.results / "simulation_results.csv"
-    seed_path = csv_layout.results / "simulation_results_seed.csv"
-    if not avg_path.exists():
-        avg_path = output_dir / "simulation_results.csv"
-    if not seed_path.exists():
-        seed_path = output_dir / "simulation_results_seed.csv"
+    avg_path = _first_existing_path(
+        csv_layout.results / "simulation_result.csv",
+        output_dir / "simulation_result.csv",
+        csv_layout.results / "simulation_results.csv",
+        output_dir / "simulation_results.csv",
+    )
+    seed_path = _first_existing_path(
+        csv_layout.results / "simulation_results_seed.csv",
+        output_dir / "simulation_results_seed.csv",
+    )
     if not avg_path.exists():
         raise FileNotFoundError(f"{avg_path}가 없습니다. 먼저 시뮬레이션을 실행하세요.")
 
@@ -1286,6 +1297,11 @@ def generate_all_reports(
     except (EmptyDataError, FileNotFoundError):
         seed_df = pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"])
     model_params = load_model_parameters(model_parameters_path)
+    write_csv_bundle(
+        avg_df,
+        csv_layout.results / "simulation_results.csv",
+        mirrors=[output_dir / "simulation_results.csv"],
+    )
     simulation_summary = build_simulation_summary(avg_df, seed_df)
     delta_summary = build_baseline_vs_smart_summary(simulation_summary, _load_run_metrics_exact(output_dir))
     write_csv_bundle(
