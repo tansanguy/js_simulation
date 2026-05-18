@@ -4,6 +4,12 @@
 여기서는 팀 구글드라이브에서 받은 `XML`과 `net.xml`을 프로젝트 로컬 경로에 넣는 절차와,
 그 다음에 어떤 명령을 어떤 순서로 돌리면 되는지까지 적는다.
 
+중요:
+
+- `result/active/real_30seed_runs_sampled10/commands/*.sh`는 legacy full 30seed wrapper다.
+- 새 sequential-light / cut-off / graduation 판단은 `docs/04_PIPELINE_POLICY.md` 기준으로 본다.
+- paired comparison은 baseline-only smoke가 아니라 baseline/smart pair가 같이 있는 입력으로만 판단한다.
+
 이 절차는 Python 3.11.x와 SUMO 1.26.0 기준이다.
 
 다른 준비나 실행 설명이 더 필요하면 아래 문서를 보면 된다.
@@ -60,6 +66,7 @@ cp result/active/nets/*.xml "$PROJECT_ROOT/result/active/nets/"
 ## 3. 실행 우선순위
 
 태훈님은 아래 순서로 돌리면 된다. 숫자는 현재 `all_groups` wrapper가 실제로 포함하는 그룹 기준이다.
+이 순서는 legacy full 30seed 실행 순서이며, 새 정책의 sequential-light 판단 순서가 아니다.
 
 | 우선순위 | 그룹 | 총 시뮬레이션 수 | 실행 명령 |
 |---|---|---:|---|
@@ -98,6 +105,9 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_
 
 후보 CSV는 각 그룹별 `result/active/real_30seed_runs_sampled10/manifests/*.csv`를 사용한다.
 
+새 정책 기준으로는 `paired_significance_analysis.py`의 결과에서 `KEEP`만 다음 seed candidate CSV로 넘긴다.
+`PASS`는 qualified pool 유지와 seed 중단, `CUT`은 pool 제외, `RECHECK`는 별도 검토다.
+
 ## 6. 확인
 
 ```bash
@@ -113,3 +123,5 @@ find result/active/nets -maxdepth 1 -type f -name "*.net.xml" | sort
 - `result/active/nets/*.net.xml`은 Git에 올리지 않는다.
 - `XML`은 드라이브 경로를 직접 쓰지 않고 로컬 프로젝트 경로로 옮겨 둔다.
 - 실행이나 환경 설명이 더 필요하면 `docs/01_SETUP.md`와 `docs/02_RUN_GUIDE.md`를 본다.
+- smoke 검증에서 `simple_final_pipeline --limit N`은 baseline-first일 수 있으므로 paired comparison 검증용으로 쓰지 않는다.
+- paired smoke가 필요하면 baseline 1개와 smart 1개가 함께 생성되는 `run-id`를 지정한다.

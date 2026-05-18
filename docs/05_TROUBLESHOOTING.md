@@ -78,6 +78,7 @@ export PATH="$SUMO_HOME/bin:$PATH"
 
 자주 보는 원인:
 
+- baseline-only 또는 smart-only 입력만 들어감
 - baseline/smart pair 중 하나가 없음
 - `vehicle_route_sha256` 또는 `pedestrian_route_sha256` 불일치
 - route hash가 비어 있어 공유 조건을 검증할 수 없음

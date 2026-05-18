@@ -161,7 +161,70 @@ python3 -m smart_crosswalk_sumo.run_sampled10_group \
   --manifest-crosswalk-id BASELINE_CURRENT_MAIN_12
 ```
 
-## 8. 실행 중 확인
+## 8. 그룹별로 새 정책 돌리기
+
+새 정책을 그룹별로 돌릴 때는 그룹 하나씩 따로 처리한다.
+핵심은 `keep_candidates.csv`를 다음 seed 입력으로만 쓰고, 그룹별 candidate CSV와 net file을 섞지 않는 것이다.
+
+흐름은 아래처럼 잡는다.
+
+1. 그룹 선택
+2. 그 그룹의 baseline/smart pair 결과를 만든다
+3. `paired_significance_analysis`를 그 그룹 후보 CSV에만 돌린다
+4. `KEEP`만 뽑은 `keep_candidates.csv`를 다음 seed 입력으로 쓴다
+5. `PASS`가 나오면 그 그룹은 추가 seed를 멈춘다
+6. `CUT`이면 그 그룹 후보는 pool에서 뺀다
+7. `RECHECK`면 해당 그룹만 다시 확인한다
+
+그룹별 입력은 아래를 쓴다.
+
+- `current_main_12` → `result/active/real_30seed_runs_sampled10/manifests/current_main_12_candidates.csv`
+- `signal_fix_9` → `result/active/real_30seed_runs_sampled10/manifests/signal_fix_9_candidates.csv`
+- `generated_signal_7` → `result/active/real_30seed_runs_sampled10/manifests/generated_signal_7_candidates.csv`
+- `p1_p4_recovery_6` → `result/active/real_30seed_runs_sampled10/manifests/p1_p4_recovery_6_candidates.csv`
+
+그룹별 sequential-light 실행 예시는 아래 형태다.
+
+```bash
+GROUP=current_main_12
+CANDIDATE_CSV="result/active/real_30seed_runs_sampled10/manifests/${GROUP}_candidates.csv"
+NET_FILE="result/active/nets/${GROUP}.net.xml"
+
+python3 -m smart_crosswalk_sumo.paired_significance_analysis \
+  --run-glob "outputs/${GROUP}/baseline/seed01" \
+  --run-glob "outputs/${GROUP}/smart/*/seed01" \
+  --candidate-csv "$CANDIDATE_CSV" \
+  --output "/private/tmp/phase6_policy_check/${GROUP}/sequential_summary.csv" \
+  --keep-output "/private/tmp/phase6_policy_check/${GROUP}/keep_candidates.csv" \
+  --pass-output "/private/tmp/phase6_policy_check/${GROUP}/pass_candidates.csv" \
+  --cut-output "/private/tmp/phase6_policy_check/${GROUP}/cut_candidates.csv" \
+  --recheck-output "/private/tmp/phase6_policy_check/${GROUP}/recheck_candidates.csv"
+
+python3 -m smart_crosswalk_sumo.run_sampled10_group \
+  --candidate-csv "/private/tmp/phase6_policy_check/${GROUP}/keep_candidates.csv" \
+  --net-file "$NET_FILE" \
+  --seed 2 \
+  --output-dir "/private/tmp/phase6_policy_check/${GROUP}/seed02" \
+  --sim-duration 540 \
+  --warmup 0 \
+  --traci_step_length 0.1 \
+  --traffic_measure_radius_m 500.0 \
+  --extension_increment 5.0 \
+  --max_extensions 1 \
+  --metric-sample-interval 10 \
+  --vehicle-sample-interval 10 \
+  --progress-interval 60 \
+  --phase-aligned-ped-depart \
+  --ped-repeat-count 5 \
+  --ped-repeat-spacing-sec 2 \
+  --include-vehicles \
+  --output-profile light
+```
+
+이 방식은 그룹별 sequential-light 운영용이다.
+`result/active/real_30seed_runs_sampled10/commands/*.sh`의 legacy 30seed wrapper와는 다르다.
+
+## 9. 실행 중 확인
 
 ```bash
 ps aux | grep -E "simple_final_pipeline|run_sampled10_group|run_phase6_recovery_smoke|sumo" | grep -v grep
@@ -170,13 +233,13 @@ find outputs/smoke/logs -type f | sort | tail -20
 grep -R "Traceback\|TraCIException\|ERROR\|FAILED\|failed" outputs/smoke/logs | tail -80
 ```
 
-## 9. 중단 / 재실행
+## 10. 중단 / 재실행
 
 - 성공한 run은 같은 `output_dir`이면 다시 돌지 않는다.
 - 다른 실험과 분리하려면 다른 `--outputs-root`를 쓰는 편이 낫다.
 - `smoke`는 검증용, `final`은 본실험이다.
 
-## 10. Git 점검
+## 11. Git 점검
 
 배포 전에는 result/output/net/xml/.DS_Store/oldresult가 섞이지 않았는지 확인한다.
 

@@ -110,6 +110,7 @@ primary safety endpoint는 clearance failure, unfinished crossing, low-PET risk 
 - `next_checkpoint`: KEEP 후보의 다음 checkpoint
 - `stop_reason`: 상태 판정 사유
 - `quality_reasons`: missing pair, route hash mismatch, extension policy violation 등 RECHECK 근거
+- `baseline_only_input` / `smart_only_input`: paired comparison이 불가능한 smoke-only 입력
 
 상태 해석:
 
@@ -131,6 +132,7 @@ primary safety endpoint는 clearance failure, unfinished crossing, low-PET risk 
 - `simulation_results_seed.csv`: `simulation_result.csv`와 같은 seed-level compatibility alias다.
 - `benchmark_timing.json`: run 성공 여부, 실패 case 수, baseline/smart row 수를 확인한다. 없으면 RECHECK다.
 - `route_demand_manifest.csv`: route/demand hash 공유 확인용이다. 없거나 hash가 비어 있으면 paired comparison은 RECHECK다.
+- baseline-only / smart-only / missing pair 입력도 RECHECK다.
 - cutoff/graduation summary CSV: PASS/CUT/KEEP/RECHECK 판정의 기준 파일이다.
 - keep/pass/cut/recheck candidate CSV: 후속 실행과 보고 pool을 분리하는 운영 파일이다.
 - `generate_reports.py` 결과물: 보고서와 사람이 읽는 요약용이다. sequential stopping 판정은 paired summary CSV를 우선한다.

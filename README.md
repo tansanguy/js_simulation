@@ -16,6 +16,9 @@ commands/*.sh
 cut-off / graduation 검토는 full 30seed 실행과 분리된 sequential-light 흐름이다.
 이 흐름은 1회 5초 보행자 녹색 연장 정책을 paired comparison으로 평가하며, primary endpoint는 보행자 평균 대기시간이 아니라 clearance failure / unfinished crossing / low-PET risk proxy다.
 `PASS`는 qualified 후보 pool 유지 및 추가 seed 중단, `CUT`은 후보 pool 제외, `KEEP`은 다음 seed 실행, `RECHECK`는 데이터/구현 확인 대상이다.
+paired comparison은 baseline-only smoke가 아니라 baseline/smart pair가 함께 있는 입력으로만 판단한다.
+`simple_final_pipeline --limit N`은 baseline-first일 수 있으므로 paired 검증용으로 쓰지 않는다.
+그룹별 sequential-light 운영은 [`docs/02_RUN_GUIDE.md`](docs/02_RUN_GUIDE.md)와 [`docs/07_HANDOFF_FOR_TAEHOON.md`](docs/07_HANDOFF_FOR_TAEHOON.md)를 따른다.
 
 ## 바로 쓰는 명령
 
@@ -79,6 +82,7 @@ export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 - `smoke`는 실행 확인용이다.
 - `final`은 본실험이다.
 - sequential-light 실행은 `sim_duration=540`, `--output-profile light`, KEEP-only candidate CSV를 기준으로 한다.
+- `debug_trace`, `extension_trigger_debug`, `signal_phase_audit` 같은 대용량 debug 출력은 반복 실행에서 끈다.
 - 그룹별 30seed 실행은 `result/active/real_30seed_runs_sampled10/commands/*.sh`를 쓴다.
 - `baseline`과 `smart`는 같은 vehicle route를 써야 한다.
 - `pedestrian_wait_delta`는 secondary metric이다.
