@@ -26,6 +26,25 @@ bash commands/aggregate_final.sh
 bash commands/check_final_result.sh
 ```
 
+## 그룹별 30seed 실행
+
+그룹별 본실험은 아래 스크립트를 쓴다.
+
+```bash
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_current_main_12.sh
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_signal_fix_9.sh
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_generated_signal_7.sh
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_p4_recovery_6.sh
+```
+
+전체 그룹을 순서대로 돌릴 때는 아래를 쓴다.
+
+```bash
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all_groups.sh
+```
+
+태훈님 우선순위와 실행 순서는 [`docs/07_HANDOFF_FOR_TAEHOON.md`](docs/07_HANDOFF_FOR_TAEHOON.md)를 본다.
+
 ## 환경 설정
 
 터미널을 새로 열 때마다 `SUMO_HOME`을 다시 잡아야 한다.
@@ -47,11 +66,13 @@ export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 - `outputs/smoke/`
 - `outputs/final/`
 - `outputs/final/aggregate/final_summary.csv`
+- `result/active/real_30seed_runs_sampled10/commands/`
 
 ## 지켜야 할 것
 
 - `smoke`는 실행 확인용이다.
 - `final`은 본실험이다.
+- 그룹별 30seed 실행은 `result/active/real_30seed_runs_sampled10/commands/*.sh`를 쓴다.
 - `baseline`과 `smart`는 같은 vehicle route를 써야 한다.
 - `outputs/`와 `result/active/nets/*.net.xml`은 커밋 대상이 아니다.
 - 새 도로망 생성 설명은 현재 문서에서 쓰지 않는다.
