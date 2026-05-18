@@ -36,6 +36,7 @@ commands/*.sh
 bash commands/verify.sh
 bash commands/run_smoke.sh --dry-run
 bash commands/run_smoke.sh --limit 1
+bash commands/run_smoke.sh --jobs 6
 bash commands/run_smoke.sh --run-id current_main_12_smart_NODE_10335_seed01
 bash commands/run_smoke.sh
 bash commands/run_final.sh --dry-run
@@ -50,6 +51,7 @@ bash commands/check_final_result.sh
 - `final`은 본실험이다.
 - `--dry-run`은 실제 실행 없이 계획만 확인한다.
 - `--limit 1`은 맨 앞의 1개만 돌려 빠르게 검증한다.
+- `--jobs N`은 동시 실행할 run 수를 지정한다. 10코어/24GB Mac mini에서는 `6` 이하를 권장한다.
 - `--run-id`는 특정 run 하나만 지정한다.
 
 ## 5. 그룹별 30seed 본실험

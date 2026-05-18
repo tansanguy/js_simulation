@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -356,6 +357,7 @@ def _execute_mode(
     net_group: str | None = None,
     limit: int | None = None,
     run_id: str | None = None,
+    jobs: int | None = None,
 ) -> dict[str, Any]:
     manifest = _build_mode_manifest(source_pipeline_root, outputs_root, mode)
     manifest = _filter_mode_manifest(manifest, net_group=net_group, run_id=run_id, limit=limit)
@@ -365,7 +367,8 @@ def _execute_mode(
     executed = 0
     skipped = 0
     pending_commands: list[dict[str, Any]] = []
-    for _, row in manifest.iterrows():
+
+    def _run_manifest_row(row: pd.Series) -> dict[str, Any]:
         final_dir = _resolve_project_path(str(row["output_dir"]))
         log_file = _resolve_project_path(str(row["log_file"]))
         work_dir = _resolve_project_path(str(row["work_output_dir"]))
@@ -373,7 +376,40 @@ def _execute_mode(
         work_dir.parent.mkdir(parents=True, exist_ok=True)
         command = _run_command_for_row(row, mode, None)
         already_successful = _is_successful_final_run(final_dir)
-        if dry_run:
+        if already_successful:
+            return {"status": "skipped"}
+        with log_file.open("a", encoding="utf-8") as log_handle:
+            proc = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        if proc.returncode != 0:
+            return {
+                "status": "failed",
+                "error": RuntimeError(f"run failed: {row['run_id']} (see {log_file})"),
+            }
+        if not (work_dir / SIMULATION_RESULT_NAME).exists() and not (work_dir / "simulation_results_seed.csv").exists():
+            return {
+                "status": "failed",
+                "error": FileNotFoundError(work_dir / SIMULATION_RESULT_NAME),
+            }
+        benchmark = _load_json(work_dir / "benchmark_timing.json")
+        if benchmark.get("run_success") is not True:
+            return {
+                "status": "failed",
+                "error": RuntimeError(f"run incomplete: {row['run_id']} (see {work_dir / 'benchmark_timing.json'})"),
+            }
+        _finalize_run_artifacts(row)
+        return {"status": "success"}
+
+    if dry_run:
+        for _, row in manifest.iterrows():
+            final_dir = _resolve_project_path(str(row["output_dir"]))
+            command = _run_command_for_row(row, mode, None)
+            already_successful = _is_successful_final_run(final_dir)
             pending_commands.append(
                 {
                     "run_id": str(row["run_id"]),
@@ -384,27 +420,46 @@ def _execute_mode(
                     "command": command,
                 }
             )
-            continue
-        if already_successful:
-            skipped += 1
-            continue
-        with log_file.open("a", encoding="utf-8") as log_handle:
-            proc = subprocess.run(
-                command,
-                cwd=PROJECT_ROOT,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
-        if proc.returncode != 0:
-            raise RuntimeError(f"run failed: {row['run_id']} (see {log_file})")
-        if not (work_dir / SIMULATION_RESULT_NAME).exists() and not (work_dir / "simulation_results_seed.csv").exists():
-            raise FileNotFoundError(work_dir / SIMULATION_RESULT_NAME)
-        benchmark = _load_json(work_dir / "benchmark_timing.json")
-        if benchmark.get("run_success") is not True:
-            raise RuntimeError(f"run incomplete: {row['run_id']} (see {work_dir / 'benchmark_timing.json'})")
-        _finalize_run_artifacts(row)
-        executed += 1
+        return {
+            "mode": mode,
+            "output_root": str(_mode_root(outputs_root, mode)),
+            "planned_runs": int(len(manifest)),
+            "skipped_runs": skipped,
+            "executed_runs": executed,
+            "pending_runs": int(len(pending_commands)),
+            "pending_preview": pending_commands[:5],
+        }
+
+    if jobs is None:
+        jobs = 1
+    if jobs <= 0:
+        raise ValueError("--jobs must be positive")
+
+    if jobs == 1:
+        for _, row in manifest.iterrows():
+            result = _run_manifest_row(row)
+            if result["status"] == "skipped":
+                skipped += 1
+                continue
+            if result["status"] == "failed":
+                raise result["error"]
+            executed += 1
+    else:
+        failures: list[Exception] = []
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+            futures = {executor.submit(_run_manifest_row, row): row for _, row in manifest.iterrows()}
+            for future in as_completed(futures):
+                result = future.result()
+                if result["status"] == "skipped":
+                    skipped += 1
+                    continue
+                if result["status"] == "failed":
+                    failures.append(result["error"])
+                else:
+                    executed += 1
+        if failures:
+            raise failures[0]
+
     return {
         "mode": mode,
         "output_root": str(_mode_root(outputs_root, mode)),
@@ -1181,6 +1236,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         net_group=args.net_group,
         limit=args.limit,
         run_id=args.run_id,
+        jobs=args.jobs,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -1212,6 +1268,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--net-group", "--run-group", dest="net_group", default=None)
     run.add_argument("--limit", type=int, default=None)
+    run.add_argument("--jobs", type=int, default=None)
     run.add_argument("--run-id", default=None)
     run.set_defaults(func=cmd_run)
 
