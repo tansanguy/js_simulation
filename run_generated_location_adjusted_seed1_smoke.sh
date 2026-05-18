@@ -1,12 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /Users/junlee/Desktop/2026-1/js
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_ROOT"
 
-export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"
+if [[ -z "${SUMO_HOME:-}" ]]; then
+  for candidate in \
+    /opt/homebrew/opt/sumo \
+    /usr/local/opt/sumo \
+    /usr/share/sumo \
+    /Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO
+  do
+    if [[ -d "$candidate" ]]; then
+      SUMO_HOME="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "${SUMO_HOME:-}" ]]; then
+  echo "SUMO_HOME not found" >&2
+  exit 1
+fi
+export SUMO_HOME
 export PATH="$SUMO_HOME/bin:$PATH"
-export PROJ_LIB="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/framework/EclipseSUMO.framework/Resources/proj"
-export PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}"
+if [[ -z "${PROJ_LIB:-}" ]]; then
+  if [[ -d "$SUMO_HOME/share/proj" ]]; then
+    export PROJ_LIB="$SUMO_HOME/share/proj"
+  elif [[ -d "$SUMO_HOME/proj" ]]; then
+    export PROJ_LIB="$SUMO_HOME/proj"
+  fi
+fi
+export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
 # TODO: 실제 위치 조정/생성 결과 폴더로 바꾸기
 GEN_DIR="result/phase_next_bad22_generated_crossing_patch_YYYYMMDD_HHMMSS"

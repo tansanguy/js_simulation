@@ -1,17 +1,17 @@
-# Run Guide
+# 실행 안내
 
-현재 실행 표면은 `commands/*.sh`다. 내부는 `smart_crosswalk_sumo/reporting/simple_final_pipeline.py`가 받는다.
+현재 실행 표면은 `commands/*.sh`다. 내부에서는 `smart_crosswalk_sumo/reporting/simple_final_pipeline.py`가 처리한다.
 
 ## 실행 순서
 
 1. 환경 확인
-2. smoke dry-run
-3. smoke 1개 실행
-4. smoke 전체 실행
-5. final dry-run
-6. final 실행
-7. final aggregate
-8. final check
+2. `smoke` dry-run
+3. `smoke` 1개 실행
+4. `smoke` 전체 실행
+5. `final` dry-run
+6. `final` 실행
+7. `final` aggregate
+8. `final` check
 
 ## 기본 명령
 
@@ -51,6 +51,6 @@ grep -R "Traceback\|TraCIException\|ERROR\|FAILED\|failed" outputs/smoke/logs | 
 
 ## 중단/재실행
 
-- 성공한 run은 같은 `output_dir`이면 스킵된다.
+- 성공한 run은 같은 `output_dir`이면 다시 안 돈다.
 - 다른 실험과 분리하려면 다른 `--outputs-root`를 쓰는 편이 낫다.
-- smoke는 검증용, final은 본실험이다.
+- `smoke`는 검증용, `final`은 본실험이다.

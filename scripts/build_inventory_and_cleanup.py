@@ -10,7 +10,7 @@ import csv
 import os
 from pathlib import Path
 
-BASE = Path("/Users/junlee/Desktop/2026-1/js")
+BASE = Path(__file__).resolve().parents[1]
 RESULT = BASE / "result"
 DATA = BASE / "data"
 ACTIVE_CSV = RESULT / "active/csv"

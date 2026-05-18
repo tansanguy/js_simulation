@@ -1,6 +1,6 @@
-# Result Guide
+# 결과 읽기
 
-결과는 `simulation_result.csv`와 `final_summary.csv` 두 층으로 본다.
+결과는 `simulation_result.csv`와 `final_summary.csv` 두 층으로 보면 된다.
 
 ## 폴더 구조
 
@@ -23,10 +23,10 @@ outputs/
 
 ## smoke vs final
 
-- `smoke`는 120초, seed 1개, 파이프라인 검증용이다.
+- `smoke`는 120초, seed 1개, 파이프라인 확인용이다.
 - `final`은 600초, seed 1~30, 본실험용이다.
-- `smoke` 결과는 정책 효과 증거가 아니다.
-- `final_summary.csv`가 최종 source-of-truth다.
+- `smoke` 결과는 정책 효과를 말하는 증거가 아니다.
+- `final_summary.csv`가 최종 기준 파일이다.
 
 ## `simulation_result.csv`
 
@@ -77,7 +77,7 @@ run 단위 결과다. 자주 보는 컬럼은 아래다.
 ## 해석
 
 - `pass`: 최종 보고에 사용 가능
-- `warning`: 쓸 수는 있으나 주석 필요
+- `warning`: 쓸 수는 있지만 주석이 필요함
 - `fail`: 제외
 - `exclude`: 구조상 최종 보고 대상이 아님
 

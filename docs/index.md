@@ -1,6 +1,6 @@
-# Docs Index
+# 문서 안내
 
-현재 팀 공용 문서는 아래 8개다.
+현재 팀 공용 문서는 아래 8개다. 새로 보는 사람은 위에서 아래 순서로 읽으면 된다.
 
 1. [`README.md`](../README.md)
 2. [`docs/01_SETUP.md`](01_SETUP.md)
@@ -14,9 +14,10 @@
 ## 현재 원칙
 
 - 이 문서 묶음이 현재 코드베이스와 정책의 기준이다.
-- `smoke`는 실행 검증용이다.
-- `final_summary.csv`가 최종 source-of-truth다.
+- `smoke`는 실행이 정상인지 확인하는 용도다.
+- `final_summary.csv`가 최종 기준 파일이다.
 - 레거시 문서는 `oldresult/archived_20260518_docs_legacy/docs/` 아래에만 둔다.
+- `SUMO_HOME`은 터미널을 새로 열 때마다 다시 설정한다.
 
 ## 레거시 위치
 

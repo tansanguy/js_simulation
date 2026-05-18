@@ -9,7 +9,7 @@ import csv
 from pathlib import Path
 from datetime import datetime
 
-BASE = Path("/Users/junlee/Desktop/2026-1/js")
+BASE = Path(__file__).resolve().parents[1]
 RUNS_DIR = BASE / "result/active/real_30seed_runs"
 SUMMARY_DIR = RUNS_DIR / "summary"
 SUMMARY_DIR.mkdir(parents=True, exist_ok=True)

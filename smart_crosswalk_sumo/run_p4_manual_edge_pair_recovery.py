@@ -935,12 +935,30 @@ def _write_smoke_command(out_dir: Path, name: str, candidate_csv: Path, net_file
         f"""#!/usr/bin/env bash
 set -euo pipefail
 
-cd {BASE_DIR}
+PROJECT_ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/../../.." && pwd)"
+cd "$PROJECT_ROOT"
 
-export SUMO_HOME="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO"
+if [[ -z "${{SUMO_HOME:-}}" ]]; then
+  SUMO_HOME="$(python3 - <<'PY'
+from smart_crosswalk_sumo.network_utils import resolve_sumo_home
+print(resolve_sumo_home() or "")
+PY
+)"
+fi
+if [[ -z "$SUMO_HOME" ]]; then
+  echo "SUMO_HOME not found" >&2
+  exit 1
+fi
+export SUMO_HOME
 export PATH="$SUMO_HOME/bin:$PATH"
-export PROJ_LIB="/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/framework/EclipseSUMO.framework/Resources/proj"
-export PYTHONPATH="{BASE_DIR}:${{PYTHONPATH:-}}"
+if [[ -z "${{PROJ_LIB:-}}" ]]; then
+  if [[ -d "$SUMO_HOME/share/proj" ]]; then
+    export PROJ_LIB="$SUMO_HOME/share/proj"
+  elif [[ -d "$SUMO_HOME/proj" ]]; then
+    export PROJ_LIB="$SUMO_HOME/proj"
+  fi
+fi
+export PYTHONPATH="$PROJECT_ROOT:${{PYTHONPATH:-}}"
 
 CSV="{candidate_csv.resolve()}"
 NET="{net_file.resolve()}"

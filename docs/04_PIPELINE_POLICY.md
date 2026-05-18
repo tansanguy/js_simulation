@@ -1,6 +1,6 @@
-# Pipeline Policy
+# 정책 기준
 
-이 문서는 왜 이렇게 돌리는지 적는다. 실행 순서보다 정책이 먼저다.
+이 문서는 왜 이렇게 돌리는지 적는 문서다. 실행 순서보다 정책이 먼저다.
 
 ## baseline
 
@@ -19,7 +19,7 @@
 - 총량은 `20,877 vph`다.
 - `600s` 기준 `3,480`대다.
 - 차량 타입은 `passenger`만 쓴다.
-- baseline/smart는 같은 vehicle route를 공유해야 한다.
+- `baseline`과 `smart`는 같은 vehicle route를 공유해야 한다.
 - `ROAD_RANK`는 실제 route bucket이 아니다.
 - road-group 값은 정책 메타데이터다.
 
@@ -30,7 +30,7 @@
 - 결측은 생활인구 기반 보정으로 메운다.
 - `final_pedestrian_600s = round(base_pedestrian_600s * 1.2)`다.
 
-dong-level elderly ratio는 현재 정책 값으로 아래를 쓴다.
+동 단위 고령자 비율은 현재 정책 값으로 아래를 쓴다.
 
 - 회현동: `0.2947`
 - 청구동: `0.2478`
@@ -51,5 +51,5 @@ dong-level elderly ratio는 현재 정책 값으로 아래를 쓴다.
 ## 결과 기준
 
 - `outputs/final/aggregate/final_summary.csv`가 최종 source-of-truth다.
-- smoke는 실행 유효성 확인만 한다.
-- coverage는 broad distribution 검증이다. uniform every edge 의미가 아니다.
+- `smoke`는 실행 유효성 확인만 한다.
+- coverage는 broad distribution 검증이다. 모든 edge에 균일 분포를 뜻하지는 않는다.

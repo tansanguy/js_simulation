@@ -515,12 +515,30 @@ def main() -> None:
         f"""#!/usr/bin/env bash
 set -euo pipefail
 
-cd /Users/junlee/Desktop/2026-1/js
+PROJECT_ROOT=\"$(cd \"$(dirname \"${{BASH_SOURCE[0]}}\")/../../..\" && pwd)\"
+cd \"$PROJECT_ROOT\"
 
-export SUMO_HOME=\"/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO\"
+if [[ -z \"${{SUMO_HOME:-}}\" ]]; then
+  SUMO_HOME=\"$(python3 - <<'PY'
+from smart_crosswalk_sumo.network_utils import resolve_sumo_home
+print(resolve_sumo_home() or "")
+PY
+)\"
+fi
+if [[ -z \"$SUMO_HOME\" ]]; then
+  echo \"SUMO_HOME not found\" >&2
+  exit 1
+fi
+export SUMO_HOME
 export PATH=\"$SUMO_HOME/bin:$PATH\"
-export PROJ_LIB=\"/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/framework/EclipseSUMO.framework/Resources/proj\"
-export PYTHONPATH=\"/Users/junlee/Desktop/2026-1/js:${{PYTHONPATH:-}}\"
+if [[ -z \"${{PROJ_LIB:-}}\" ]]; then
+  if [[ -d \"$SUMO_HOME/share/proj\" ]]; then
+    export PROJ_LIB=\"$SUMO_HOME/share/proj\"
+  elif [[ -d \"$SUMO_HOME/proj\" ]]; then
+    export PROJ_LIB=\"$SUMO_HOME/proj\"
+  fi
+fi
+export PYTHONPATH=\"$PROJECT_ROOT:${{PYTHONPATH:-}}\"
 
 CSV=\"{(out_dir / 'remaining_p1_signal_fix_candidate_table.csv').resolve()}\"
 NET=\"{net_file.resolve()}\"
@@ -549,10 +567,11 @@ python3 -m smart_crosswalk_sumo.run_phase6_recovery_smoke \\
     run_smoke_sh.chmod(0o755)
 
     check_smoke_sh = out_dir / "command_to_check_remaining_p1_seed1_smoke.sh"
-    check_script = """#!/usr/bin/env bash
+check_script = """#!/usr/bin/env bash
 set -euo pipefail
 
-cd /Users/junlee/Desktop/2026-1/js
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+cd "$PROJECT_ROOT"
 
 python3 - <<'PY'
 import pandas as pd
@@ -793,11 +812,29 @@ PY
     cmd_file.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "cd /Users/junlee/Desktop/2026-1/js\n"
-        "export SUMO_HOME=\"/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO\"\n"
+        "PROJECT_ROOT=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/../../..\" && pwd)\"\n"
+        "cd \"$PROJECT_ROOT\"\n"
+        "if [[ -z \"${SUMO_HOME:-}\" ]]; then\n"
+        "  SUMO_HOME=\"$(python3 - <<'PY'\n"
+        "from smart_crosswalk_sumo.network_utils import resolve_sumo_home\n"
+        "print(resolve_sumo_home() or \"\")\n"
+        "PY\n"
+        ")\"\n"
+        "fi\n"
+        "if [[ -z \"$SUMO_HOME\" ]]; then\n"
+        "  echo \"SUMO_HOME not found\" >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        "export SUMO_HOME\n"
         "export PATH=\"$SUMO_HOME/bin:$PATH\"\n"
-        "export PROJ_LIB=\"/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/framework/EclipseSUMO.framework/Resources/proj\"\n"
-        "export PYTHONPATH=\"/Users/junlee/Desktop/2026-1/js:${PYTHONPATH:-}\"\n"
+        "if [[ -z \"${PROJ_LIB:-}\" ]]; then\n"
+        "  if [[ -d \"$SUMO_HOME/share/proj\" ]]; then\n"
+        "    export PROJ_LIB=\"$SUMO_HOME/share/proj\"\n"
+        "  elif [[ -d \"$SUMO_HOME/proj\" ]]; then\n"
+        "    export PROJ_LIB=\"$SUMO_HOME/proj\"\n"
+        "  fi\n"
+        "fi\n"
+        "export PYTHONPATH=\"$PROJECT_ROOT:${PYTHONPATH:-}\"\n"
         f"python3 -m smart_crosswalk_sumo.run_remaining22_p1_signal_fix --integrity-dir {integrity_dir.resolve()}\n",
         encoding="utf-8",
     )

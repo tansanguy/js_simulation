@@ -11,6 +11,8 @@ import pandas as pd
 import numpy as np
 import sumolib
 
+from smart_crosswalk_sumo.network_utils import project_root
+
 class SmartFriendlyNetworkBuilder:
     def __init__(self):
         self.output_dir = None
@@ -26,13 +28,14 @@ class SmartFriendlyNetworkBuilder:
 
     def setup(self):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = Path("/Users/junlee/Desktop/2026-1/js/result") / f"smart_friendly_network_{ts}"
+        self.output_dir = project_root() / "result" / f"smart_friendly_network_{ts}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Output directory: {self.output_dir}")
 
-        self.base_network_path = Path("/Users/junlee/Desktop/2026-1/js/result/junggu_osm_network_20260513_184417/junggu_generated.net.xml")
-        self.t2_csv_path = Path("/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/data/T2_crosswalk_features.csv")
-        self.existing_con_path = Path("/Users/junlee/Desktop/2026-1/js/result/t2_generated_crosswalks_20260513_221249/generated_crossings.con.xml")
+        root = project_root()
+        self.base_network_path = root / "result" / "junggu_osm_network_20260513_184417" / "junggu_generated.net.xml"
+        self.t2_csv_path = root / "smart_crosswalk_sumo" / "data" / "T2_crosswalk_features.csv"
+        self.existing_con_path = root / "result" / "t2_generated_crosswalks_20260513_221249" / "generated_crossings.con.xml"
 
     def load_base_network(self):
         print("\n=== Loading base network ===")

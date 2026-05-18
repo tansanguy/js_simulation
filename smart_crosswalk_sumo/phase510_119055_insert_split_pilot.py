@@ -8,6 +8,8 @@ import pandas as pd
 import sumolib
 import math
 
+from smart_crosswalk_sumo.network_utils import project_root
+
 class Phase510InsertSplitPilot:
     def __init__(self):
         self.output_dir = None
@@ -20,11 +22,12 @@ class Phase510InsertSplitPilot:
 
     def setup(self):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = Path("/Users/junlee/Desktop/2026-1/js/result") / f"phase510_119055_insert_split_{ts}"
+        root = project_root()
+        self.output_dir = root / "result" / f"phase510_119055_insert_split_{ts}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Output directory: {self.output_dir}")
 
-        self.base_network_path = Path("/Users/junlee/Desktop/2026-1/js/result/junggu_osm_network_20260513_184417/junggu_generated.net.xml")
+        self.base_network_path = root / "result" / "junggu_osm_network_20260513_184417" / "junggu_generated.net.xml"
 
     def load_network(self):
         print("\n=== Loading base network ===")
@@ -38,7 +41,7 @@ class Phase510InsertSplitPilot:
 
     def review_snap_pilot(self):
         print("\n=== STEP 0: Track A Snap Pilot Review ===")
-        snap_val_path = Path("/Users/junlee/Desktop/2026-1/js/result/phase59_smart_network_pilot_20260514_001745/snap_pilot_linkindex_validation.csv")
+        snap_val_path = project_root() / "result" / "phase59_smart_network_pilot_20260514_001745" / "snap_pilot_linkindex_validation.csv"
 
         if snap_val_path.exists():
             df = pd.read_csv(snap_val_path)

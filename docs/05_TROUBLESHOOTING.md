@@ -1,4 +1,4 @@
-# Troubleshooting
+# 문제 해결
 
 막히면 먼저 `outputs/*/logs`를 본다. 그다음 `audit`를 본다.
 
@@ -29,6 +29,8 @@ bash commands/verify.sh
 export SUMO_HOME="/path/to/your/SUMO_HOME"
 export PATH="$SUMO_HOME/bin:$PATH"
 ```
+
+이 설정은 터미널을 새로 열 때마다 다시 해줘야 한다.
 
 ## `pedestrian_crossing_count = 0`
 

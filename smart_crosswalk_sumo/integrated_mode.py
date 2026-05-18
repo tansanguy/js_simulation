@@ -17,6 +17,7 @@ try:
         build_fixed_departure_times,
         build_fixed_type_assignments,
         resolve_demand_scenario_name,
+        resolve_pedestrian_type_counts,
     )
     from .build_networks import build_network
     from .generate_demand import (
@@ -58,6 +59,7 @@ except ImportError:
         build_fixed_departure_times,
         build_fixed_type_assignments,
         resolve_demand_scenario_name,
+        resolve_pedestrian_type_counts,
     )
     from build_networks import build_network
     from generate_demand import (
@@ -1859,7 +1861,13 @@ def check_valid_smart_crosswalks(
         print(f"Top {num_valid_crosswalks} valid candidates:")
         print(valid_df[["crosswalk_id", "implementation_status", "initial_match_distance_m", "tls_id"]].head(num_valid_crosswalks))
 
-def _ped_vtypes(parent: ET.Element, normal_speed: float, elderly_speed: float, elderly_startup_delay: float) -> None:
+def _ped_vtypes(
+    parent: ET.Element,
+    normal_speed: float,
+    elderly_speed: float,
+    slow_elderly_speed: float,
+    elderly_startup_delay: float,
+) -> None:
     ET.SubElement(
         parent,
         "vType",
@@ -1888,6 +1896,21 @@ def _ped_vtypes(parent: ET.Element, normal_speed: float, elderly_speed: float, e
             "color": "255,0,0",
         },
     )
+    ET.SubElement(
+        parent,
+        "vType",
+        {
+            "id": "slow_elderly",
+            "vClass": "pedestrian",
+            "minGap": "0.25",
+            "width": "0.5",
+            "length": "0.25",
+            "maxSpeed": f"{slow_elderly_speed:.3f}",
+            "speedDev": "0.10",
+            "startupDelay": f"{elderly_startup_delay:.2f}",
+            "color": "255,128,0",
+        },
+    )
 
 
 def generate_integrated_pedestrian_demand(
@@ -1905,6 +1928,7 @@ def generate_integrated_pedestrian_demand(
             root,
             float(first["normal_ped_speed_mps"]),
             float(first["elderly_ped_speed_mps"]),
+            float(first.get("slow_elderly_ped_speed_mps", 0.73)),
             float(first["elderly_startup_delay_sec"]),
         )
     count_by_crosswalk: dict[str, int] = {}
@@ -1919,7 +1943,11 @@ def generate_integrated_pedestrian_demand(
         elderly_ratio = float(params["elderly_ratio"])
         generated_count = int(params.get("generated_pedestrian_count", 0))
         depart_times = build_fixed_departure_times(generated_count, sim_duration)
-        type_assignments = build_fixed_type_assignments(generated_count, elderly_ratio)
+        type_assignments = build_fixed_type_assignments(
+            generated_count,
+            elderly_ratio,
+            slow_elderly_share_within_elderly=float(params.get("slow_elderly_share_within_elderly", 0.20)),
+        )
         for ped_idx, (t, person_type) in enumerate(zip(depart_times, type_assignments, strict=False)):
             person = ET.SubElement(
                 root,
@@ -2055,11 +2083,14 @@ def generate_integrated_demand(
                 }
             )
 
-    shared_calibrator_path, shared_audits = build_shared_calibrator_additional(
-        manifest_rows,
-        counts_df,
-        integrated_dir / "calibrator_shared.add.xml",
-    )
+    if scenario_name == DEFAULT_DEMAND_SCENARIO_NAME:
+        shared_calibrator_path, shared_audits = None, []
+    else:
+        shared_calibrator_path, shared_audits = build_shared_calibrator_additional(
+            manifest_rows,
+            counts_df,
+            integrated_dir / "calibrator_shared.add.xml",
+        )
     audit_rows.extend(shared_audits)
 
     for seed in seeds:
@@ -2180,7 +2211,24 @@ def generate_integrated_demand(
                     "pedestrian_scale": params["pedestrian_scale"],
                     "pedestrian_count_600s": params["pedestrian_count_600s"],
                     "generated_pedestrian_count": ped_counts.get(cw_id, 0),
+                    "normal_pedestrian_count": resolve_pedestrian_type_counts(
+                        ped_counts.get(cw_id, 0),
+                        float(params["elderly_ratio"]),
+                        slow_elderly_share_within_elderly=float(params.get("slow_elderly_share_within_elderly", 0.20)),
+                    )["adult"],
+                    "elderly_pedestrian_count": resolve_pedestrian_type_counts(
+                        ped_counts.get(cw_id, 0),
+                        float(params["elderly_ratio"]),
+                        slow_elderly_share_within_elderly=float(params.get("slow_elderly_share_within_elderly", 0.20)),
+                    )["elderly"],
+                    "slow_elderly_pedestrian_count": resolve_pedestrian_type_counts(
+                        ped_counts.get(cw_id, 0),
+                        float(params["elderly_ratio"]),
+                        slow_elderly_share_within_elderly=float(params.get("slow_elderly_share_within_elderly", 0.20)),
+                    )["slow_elderly"],
                     "generated_vehicle_count": generated_vehicle_count,
+                    "generated_vehicle_route_count": generated_vehicle_count,
+                    "generated_pedestrian_route_count": ped_counts.get(cw_id, 0),
                     "generated_vehicle_route_file": str(vehicle_file.resolve()),
                     "generated_vehicle_trip_file": str(vehicle_file.with_name(vehicle_file.name.replace(".rou.xml", ".trips.xml")).resolve()),
                     "vehicle_net_file": str(net_file.resolve()),
@@ -2189,10 +2237,22 @@ def generate_integrated_demand(
                     "unique_depart_edges": route_summary["unique_depart_edges"],
                     "unique_arrival_edges": route_summary["unique_arrival_edges"],
                     "unique_route_edges": route_summary["unique_route_edges"],
+                    "used_vehicle_edges": route_summary["used_vehicle_edges"],
                     "network_edge_coverage_ratio": route_summary["network_edge_coverage_ratio"],
+                    "route_bbox_area_ratio": route_summary["route_bbox_area_ratio"],
+                    "major_road_flow_coverage": (
+                        float(params["road_allocated_count_600s"]) / float(params["total_vehicle_count_600s"])
+                        if float(params["total_vehicle_count_600s"]) > 0
+                        else 0.0
+                    ),
                     "pedestrian_scale_source": params["pedestrian_scale_source"],
                     "ped_lambda": params["ped_lambda"],
                     "elderly_ratio": params["elderly_ratio"],
+                    "elderly_ratio_source": params["elderly_ratio_source"],
+                    "slow_elderly_share_within_elderly": params["slow_elderly_share_within_elderly"],
+                    "normal_ped_speed_mps": params["normal_ped_speed_mps"],
+                    "elderly_ped_speed_mps": params["elderly_ped_speed_mps"],
+                    "slow_elderly_ped_speed_mps": params["slow_elderly_ped_speed_mps"],
                     "ped_count": ped_counts.get(cw_id, 0),
                     "pedestrian_arrival_rate_multiplier": params["pedestrian_arrival_rate_multiplier"],
                     "vehicle_volume_multiplier": params["vehicle_volume_multiplier"],

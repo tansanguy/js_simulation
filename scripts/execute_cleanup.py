@@ -12,7 +12,7 @@ from pathlib import Path
 import csv
 from datetime import datetime
 
-BASE = Path("/Users/junlee/Desktop/2026-1/js")
+BASE = Path(__file__).resolve().parents[1]
 RESULT = BASE / "result"
 DATA = BASE / "data"
 RESULT_OLD = RESULT / "old"

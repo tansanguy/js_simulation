@@ -14,6 +14,9 @@ from smart_crosswalk_sumo.collect_metrics import collect_all
 from smart_crosswalk_sumo.generate_demand import generate_for_candidates
 
 
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+
+
 def remove_lane_count_from_metadata(nets_src: Path, nets_dst: Path) -> None:
     if nets_dst.exists():
         shutil.rmtree(nets_dst)
@@ -297,12 +300,12 @@ def run_validation(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--run_dir", required=True)
-    ap.add_argument("--t1", default="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/data/T1_accident_crosswalk.csv")
-    ap.add_argument("--t2", default="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/data/T2_crosswalk_features.csv")
+    ap.add_argument("--t1", default=str(PROJECT_DIR / "smart_crosswalk_sumo" / "data" / "T1_accident_crosswalk.csv"))
+    ap.add_argument("--t2", default=str(PROJECT_DIR / "smart_crosswalk_sumo" / "data" / "T2_crosswalk_features.csv"))
     ap.add_argument("--top_n", type=int, default=10)
     ap.add_argument("--network_radius_m", type=float, default=None)
     ap.add_argument("--network_mode", default="expanded")
-    ap.add_argument("--admin_polygon_path", default="/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/data/junggu_admin_boundary.geojson")
+    ap.add_argument("--admin_polygon_path", default=str(PROJECT_DIR / "smart_crosswalk_sumo" / "data" / "junggu_admin_boundary.geojson"))
     ap.add_argument("--buffer_m", type=float, default=1000.0)
     ap.add_argument("--sim_duration", type=int, default=600)
     ap.add_argument("--warmup", type=int, default=120)

@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
 
+from smart_crosswalk_sumo.network_utils import project_root
+
 class PhaseNaiveAnalyzer:
     def __init__(self):
         self.output_dir = None
@@ -31,12 +33,12 @@ class PhaseNaiveAnalyzer:
 
     def setup_output_dir(self):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = Path("/Users/junlee/Desktop/2026-1/js/result") / f"t2_tls_aware_regeneration_plan_{ts}"
+        self.output_dir = project_root() / "result" / f"t2_tls_aware_regeneration_plan_{ts}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Output directory: {self.output_dir}")
 
     def find_input_files(self):
-        result_dir = Path("/Users/junlee/Desktop/2026-1/js/result")
+        result_dir = project_root() / "result"
 
         strict_candidates = sorted(result_dir.glob("t2_generated_crosswalk_tls_validation_strict_*/"))
         if strict_candidates:
@@ -53,7 +55,7 @@ class PhaseNaiveAnalyzer:
             gen_dir = generated_candidates[-1]
             self.network_xml = gen_dir / "generated_network.net.xml"
 
-        self.t2_features_csv = Path("/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/data/T2_crosswalk_features.csv")
+        self.t2_features_csv = project_root() / "smart_crosswalk_sumo" / "data" / "T2_crosswalk_features.csv"
 
         print(f"Strict validation CSV: {self.strict_val_csv}")
         print(f"Control class CSV: {self.control_class_csv}")

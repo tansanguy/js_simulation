@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="/Users/junlee/Desktop/2026-1/js"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESULT_ROOT="$BASE/result"
 ACTIVE_ROOT="$RESULT_ROOT/active"
 OLDRESULT_ROOT="$BASE/oldresult"

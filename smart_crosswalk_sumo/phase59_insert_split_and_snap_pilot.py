@@ -11,6 +11,8 @@ import numpy as np
 import sumolib
 import math
 
+from smart_crosswalk_sumo.network_utils import project_root
+
 class Phase59SnapInsertSplitPilot:
     def __init__(self):
         self.output_dir = None
@@ -26,14 +28,15 @@ class Phase59SnapInsertSplitPilot:
 
     def setup(self):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_dir = Path("/Users/junlee/Desktop/2026-1/js/result") / f"phase59_smart_network_pilot_{ts}"
+        root = project_root()
+        self.output_dir = root / "result" / f"phase59_smart_network_pilot_{ts}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Output directory: {self.output_dir}")
 
-        self.base_network_path = Path("/Users/junlee/Desktop/2026-1/js/result/junggu_osm_network_20260513_184417/junggu_generated.net.xml")
-        self.t2_csv_path = Path("/Users/junlee/Desktop/2026-1/js/smart_crosswalk_sumo/data/T2_crosswalk_features.csv")
-        self.snap_feasibility_path = Path("/Users/junlee/Desktop/2026-1/js/result/smart_friendly_network_20260514_001343/tls_snap_feasibility.csv")
-        self.candidate_junctions_path = Path("/Users/junlee/Desktop/2026-1/js/result/smart_friendly_network_20260514_001343/smart_candidate_junctions.csv")
+        self.base_network_path = root / "result" / "junggu_osm_network_20260513_184417" / "junggu_generated.net.xml"
+        self.t2_csv_path = root / "smart_crosswalk_sumo" / "data" / "T2_crosswalk_features.csv"
+        self.snap_feasibility_path = root / "result" / "smart_friendly_network_20260514_001343" / "tls_snap_feasibility.csv"
+        self.candidate_junctions_path = root / "result" / "smart_friendly_network_20260514_001343" / "smart_candidate_junctions.csv"
 
     def load_data(self):
         print("\n=== Loading data ===")
@@ -103,7 +106,7 @@ class Phase59SnapInsertSplitPilot:
     def generate_snap_pilot_crossing_xml(self, snap_top):
         print("\n=== Generating snap pilot crossing XML ===")
 
-        existing_con_path = Path("/Users/junlee/Desktop/2026-1/js/result/t2_generated_crosswalks_20260513_221249/generated_crossings.con.xml")
+        existing_con_path = project_root() / "result" / "t2_generated_crosswalks_20260513_221249" / "generated_crossings.con.xml"
         tree = ET.parse(existing_con_path)
         root = tree.getroot()
 

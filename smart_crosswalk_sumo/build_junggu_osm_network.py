@@ -12,6 +12,8 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
+from smart_crosswalk_sumo.network_utils import resolve_sumo_home
+
 try:
     import sumolib
 except ImportError:
@@ -95,9 +97,21 @@ class T2OSMNetworkBuilder:
         bbox_str = f"{self.buffered_bbox[0]},{self.buffered_bbox[1]},{self.buffered_bbox[2]},{self.buffered_bbox[3]}"
 
         # osmGet.py 사용
-        osmget_path = Path("/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/share/sumo/tools/osmGet.py")
+        sumo_home = resolve_sumo_home()
+        if not sumo_home:
+            raise RuntimeError(
+                "SUMO_HOME not found. Set SUMO_HOME or install SUMO in a standard location."
+            )
+        osmget_path = None
+        for candidate in [
+            Path(sumo_home) / "tools" / "osmGet.py",
+            Path(sumo_home) / "share" / "sumo" / "tools" / "osmGet.py",
+        ]:
+            if candidate.exists():
+                osmget_path = candidate
+                break
 
-        if osmget_path.exists():
+        if osmget_path:
             print(f"  using osmGet.py: {osmget_path}")
             cmd = [
                 sys.executable,
@@ -184,7 +198,8 @@ class T2OSMNetworkBuilder:
 
         # SUMO_HOME 설정 (macOS Framework 구조)
         env = os.environ.copy()
-        env["SUMO_HOME"] = "/Library/Frameworks/EclipseSUMO.framework/Versions/1.26.0/EclipseSUMO/share/sumo"
+        env["SUMO_HOME"] = sumo_home
+        env["PATH"] = f"{Path(sumo_home) / 'bin'}:{env.get('PATH', '')}"
 
         # netconvert 명령
         cmd = [
@@ -200,13 +215,13 @@ class T2OSMNetworkBuilder:
         ]
 
         print(f"  command: netconvert --osm-files ... --output-file ...")
-        print(f"  SUMO_HOME: {env['SUMO_HOME']}")
+        print(f"  SUMO_HOME: {env.get('SUMO_HOME', '(unset)')}")
         print(f"  OSM file: {osm_abs}")
         print(f"  Output: {net_abs}")
 
         with open(netconvert_log, "w") as log_f:
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-            log_f.write(f"SUMO_HOME: {env['SUMO_HOME']}\n")
+            log_f.write(f"SUMO_HOME: {env.get('SUMO_HOME', '(unset)')}\n")
             log_f.write(f"command: {' '.join(cmd)}\n")
             log_f.write(f"returncode: {result.returncode}\n")
             log_f.write(f"stdout:\n{result.stdout[-2000:]}\n")  # 마지막 2000자만

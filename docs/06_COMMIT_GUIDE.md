@@ -1,6 +1,6 @@
-# Commit Guide
+# 커밋 안내
 
-커밋 전에는 좁게 본다. broad stage 안 쓴다.
+커밋할 때는 범위를 좁게 본다. broad stage는 쓰지 않는다.
 
 ## 먼저 확인
 
@@ -28,7 +28,7 @@ git status --short
 
 ## stage 전
 
-1. exact file list를 먼저 출력한다.
+1. 정확한 파일 목록을 먼저 본다.
 2. 필요한 파일만 고른다.
 3. `git add .`와 `git add -A`는 쓰지 않는다.
 

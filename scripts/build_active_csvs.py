@@ -11,7 +11,7 @@ import os
 import shutil
 from pathlib import Path
 
-BASE = Path("/Users/junlee/Desktop/2026-1/js")
+BASE = Path(__file__).resolve().parents[1]
 ACTIVE_CSV = BASE / "result/active/csv"
 DATA_ACTIVE = BASE / "data/active"
 ACTIVE_CSV.mkdir(parents=True, exist_ok=True)

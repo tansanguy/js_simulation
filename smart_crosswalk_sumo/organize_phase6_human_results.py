@@ -1347,9 +1347,10 @@ def _write_readme(output_dir: Path, volume: int) -> str:
 ## 재생성 명령
 
 ```bash
-cd /Users/junlee/Desktop/2026-1/js
+PROJECT_ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-PYTHONPATH="/Users/junlee/Desktop/2026-1/js:${{PYTHONPATH:-}}" \\
+PYTHONPATH="$PROJECT_ROOT:${{PYTHONPATH:-}}" \\
 python3 smart_crosswalk_sumo/organize_phase6_human_results.py \\
   --experiment-root result/phase6_transition_after_recovery_20260514_220549/phase6_vehicle_experiment_300_30seed \\
   --transition-root result/phase6_transition_after_recovery_20260514_220549 \\
