@@ -28,6 +28,10 @@ outputs/
 - `smoke` 결과는 정책 효과를 말하는 증거가 아니다.
 - `final_summary.csv`가 최종 기준 파일이다.
 
+cut-off / graduation sequential-light 결과는 별도 층으로 읽는다.
+이 경로는 계산 시간 절감을 위한 screening이며, `sim_duration=540s`와 light output profile을 기준으로 한다.
+정책 판정의 source-of-truth는 `paired_significance_analysis.py --output`으로 만든 cutoff/graduation summary CSV다.
+
 ## `simulation_result.csv`
 
 run 단위 결과다. 자주 보는 컬럼은 아래다.
@@ -35,6 +39,8 @@ run 단위 결과다. 자주 보는 컬럼은 아래다.
 - `scenario`: `baseline` 또는 `smart`
 - `seed`: run seed
 - `pedestrian_crossing_count`: 관측된 보행자 횡단 수
+- `pedestrian_clearance_failure_count`: 기대 보행 횡단 중 완료되지 않은 수
+- `unfinished_crossing_count`: 미완료 횡단 수
 - `extension_count`: smart 신호 연장 횟수
 - `vehicle_route_count`: 차량 route 수
 - `unique_vehicle_route_count`: 중복 제거 route 수
@@ -44,6 +50,10 @@ run 단위 결과다. 자주 보는 컬럼은 아래다.
 - `local_500m_vehicle_count`: 후보 주변 500m 차량량
 - `pet_available`: PET 가능 여부
 - `pet_unavailable_reason`: PET가 불가하면 사유
+
+`pedestrian_wait_delta` 또는 평균 보행자 대기시간은 secondary metric이다.
+primary safety endpoint는 clearance failure, unfinished crossing, low-PET risk proxy의 paired delta로 해석한다.
+`extension_count`는 효과 metric이 아니라 smart policy가 실제로 trigger됐는지 보는 exposure/sanity metric이다.
 
 ## `final_summary.csv`
 
@@ -73,6 +83,57 @@ run 단위 결과다. 자주 보는 컬럼은 아래다.
 - `baseline_accident_risk_estimate_mean`
 - `smart_accident_risk_estimate_mean`
 - `accident_risk_estimate_delta_mean`
+
+## cutoff / graduation summary CSV
+
+`smart_crosswalk_sumo.paired_significance_analysis`의 `--output`으로 생성되는 CSV다.
+후속 seed 실행 여부를 판단하는 기준 파일이며, 기존 `final_summary.csv`와 역할이 다르다.
+
+주요 칼럼:
+
+- `candidate_id`: 후보 ID
+- `checkpoint`: 현재 seed checkpoint
+- `n_seed`: paired delta 계산에 사용된 seed 수
+- `primary_metric`: 기본값은 `pedestrian_clearance_failure_delta`
+- `primary_metric_source`: 실제 사용한 원천 칼럼. clearance가 없거나 모두 비어 있으면 unfinished 또는 low-PET proxy로 fallback될 수 있다.
+- `primary_delta_mean`: `smart - baseline`. 음수면 safety proxy 개선 방향이다.
+- `primary_improvement_mean`: `baseline - smart`. 양수면 개선 방향이다.
+- `pedestrian_wait_improvement`: secondary wait metric
+- `smart_extension_count_total`: smart extension 총 횟수
+- `baseline_extension_count_total`: baseline extension 총 횟수. 0이어야 한다.
+- `extension_trigger_rate`: seed 중 smart extension이 관측된 비율
+- `traffic_gate_pass`: traffic cost gate 통과 여부
+- `cut_round`: `n5` 또는 `n10`
+- `cut_applied`: 비율 cut-off 적용 여부
+- `graduation_round`: `n12`, `n15`, `n18`, `n20`, `n21`~`n30`
+- `pass_cut_keep_recheck`: `PASS`, `CUT`, `KEEP`, `RECHECK`
+- `next_checkpoint`: KEEP 후보의 다음 checkpoint
+- `stop_reason`: 상태 판정 사유
+- `quality_reasons`: missing pair, route hash mismatch, extension policy violation 등 RECHECK 근거
+
+상태 해석:
+
+- `PASS`: qualified 후보 pool에 유지하고 추가 seed 실행을 중단한다.
+- `CUT`: 후보 pool에서 제외한다.
+- `KEEP`: 다음 seed 또는 다음 checkpoint로 계속 실행한다.
+- `RECHECK`: 데이터/구현 확인 대상이며 자동 탈락이 아니다.
+
+상태별 candidate CSV:
+
+- `keep_candidates.csv`: 다음 seed 실행 입력. 이 파일만 다음 실행에 넘긴다.
+- `pass_candidates.csv`: qualified pool 보존용. 다음 seed 실행 입력이 아니다.
+- `cut_candidates.csv`: 제외 후보 기록용.
+- `recheck_candidates.csv`: 별도 검토 대상 기록용.
+
+## 최종 결과 파일 무결성
+
+- `simulation_result.csv`: run 1개, seed 1개 기준 원천 결과다. 없으면 해당 run은 무결하지 않다.
+- `simulation_results_seed.csv`: `simulation_result.csv`와 같은 seed-level compatibility alias다.
+- `benchmark_timing.json`: run 성공 여부, 실패 case 수, baseline/smart row 수를 확인한다. 없으면 RECHECK다.
+- `route_demand_manifest.csv`: route/demand hash 공유 확인용이다. 없거나 hash가 비어 있으면 paired comparison은 RECHECK다.
+- cutoff/graduation summary CSV: PASS/CUT/KEEP/RECHECK 판정의 기준 파일이다.
+- keep/pass/cut/recheck candidate CSV: 후속 실행과 보고 pool을 분리하는 운영 파일이다.
+- `generate_reports.py` 결과물: 보고서와 사람이 읽는 요약용이다. sequential stopping 판정은 paired summary CSV를 우선한다.
 
 ## 해석
 

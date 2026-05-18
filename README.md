@@ -13,6 +13,10 @@ commands/*.sh
 → outputs/final/aggregate/final_summary.csv
 ```
 
+cut-off / graduation 검토는 full 30seed 실행과 분리된 sequential-light 흐름이다.
+이 흐름은 1회 5초 보행자 녹색 연장 정책을 paired comparison으로 평가하며, primary endpoint는 보행자 평균 대기시간이 아니라 clearance failure / unfinished crossing / low-PET risk proxy다.
+`PASS`는 qualified 후보 pool 유지 및 추가 seed 중단, `CUT`은 후보 pool 제외, `KEEP`은 다음 seed 실행, `RECHECK`는 데이터/구현 확인 대상이다.
+
 ## 바로 쓰는 명령
 
 ```bash
@@ -38,6 +42,8 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_
 ```
 
 전체 그룹을 순서대로 돌릴 때는 아래를 쓴다.
+
+현재 `command_to_run_30seed_all_groups.sh`는 `p1_p4_recovery_6`를 건너뛴다. 이 그룹은 개별 명령으로 따로 돌린다.
 
 ```bash
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all_groups.sh
@@ -72,7 +78,10 @@ export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
 - `smoke`는 실행 확인용이다.
 - `final`은 본실험이다.
+- sequential-light 실행은 `sim_duration=540`, `--output-profile light`, KEEP-only candidate CSV를 기준으로 한다.
 - 그룹별 30seed 실행은 `result/active/real_30seed_runs_sampled10/commands/*.sh`를 쓴다.
 - `baseline`과 `smart`는 같은 vehicle route를 써야 한다.
+- `pedestrian_wait_delta`는 secondary metric이다.
+- `extension_count`는 효과 metric이 아니라 policy exposure / trigger sanity check다.
 - `outputs/`와 `result/active/nets/*.net.xml`은 커밋 대상이 아니다.
 - 새 도로망 생성 설명은 현재 문서에서 쓰지 않는다.

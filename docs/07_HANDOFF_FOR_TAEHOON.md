@@ -59,14 +59,15 @@ cp result/active/nets/*.xml "$PROJECT_ROOT/result/active/nets/"
 
 ## 3. 실행 우선순위
 
-태훈님은 아래 순서로 돌리면 된다. 숫자는 `total_runs` 기준이다.
+태훈님은 아래 순서로 돌리면 된다. 숫자는 현재 `all_groups` wrapper가 실제로 포함하는 그룹 기준이다.
 
 | 우선순위 | 그룹 | 총 시뮬레이션 수 | 실행 명령 |
 |---|---|---:|---|
 | 1 | `current_main_12` | 390 | `bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_current_main_12.sh` |
 | 2 | `signal_fix_9` | 300 | `bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_signal_fix_9.sh` |
 | 3 | `generated_signal_7` | 240 | `bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_generated_signal_7.sh` |
-| 4 | `p1_p4_recovery_6` | 210 | `bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_p4_recovery_6.sh` |
+
+`p1_p4_recovery_6`는 현재 wrapper에서 건너뛴다. 이 그룹은 별도 명령으로만 돌린다.
 
 전체를 순서대로 이어서 돌리려면 아래 하나를 쓰면 된다.
 
@@ -85,7 +86,7 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_sig
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_generated_signal_7.sh
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_p4_recovery_6.sh
 ```
-준혁: 태훈님 돌릴 우선순위 순으로 적어놨습니다. 저는 p1_p4 recovery 부터 Azure에서 돌릴게요
+
 ## 5. 각 그룹 입력
 
 그룹별 입력은 아래처럼 짝이 맞는다.

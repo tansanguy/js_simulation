@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -60,6 +61,16 @@ class Candidate:
 def _mean(values: list[float]) -> float:
     arr = np.asarray(values, dtype=float)
     return float(np.nanmean(arr)) if arr.size else float("nan")
+
+
+def _sha256_file(path: Path | None) -> str:
+    if path is None or not path.exists():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _percentile(values: list[float], q: float) -> float:
@@ -716,6 +727,7 @@ def _write_tripinfo_ready_sumocfg(
     step_length: float,
     out_dir: Path,
     scenario: str,
+    enable_ssm: bool = True,
 ) -> Path:
     route_files = [str(ped_file)]
     if veh_file is not None:
@@ -724,6 +736,20 @@ def _write_tripinfo_ready_sumocfg(
     statistics_path = out_dir / f"phase6_smoke_{scenario}_statistics.xml"
     collision_path = out_dir / f"phase6_smoke_{scenario}_collisions.xml"
     ssm_path = out_dir / f"phase6_smoke_{scenario}_ssm.xml"
+    ssm_content = (
+        f'''
+  <ssm_device>
+    <device.ssm.probability value="1"/>
+    <device.ssm.deterministic value="true"/>
+    <device.ssm.measures value="PET"/>
+    <device.ssm.extratime value="5"/>
+    <device.ssm.range value="50"/>
+    <device.ssm.write-na value="true"/>
+    <device.ssm.file value="{ssm_path}"/>
+  </ssm_device>'''
+        if enable_ssm
+        else ""
+    )
     content = f'''<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <input>
@@ -749,15 +775,7 @@ def _write_tripinfo_ready_sumocfg(
     <no-step-log value="true"/>
     <no-warnings value="false"/>
   </report>
-  <ssm_device>
-    <device.ssm.probability value="1"/>
-    <device.ssm.deterministic value="true"/>
-    <device.ssm.measures value="PET"/>
-    <device.ssm.extratime value="5"/>
-    <device.ssm.range value="50"/>
-    <device.ssm.write-na value="true"/>
-    <device.ssm.file value="{ssm_path}"/>
-  </ssm_device>
+{ssm_content}
 </configuration>
 '''
     cfg_path.write_text(content, encoding="utf-8")
@@ -1459,7 +1477,8 @@ def _write_routes(
     duration: int,
     include_vehicles: bool,
     global_vehicle_file: "Path | None" = None,
-) -> "tuple[Path, Path | None, Path, list[dict[str, Any]]]":
+    write_debug: bool = True,
+) -> "tuple[Path, Path | None, Path, list[dict[str, Any]], bool]":
     import shutil as _shutil
     rng = random.Random(seed)
     ped_path = out_dir / "demand_pedestrian.rou.xml"
@@ -1547,8 +1566,10 @@ def _write_routes(
         ]
     )
     ped_summary_df["depart_sorted_ok"] = ped_summary_df["depart"].is_monotonic_increasing
-    ped_summary_df.to_csv(ped_summary_path, index=False)
-    return ped_path, veh_path, ped_summary_path, ped_records
+    route_order_ok = bool(ped_summary_df["depart_sorted_ok"].iloc[0]) if not ped_summary_df.empty else False
+    if write_debug:
+        ped_summary_df.to_csv(ped_summary_path, index=False)
+    return ped_path, veh_path, ped_summary_path, ped_records, route_order_ok
 
 
 def _write_sumocfg(
@@ -1560,6 +1581,7 @@ def _write_sumocfg(
     step_length: float,
     out_dir: Path,
     scenario: str,
+    enable_ssm: bool = True,
 ) -> Path:
     return _write_tripinfo_ready_sumocfg(
         cfg_path,
@@ -1570,6 +1592,7 @@ def _write_sumocfg(
         step_length,
         out_dir,
         scenario,
+        enable_ssm=enable_ssm,
     )
 
 
@@ -1611,6 +1634,7 @@ def _run_scenario(
     include_vehicles: bool,
     extension_sec: float,
     global_vehicle_file: "Path | None" = None,
+    output_profile: str = "full",
 ) -> pd.DataFrame:
     if traci is None:
         raise RuntimeError("traci not importable")
@@ -1619,10 +1643,13 @@ def _run_scenario(
     run_start_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
     run_start_perf = time.perf_counter()
 
+    light_output = str(output_profile).strip().lower() == "light"
+
     candidate_df = _prepare_vehicle_route_plan(candidate_df, net_file, seed, out_dir, include_vehicles)
-    ped_file, veh_file, ped_summary_path, ped_records = _write_routes(
+    ped_file, veh_file, ped_summary_path, ped_records, route_order_ok = _write_routes(
         candidate_df, out_dir, seed, duration, include_vehicles,
         global_vehicle_file=global_vehicle_file,
+        write_debug=not light_output,
     )
     cfg_path = _write_sumocfg(
         out_dir / f"phase6_smoke_{scenario}.sumocfg",
@@ -1633,6 +1660,7 @@ def _run_scenario(
         step_length,
         out_dir,
         scenario,
+        enable_ssm=not light_output,
     )
 
     cmd = [_sumo_binary(), "-c", str(cfg_path), "--no-step-log", "--collision.action", "warn", "--time-to-teleport", "-1"]
@@ -1823,41 +1851,42 @@ def _run_scenario(
                     phase = traci.trafficlight.getPhase(tls_id)
                     remaining = float(traci.trafficlight.getNextSwitch(tls_id) - t)
                 except Exception:
-                    extension_trigger_debug_rows.append(
-                        {
-                            "sim_time": round(t, 1),
-                            "crosswalk_id": cid,
-                            "tls_id": tls_id,
-                            "ped_link_index": ped_link_index,
-                            "current_phase_index": "",
-                            "current_tls_state": "",
-                            "ped_link_state": "",
-                            "is_ped_green": False,
-                            "is_pedestrian_only_phase": False,
-                            "ped_near": 0,
-                            "detected_person_ids": "",
-                            "remaining_phase_time": "",
-                            "next_switch_time": "",
-                            "extension_allowed": False,
-                            "extension_decision": False,
-                            "extension_skip_reason": "missing_tls",
-                        }
-                    )
-                    signal_phase_rows.append(
-                        {
-                            "sim_time": round(t, 1),
-                            "crosswalk_id": cid,
-                            "tls_id": tls_id,
-                            "ped_link_index": ped_link_index,
-                            "phase_index": "",
-                            "phase_state": "",
-                            "ped_link_state": "",
-                            "ped_has_green": False,
-                            "ped_has_red": False,
-                            "pedestrian_only_phase": False,
-                            "non_ped_green_count": "",
-                        }
-                    )
+                    if not light_output:
+                        extension_trigger_debug_rows.append(
+                            {
+                                "sim_time": round(t, 1),
+                                "crosswalk_id": cid,
+                                "tls_id": tls_id,
+                                "ped_link_index": ped_link_index,
+                                "current_phase_index": "",
+                                "current_tls_state": "",
+                                "ped_link_state": "",
+                                "is_ped_green": False,
+                                "is_pedestrian_only_phase": False,
+                                "ped_near": 0,
+                                "detected_person_ids": "",
+                                "remaining_phase_time": "",
+                                "next_switch_time": "",
+                                "extension_allowed": False,
+                                "extension_decision": False,
+                                "extension_skip_reason": "missing_tls",
+                            }
+                        )
+                        signal_phase_rows.append(
+                            {
+                                "sim_time": round(t, 1),
+                                "crosswalk_id": cid,
+                                "tls_id": tls_id,
+                                "ped_link_index": ped_link_index,
+                                "phase_index": "",
+                                "phase_state": "",
+                                "ped_link_state": "",
+                                "ped_has_green": False,
+                                "ped_has_red": False,
+                                "pedestrian_only_phase": False,
+                                "non_ped_green_count": "",
+                            }
+                        )
                     continue
 
                 ped_link_state = state[ped_link_index] if 0 <= ped_link_index < len(state) else ""
@@ -1897,41 +1926,42 @@ def _run_scenario(
                 extension_allowed = skip_reason == ""
                 extension_decision = extension_allowed
 
-                extension_trigger_debug_rows.append(
-                    {
-                        "sim_time": round(t, 1),
-                        "crosswalk_id": cid,
-                        "tls_id": tls_id,
-                        "ped_link_index": ped_link_index,
-                        "current_phase_index": int(phase),
-                        "current_tls_state": state,
-                        "ped_link_state": ped_link_state,
-                        "is_ped_green": bool(is_ped_green),
-                        "is_pedestrian_only_phase": bool(is_pedestrian_only_phase),
-                        "ped_near": int(ped_near),
-                        "detected_person_ids": "|".join(sorted(set(detected_person_ids))),
-                        "remaining_phase_time": round(remaining, 1),
-                        "next_switch_time": round(t + remaining, 1),
-                        "extension_allowed": bool(extension_allowed),
-                        "extension_decision": bool(extension_decision),
-                        "extension_skip_reason": skip_reason,
-                    }
-                )
-                signal_phase_rows.append(
-                    {
-                        "sim_time": round(t, 1),
-                        "crosswalk_id": cid,
-                        "tls_id": tls_id,
-                        "ped_link_index": ped_link_index,
-                        "phase_index": int(phase),
-                        "phase_state": state,
-                        "ped_link_state": ped_link_state,
-                        "ped_has_green": bool(is_ped_green),
-                        "ped_has_red": bool(ped_link_state in {"r", "R"}),
-                        "pedestrian_only_phase": bool(is_pedestrian_only_phase),
-                        "non_ped_green_count": int(non_ped_green_count),
-                    }
-                )
+                if not light_output:
+                    extension_trigger_debug_rows.append(
+                        {
+                            "sim_time": round(t, 1),
+                            "crosswalk_id": cid,
+                            "tls_id": tls_id,
+                            "ped_link_index": ped_link_index,
+                            "current_phase_index": int(phase),
+                            "current_tls_state": state,
+                            "ped_link_state": ped_link_state,
+                            "is_ped_green": bool(is_ped_green),
+                            "is_pedestrian_only_phase": bool(is_pedestrian_only_phase),
+                            "ped_near": int(ped_near),
+                            "detected_person_ids": "|".join(sorted(set(detected_person_ids))),
+                            "remaining_phase_time": round(remaining, 1),
+                            "next_switch_time": round(t + remaining, 1),
+                            "extension_allowed": bool(extension_allowed),
+                            "extension_decision": bool(extension_decision),
+                            "extension_skip_reason": skip_reason,
+                        }
+                    )
+                    signal_phase_rows.append(
+                        {
+                            "sim_time": round(t, 1),
+                            "crosswalk_id": cid,
+                            "tls_id": tls_id,
+                            "ped_link_index": ped_link_index,
+                            "phase_index": int(phase),
+                            "phase_state": state,
+                            "ped_link_state": ped_link_state,
+                            "ped_has_green": bool(is_ped_green),
+                            "ped_has_red": bool(ped_link_state in {"r", "R"}),
+                            "pedestrian_only_phase": bool(is_pedestrian_only_phase),
+                            "non_ped_green_count": int(non_ped_green_count),
+                        }
+                    )
 
                 if extension_allowed and extension_sec > 0:
                     try:
@@ -1974,25 +2004,26 @@ def _run_scenario(
                     except Exception:
                         lane_id = ""
                     road_match, match_reason = _route_match_details(str(road), str(lane_id), crossing_edge_set, route_path_edges, str(tls_id))
-                    debug_rows.append(
-                        {
-                            "time": round(t, 1),
-                            "scenario": scenario,
-                            "crosswalk_id": cid,
-                            "person_id": pid,
-                            "road_id": road,
-                            "lane_id": lane_id,
-                            "tls_id": tls_id,
-                            "phase": phase,
-                            "state": state,
-                            "remaining_time": round(remaining, 1),
-                            "ped_link_index": ped_link_index,
-                            "crossing_edge_id": crossing_edge_id,
-                            "route_path_edges": _route_path_text(sorted(route_path_edges)),
-                            "crossing_match": bool(road_match),
-                            "match_reason": match_reason,
-                        }
-                    )
+                    if not light_output:
+                        debug_rows.append(
+                            {
+                                "time": round(t, 1),
+                                "scenario": scenario,
+                                "crosswalk_id": cid,
+                                "person_id": pid,
+                                "road_id": road,
+                                "lane_id": lane_id,
+                                "tls_id": tls_id,
+                                "phase": phase,
+                                "state": state,
+                                "remaining_time": round(remaining, 1),
+                                "ped_link_index": ped_link_index,
+                                "crossing_edge_id": crossing_edge_id,
+                                "route_path_edges": _route_path_text(sorted(route_path_edges)),
+                                "crossing_match": bool(road_match),
+                                "match_reason": match_reason,
+                            }
+                        )
                     if road_match:
                         step_crossing_hit[cid] = True
                         step_crossing_person_ids[cid].add(str(pid))
@@ -2079,6 +2110,9 @@ def _run_scenario(
     tripinfo_metrics = _parse_tripinfo_metrics(out_dir / f"phase6_smoke_{scenario}_tripinfo.xml")
     network_collision_count = _parse_collision_count(out_dir / f"phase6_smoke_{scenario}_collisions.xml")
     ssm_pet_rows = _parse_ssm_pet_rows(out_dir / f"phase6_smoke_{scenario}_ssm.xml")
+    net_sha256 = _sha256_file(net_file)
+    vehicle_route_sha256 = _sha256_file(veh_file)
+    pedestrian_route_sha256 = _sha256_file(ped_file)
 
     for cid, watch in candidate_watch.items():
         for ped_id, enter_time in list(watch["active_ped_entries"].items()):
@@ -2142,6 +2176,8 @@ def _run_scenario(
         delays = veh_delays.get(cid, [])
         watch = candidate_watch[cid]
         pedestrian_crossing_count = int(len(ped_people_seen.get(cid, set())))
+        expected_ped_repeat_count = int(expected_repeat_counts.get(cid, 1))
+        unfinished_crossing_count = max(0, expected_ped_repeat_count - pedestrian_crossing_count)
         ssm_values = [float(value) for value in ssm_pet_by_candidate.get(cid, [])]
         if pedestrian_crossing_count > 0 and len(ssm_values) == pedestrian_crossing_count:
             pet_metrics = _summarize_pet_values(
@@ -2193,8 +2229,10 @@ def _run_scenario(
                 "ped_crossing_presence_steps": ped_presence_steps.get(cid, 0),
                 "ped_crossing_person_count": pedestrian_crossing_count,
                 "pedestrian_crossing_count": pedestrian_crossing_count,
-                "expected_ped_repeat_count": expected_repeat_counts.get(cid, 1),
-                "ped_repeat_count_match": pedestrian_crossing_count == expected_repeat_counts.get(cid, 1),
+                "expected_ped_repeat_count": expected_ped_repeat_count,
+                "ped_repeat_count_match": pedestrian_crossing_count == expected_ped_repeat_count,
+                "pedestrian_clearance_failure_count": unfinished_crossing_count,
+                "unfinished_crossing_count": unfinished_crossing_count,
                 "ped_wait_time_mean": round(sum(waits) / len(waits), 2) if waits else None,
                 "ped_wait_time_max": round(max(waits), 2) if waits else None,
                 "veh_delay_mean": round(sum(delays) / len(delays), 2) if delays else None,
@@ -2224,6 +2262,10 @@ def _run_scenario(
                 "local_500m_stop_count": int(watch["local_stop_count"]),
                 "total_vehicle_arrivals": int(len(network_departed_vehicle_ids)),
                 "generated_vehicle_route_file": generated_vehicle_route_file,
+                "vehicle_route_sha256": vehicle_route_sha256,
+                "pedestrian_route_file": str(ped_file),
+                "pedestrian_route_sha256": pedestrian_route_sha256,
+                "net_sha256": net_sha256,
                 "surrounding_lane_count": int(surrounding_lane_count),
                 "vehicle_bbox_coverage": vehicle_bbox_coverage,
                 "batch_network_file": meta["batch_network_file"],
@@ -2233,26 +2275,22 @@ def _run_scenario(
         )
 
     pd.DataFrame(out_rows).to_csv(out_dir / f"phase6_smoke_{scenario}_results.csv", index=False)
-    pd.DataFrame(debug_rows).to_csv(out_dir / f"phase6_smoke_{scenario}_debug_trace.csv", index=False)
     (out_dir / f"phase6_smoke_{scenario}_extension_events.json").write_text(json.dumps(extension_events, ensure_ascii=False, indent=2), encoding="utf-8")
     ext_columns = ["time", "crosswalk_id", "tls_id", "linkIndex", "phase", "state", "remaining_before", "extension_sec", "ped_near", "error"]
     pd.DataFrame(extension_events, columns=ext_columns).to_csv(out_dir / f"phase6_smoke_{scenario}_extension_events.csv", index=False)
-    pd.DataFrame(extension_trigger_debug_rows).to_csv(out_dir / "phase6_extension_trigger_debug.csv", index=False)
-    pd.DataFrame(signal_phase_rows).to_csv(out_dir / "signal_phase_audit.csv", index=False)
-    (out_dir / f"phase6_smoke_{scenario}_candidate_validation.json").write_text(json.dumps(candidate_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    route_order_ok = False
-    try:
-        route_order_ok = bool(pd.read_csv(ped_summary_path)["depart_sorted_ok"].iloc[0])
-    except Exception:
-        route_order_ok = False
+    if not light_output:
+        pd.DataFrame(debug_rows).to_csv(out_dir / f"phase6_smoke_{scenario}_debug_trace.csv", index=False)
+        pd.DataFrame(extension_trigger_debug_rows).to_csv(out_dir / "phase6_extension_trigger_debug.csv", index=False)
+        pd.DataFrame(signal_phase_rows).to_csv(out_dir / "signal_phase_audit.csv", index=False)
+        (out_dir / f"phase6_smoke_{scenario}_candidate_validation.json").write_text(json.dumps(candidate_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / f"phase6_smoke_{scenario}_route_order_summary.json").write_text(
         json.dumps(
             {
                 "scenario": scenario,
                 "ped_route_file": str(ped_file),
-                "ped_route_order_debug_csv": str(ped_summary_path),
+                "ped_route_order_debug_csv": str(ped_summary_path) if not light_output else "",
                 "ped_depart_sorted_ok": route_order_ok,
-                "ped_person_rows": int(len(pd.read_csv(ped_summary_path))) if ped_summary_path.exists() else 0,
+                "ped_person_rows": int(len(ped_records)),
             },
             ensure_ascii=False,
             indent=2,
@@ -2271,6 +2309,8 @@ def _run_scenario(
         "ped_crossing_person_count",
         "expected_ped_repeat_count",
         "ped_repeat_count_match",
+        "pedestrian_clearance_failure_count",
+        "unfinished_crossing_count",
         "extension_count",
     ]
     compare_dir = RESULT_DIR / "phase6_transition_after_recovery_20260514_220549"
@@ -2327,6 +2367,10 @@ def _run_scenario(
                 "expected_ped_repeat_count_smart": int(_safe_get(cur, "expected_ped_repeat_count")) if scenario == "smart" else int(_safe_get(oth, "expected_ped_repeat_count")) if other_scenario == "smart" else None,
                 "ped_repeat_count_match_baseline": bool(_safe_get(cur, "ped_repeat_count_match")) if scenario == "baseline" else bool(_safe_get(oth, "ped_repeat_count_match")) if other_scenario == "baseline" else None,
                 "ped_repeat_count_match_smart": bool(_safe_get(cur, "ped_repeat_count_match")) if scenario == "smart" else bool(_safe_get(oth, "ped_repeat_count_match")) if other_scenario == "smart" else None,
+                "pedestrian_clearance_failure_count_baseline": int(_safe_get(cur, "pedestrian_clearance_failure_count")) if scenario == "baseline" else int(_safe_get(oth, "pedestrian_clearance_failure_count")) if other_scenario == "baseline" else None,
+                "pedestrian_clearance_failure_count_smart": int(_safe_get(cur, "pedestrian_clearance_failure_count")) if scenario == "smart" else int(_safe_get(oth, "pedestrian_clearance_failure_count")) if other_scenario == "smart" else None,
+                "unfinished_crossing_count_baseline": int(_safe_get(cur, "unfinished_crossing_count")) if scenario == "baseline" else int(_safe_get(oth, "unfinished_crossing_count")) if other_scenario == "baseline" else None,
+                "unfinished_crossing_count_smart": int(_safe_get(cur, "unfinished_crossing_count")) if scenario == "smart" else int(_safe_get(oth, "unfinished_crossing_count")) if other_scenario == "smart" else None,
                 "extension_count_baseline": int(_safe_get(cur, "extension_count")) if scenario == "baseline" else int(_safe_get(oth, "extension_count")) if other_scenario == "baseline" else None,
                 "extension_count_smart": int(_safe_get(cur, "extension_count")) if scenario == "smart" else int(_safe_get(oth, "extension_count")) if other_scenario == "smart" else None,
                 "baseline_output_dir": _safe_get(baseline_row, "output_dir"),
@@ -2368,6 +2412,7 @@ def main() -> None:
     parser.add_argument("--phase-aligned-ped-depart", action="store_true", help="Align first pedestrian depart with pedestrian-only green phase.")
     parser.add_argument("--include-vehicles", action="store_true", help="Also emit vehicle routes and include them in the SUMO config.")
     parser.add_argument("--metric-sample-interval", type=float, default=0.0, help="Accepted for CLI parity; smoke runner does not use lane sampling.")
+    parser.add_argument("--output-profile", choices=["full", "light"], default="full")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
@@ -2417,6 +2462,7 @@ def main() -> None:
         "extension_sec": args.extension_sec,
         "include_vehicles": args.include_vehicles,
         "metric_sample_interval": float(args.metric_sample_interval),
+        "output_profile": str(args.output_profile),
         "output_dir": str(out_dir),
         "candidate_rows": int(len(candidate_df)),
         "candidate_ids": candidate_df["crosswalk_id"].astype(str).tolist(),
@@ -2436,6 +2482,7 @@ def main() -> None:
         out_dir,
         args.include_vehicles,
         args.extension_sec,
+        output_profile=str(args.output_profile),
     )
 
     metadata.update(
@@ -2450,33 +2497,34 @@ def main() -> None:
     (out_dir / "run_metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     summary.to_csv(out_dir / "phase6_smoke_summary.csv", index=False)
     route_pair_path = out_dir / "route_pair_diagnostics.csv"
-    if route_pair_path.exists():
+    if route_pair_path.exists() and args.output_profile != "light":
         try:
             pd.read_csv(route_pair_path).to_csv(out_dir / "route_generation_audit.csv", index=False)
         except Exception:
             pass
-    candidate_signal_phase_rows = []
-    for row in candidate_df.itertuples(index=False):
-        candidate_signal_phase_rows.append(
-            {
-                "crosswalk_id": str(row.crosswalk_id),
-                "scenario": args.scenario,
-                "seed": args.seed,
-                "tls_id": getattr(row, "tls_id", ""),
-                "ped_link_index": getattr(row, "ped_link_index", ""),
-                "crossing_edge_id": getattr(row, "crossing_edge_id", ""),
-                "route_from_edge": getattr(row, "route_from_edge", ""),
-                "route_to_edge": getattr(row, "route_to_edge", ""),
-                "route_reason": getattr(row, "route_reason", ""),
-                "source_file": getattr(row, "source_file", ""),
-                "batch_network_file": getattr(row, "batch_network_file", ""),
-                "final_verdict": getattr(row, "final_verdict", ""),
-                "step_test_ok": getattr(row, "step_test_ok", ""),
-                "controlled_links_count": getattr(row, "controlled_links_count", ""),
-                "crossing_inventory_used": bool(getattr(row, "crossing_inventory_used", False)),
-            }
-        )
-    pd.DataFrame(candidate_signal_phase_rows).to_csv(out_dir / "candidate_signal_phase_audit.csv", index=False)
+    if args.output_profile != "light":
+        candidate_signal_phase_rows = []
+        for row in candidate_df.itertuples(index=False):
+            candidate_signal_phase_rows.append(
+                {
+                    "crosswalk_id": str(row.crosswalk_id),
+                    "scenario": args.scenario,
+                    "seed": args.seed,
+                    "tls_id": getattr(row, "tls_id", ""),
+                    "ped_link_index": getattr(row, "ped_link_index", ""),
+                    "crossing_edge_id": getattr(row, "crossing_edge_id", ""),
+                    "route_from_edge": getattr(row, "route_from_edge", ""),
+                    "route_to_edge": getattr(row, "route_to_edge", ""),
+                    "route_reason": getattr(row, "route_reason", ""),
+                    "source_file": getattr(row, "source_file", ""),
+                    "batch_network_file": getattr(row, "batch_network_file", ""),
+                    "final_verdict": getattr(row, "final_verdict", ""),
+                    "step_test_ok": getattr(row, "step_test_ok", ""),
+                    "controlled_links_count": getattr(row, "controlled_links_count", ""),
+                    "crossing_inventory_used": bool(getattr(row, "crossing_inventory_used", False)),
+                }
+            )
+        pd.DataFrame(candidate_signal_phase_rows).to_csv(out_dir / "candidate_signal_phase_audit.csv", index=False)
     route_alias = out_dir / "pedestrian_route_diagnostics.csv"
     if route_alias.exists():
         try:

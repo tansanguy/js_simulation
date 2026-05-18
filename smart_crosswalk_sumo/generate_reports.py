@@ -30,6 +30,8 @@ SIMULATION_SUMMARY_COLUMNS = [
     "safety_risk_score",
     "accident_expected_value",
     "elderly_incomplete_crossings",
+    "pedestrian_clearance_failure_count",
+    "unfinished_crossing_count",
     "avg_vehicle_delay_sec",
     "avg_queue_length",
     "max_queue_length",
@@ -44,6 +46,8 @@ BASELINE_SMART_COLUMNS = [
     "safety_risk_delta",
     "accident_expected_delta",
     "elderly_incomplete_crossings_delta",
+    "pedestrian_clearance_failure_delta",
+    "unfinished_crossing_delta",
     "avg_vehicle_delay_delta_sec",
     "avg_queue_length_delta",
     "max_queue_length_delta",
@@ -406,6 +410,10 @@ def build_baseline_vs_smart_summary(
             - baseline.loc[common, "accident_expected_value"].to_numpy(),
             "elderly_incomplete_crossings_delta": smart.loc[common, "elderly_incomplete_crossings"].to_numpy()
             - baseline.loc[common, "elderly_incomplete_crossings"].to_numpy(),
+            "pedestrian_clearance_failure_delta": smart.loc[common, "pedestrian_clearance_failure_count"].to_numpy()
+            - baseline.loc[common, "pedestrian_clearance_failure_count"].to_numpy(),
+            "unfinished_crossing_delta": smart.loc[common, "unfinished_crossing_count"].to_numpy()
+            - baseline.loc[common, "unfinished_crossing_count"].to_numpy(),
             "avg_vehicle_delay_delta_sec": smart.loc[common, "avg_vehicle_delay_sec"].to_numpy()
             - baseline.loc[common, "avg_vehicle_delay_sec"].to_numpy(),
             "avg_queue_length_delta": smart.loc[common, "avg_queue_length"].to_numpy()
@@ -943,13 +951,25 @@ def build_seed_level_tradeoff(seed_df: pd.DataFrame) -> pd.DataFrame:
 
     b_wait = out["pedestrian_waiting_time_mean_baseline"]
     s_wait = out["pedestrian_waiting_time_mean_smart"]
+    b_clearance = numeric_series(merged, "pedestrian_clearance_failure_count_baseline")
+    s_clearance = numeric_series(merged, "pedestrian_clearance_failure_count_smart")
+    if b_clearance.isna().all():
+        b_clearance = numeric_series(merged, "unfinished_crossing_count_baseline")
+    if s_clearance.isna().all():
+        s_clearance = numeric_series(merged, "unfinished_crossing_count_smart")
+    b_risk = numeric_series(merged, "low_pet_event_count_baseline")
+    s_risk = numeric_series(merged, "low_pet_event_count_smart")
+    safety_baseline = b_clearance.where(b_clearance.notna(), b_risk)
+    safety_smart = s_clearance.where(s_clearance.notna(), s_risk)
     b_loss = numeric_series(merged, "veh_avg_delay_sec_baseline")
     s_loss = numeric_series(merged, "veh_avg_delay_sec_smart")
     b_spd = numeric_series(merged, "surrounding_mean_speed_mps_baseline")
     s_spd = numeric_series(merged, "surrounding_mean_speed_mps_smart")
 
-    out["safety_metric_delta_abs"] = b_wait - s_wait
-    out["safety_metric_delta_pct"] = (b_wait - s_wait) / b_wait.replace(0, np.nan) * 100.0
+    out["pedestrian_wait_delta_abs"] = s_wait - b_wait
+    out["pedestrian_wait_improvement_pct"] = (b_wait - s_wait) / b_wait.replace(0, np.nan) * 100.0
+    out["safety_metric_delta_abs"] = safety_smart - safety_baseline
+    out["safety_metric_delta_pct"] = (safety_baseline - safety_smart) / safety_baseline.replace(0, np.nan) * 100.0
     out["traffic_metric_delta_abs"] = s_loss - b_loss
     out["traffic_metric_delta_pct"] = (s_loss - b_loss) / b_loss.replace(0, np.nan) * 100.0
     speed_drop_pct = (b_spd - s_spd) / b_spd.replace(0, np.nan) * 100.0
@@ -1237,7 +1257,8 @@ def write_required_outputs(
     sim_md = (
         "# simulation_methodology\n\n"
         "본 분석은 중구 OSM 기반 SUMO 변환망에서 baseline/smart 상대 비교 실험을 수행했다.\n"
-        "안전성은 사고 발생이 아닌 보행자 대기/지연/녹색부족 proxy로 평가했다.\n"
+        "스마트 횡단보도 정책은 대기시간 단축 장치가 아니라 보행자 녹색 종료 시점의 미완료 횡단을 1회 5초 연장으로 보조하는 신호 연장 정책으로 평가했다.\n"
+        "Primary safety endpoint는 보행자 평균 대기시간이 아니라 횡단 완료 실패 또는 low-PET 위험 proxy의 baseline-smart paired delta로 해석했다.\n"
     )
     (docs_dir / "simulation_methodology.md").write_text(sim_md, encoding="utf-8")
 
@@ -1249,13 +1270,13 @@ def write_required_outputs(
     (docs_dir / "network_quality_report.md").write_text(net_md, encoding="utf-8")
 
     if not seed_tradeoff.empty:
-        wait_imp = float(seed_tradeoff["safety_improvement_pct"].mean())
-        wait_std = float(seed_tradeoff["safety_improvement_pct"].std())
+        safety_imp = float(seed_tradeoff["safety_improvement_pct"].mean())
+        safety_std = float(seed_tradeoff["safety_improvement_pct"].std())
         loss_inc = float(seed_tradeoff["traffic_metric_delta_pct"].mean())
         spd_drop = float(((seed_tradeoff["traffic_degradation_pct"] * 2.0) - seed_tradeoff["traffic_metric_delta_pct"]).mean())
         interp = (
-            f"스마트 횡단보도 적용 시, 전체 후보지 평균 보행자 대기시간은 baseline 대비 {wait_imp:.1f}% 감소하였다 "
-            f"(표준편차 {wait_std:.1f}%p). 반면 차량 평균 timeLoss는 {loss_inc:.1f}% 증가하고 "
+            f"스마트 횡단보도 적용 시, 전체 후보지 평균 safety proxy는 baseline 대비 {safety_imp:.1f}% 개선되었다 "
+            f"(표준편차 {safety_std:.1f}%p). 반면 차량 평균 timeLoss는 {loss_inc:.1f}% 증가하고 "
             f"평균속도는 {spd_drop:.1f}% 감소하였다. 따라서 본 시뮬레이션은 안전성 대리지표 개선과 "
             f"교통 효율 비용 간 trade-off를 보였다."
         )
@@ -1284,6 +1305,8 @@ def generate_all_reports(
     seed_path = _first_existing_path(
         csv_layout.results / "simulation_results_seed.csv",
         output_dir / "simulation_results_seed.csv",
+        csv_layout.results / "simulation_result.csv",
+        output_dir / "simulation_result.csv",
     )
     if not avg_path.exists():
         raise FileNotFoundError(f"{avg_path}가 없습니다. 먼저 시뮬레이션을 실행하세요.")
@@ -1293,7 +1316,7 @@ def generate_all_reports(
     except EmptyDataError:
         avg_df = pd.DataFrame(columns=["crosswalk_id","admin_dong","dong_name","scenario"])
     try:
-        seed_df = pd.read_csv(seed_path)
+        seed_df = pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"]) if seed_path == avg_path else pd.read_csv(seed_path)
     except (EmptyDataError, FileNotFoundError):
         seed_df = pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"])
     model_params = load_model_parameters(model_parameters_path)

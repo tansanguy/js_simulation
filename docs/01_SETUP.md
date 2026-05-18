@@ -15,7 +15,7 @@
 cd "$PROJECT_ROOT"
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt pytest
 ```
 
 ## SUMO 환경
@@ -43,3 +43,5 @@ bash commands/verify.sh
 ```
 
 `verify.sh`는 `SUMO_HOME`과 필요한 입력 파일이 없으면 바로 실패한다.
+
+테스트를 돌릴 때는 `pytest`가 필요하다. 위 설치 명령처럼 함께 넣어 두면 된다.

@@ -17,6 +17,10 @@ commands/*.sh
 `result/active/real_30seed_runs_sampled10/commands/*.sh` 아래의 그룹 전용 스크립트로 실행한다.
 실제 계산은 모두 `smart_crosswalk_sumo.run_sampled10_group`가 담당한다.
 
+cut-off / graduation 검토용 sequential-light 경로는 full 30seed 경로와 분리한다.
+sequential-light에서는 `sim_duration=540`, `--output-profile light`, paired baseline/smart delta, KEEP-only candidate CSV를 기준으로 다음 seed를 정한다.
+기존 후보별 `single_candidates/*` 반복 스크립트는 full/source-of-truth 경로로만 취급하고 sequential-light 입력으로 섞지 않는다.
+
 ## 2. 먼저 확인할 것
 
 아래 순서로 보면 안전하다.
@@ -36,7 +40,6 @@ commands/*.sh
 bash commands/verify.sh
 bash commands/run_smoke.sh --dry-run
 bash commands/run_smoke.sh --limit 1
-bash commands/run_smoke.sh --jobs 6
 bash commands/run_smoke.sh --run-id current_main_12_smart_NODE_10335_seed01
 bash commands/run_smoke.sh
 bash commands/run_final.sh --dry-run
@@ -51,8 +54,9 @@ bash commands/check_final_result.sh
 - `final`은 본실험이다.
 - `--dry-run`은 실제 실행 없이 계획만 확인한다.
 - `--limit 1`은 맨 앞의 1개만 돌려 빠르게 검증한다.
-- `--jobs N`은 동시 실행할 run 수를 지정한다. 10코어/24GB Mac mini에서는 `6` 이하를 권장한다.
 - `--run-id`는 특정 run 하나만 지정한다.
+- `simple_final_pipeline --limit N`은 `run_manifest.csv` 순서를 그대로 따르므로 baseline-placeholder 행만 먼저 잡힐 수 있다.
+- paired comparison 검증에는 `--limit N`만 쓰지 말고, baseline 1개와 smart 1개가 함께 생성되는 run-id를 명시해서 돌린다.
 
 ## 5. 그룹별 30seed 본실험
 
@@ -66,6 +70,8 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_
 ```
 
 전체 그룹을 순서대로 돌리려면 아래 스크립트를 쓰면 된다.
+
+현재 `command_to_run_30seed_all_groups.sh` / `command_to_run_seed1_all_groups.sh` / `command_to_run_smoke30_seed1_all_groups.sh`는 `p1_p4_recovery_6`를 건너뛴다. 이 그룹은 위의 개별 명령으로 따로 돌린다.
 
 ```bash
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all_groups.sh
@@ -82,7 +88,80 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all
 
 같은 그룹의 후보 CSV는 `result/active/real_30seed_runs_sampled10/manifests/*.csv`에서 가져온다.
 
-## 7. 실행 중 확인
+## 7. Sequential-light cut-off / graduation
+
+정책 판정은 `smart_crosswalk_sumo.paired_significance_analysis`로 수행한다.
+이 분석은 독립표본 비교가 아니라 같은 seed, 같은 route, 같은 demand의 `smart - baseline` paired delta를 사용한다.
+
+정적 확인:
+
+```bash
+python3 -c "import ast, pathlib; paths=['smart_crosswalk_sumo/paired_significance_analysis.py','smart_crosswalk_sumo/run_phase6_recovery_smoke.py','smart_crosswalk_sumo/run_sampled10_group.py','smart_crosswalk_sumo/generate_reports.py']; [ast.parse(pathlib.Path(p).read_text()) for p in paths]; print('syntax_ok')"
+python3 -m smart_crosswalk_sumo.paired_significance_analysis --help
+python3 -m pytest tests/test_paired_significance_analysis.py tests/test_generate_reports.py -q
+```
+
+local smoke 1개 실행:
+
+```bash
+python3 -m smart_crosswalk_sumo.reporting.simple_final_pipeline --outputs-root outputs/policy_smoke run --mode smoke --limit 1
+```
+
+paired smoke 확인이 필요하면 baseline-only limit 대신 smart run-id를 직접 지정한다.
+`current_main_12_smart_NODE_10335_seed01` 같은 smart row를 돌리면 같은 run 안에서 baseline/smart pair가 같이 생성된다.
+
+결과 파일과 핵심 칼럼 확인:
+
+```bash
+find outputs/policy_smoke/smoke/runs -name simulation_result.csv | sort
+python3 -c "import pandas as pd; p='outputs/policy_smoke/smoke/runs/current_main_12/baseline/seed01/simulation_result.csv'; df=pd.read_csv(p,nrows=1); print([c for c in df.columns if c in ['pedestrian_clearance_failure_count','unfinished_crossing_count','extension_count','local_500m_avg_delay_sec','vehicle_delay_cost','vehicle_route_sha256','pedestrian_route_sha256']])"
+```
+
+paired analysis와 상태별 candidate CSV 생성:
+
+```bash
+mkdir -p /private/tmp/phase6_policy_check
+python3 -m smart_crosswalk_sumo.paired_significance_analysis \
+  --run-glob "outputs/policy_smoke/smoke/runs/*/baseline/seed01" \
+  --run-glob "outputs/policy_smoke/smoke/runs/*/smart/*/seed01" \
+  --candidate-csv result/active/real_30seed_runs_sampled10/manifests/current_main_12_candidates.csv \
+  --output /private/tmp/phase6_policy_check/sequential_summary.csv \
+  --keep-output /private/tmp/phase6_policy_check/keep_candidates.csv \
+  --pass-output /private/tmp/phase6_policy_check/pass_candidates.csv \
+  --cut-output /private/tmp/phase6_policy_check/cut_candidates.csv \
+  --recheck-output /private/tmp/phase6_policy_check/recheck_candidates.csv
+```
+
+다음 seed 실행에는 `keep_candidates.csv`만 사용한다.
+`pass_candidates.csv`는 qualified pool 보존용이고, `cut_candidates.csv`와 `recheck_candidates.csv`는 다음 실행 입력이 아니다.
+
+sequential-light seed 실행을 직접 만들 때는 아래 옵션을 유지한다.
+
+```bash
+python3 -m smart_crosswalk_sumo.run_sampled10_group \
+  --candidate-csv /private/tmp/phase6_policy_check/keep_candidates.csv \
+  --net-file result/active/nets/current_main_12.net.xml \
+  --seed 2 \
+  --output-dir /private/tmp/phase6_policy_check/current_main_12_seed02 \
+  --sim-duration 540 \
+  --warmup 0 \
+  --traci_step_length 0.1 \
+  --traffic_measure_radius_m 500.0 \
+  --extension_increment 5.0 \
+  --max_extensions 1 \
+  --metric-sample-interval 10 \
+  --vehicle-sample-interval 10 \
+  --progress-interval 60 \
+  --phase-aligned-ped-depart \
+  --ped-repeat-count 5 \
+  --ped-repeat-spacing-sec 2 \
+  --include-vehicles \
+  --output-profile light \
+  --manifest-row-role baseline_placeholder \
+  --manifest-crosswalk-id BASELINE_CURRENT_MAIN_12
+```
+
+## 8. 실행 중 확인
 
 ```bash
 ps aux | grep -E "simple_final_pipeline|run_sampled10_group|run_phase6_recovery_smoke|sumo" | grep -v grep
@@ -91,8 +170,20 @@ find outputs/smoke/logs -type f | sort | tail -20
 grep -R "Traceback\|TraCIException\|ERROR\|FAILED\|failed" outputs/smoke/logs | tail -80
 ```
 
-## 8. 중단 / 재실행
+## 9. 중단 / 재실행
 
 - 성공한 run은 같은 `output_dir`이면 다시 돌지 않는다.
 - 다른 실험과 분리하려면 다른 `--outputs-root`를 쓰는 편이 낫다.
 - `smoke`는 검증용, `final`은 본실험이다.
+
+## 10. Git 점검
+
+배포 전에는 result/output/net/xml/.DS_Store/oldresult가 섞이지 않았는지 확인한다.
+
+```bash
+git status --short --branch
+git diff -- smart_crosswalk_sumo docs commands README.md tests
+git status --short -- result outputs oldresult
+find . -name ".DS_Store" -print
+git ls-files | rg "^(result/|outputs/|oldresult/)|\\.net\\.xml$|\\.DS_Store$"
+```

@@ -78,6 +78,19 @@ def _smoke_to_seed_schema(df: pd.DataFrame, extension_sec: float, net_file: Path
     out["elderly_incomplete_crossings"] = 0.0
     out["pedestrian_green_extension_count"] = pd.to_numeric(out.get("extension_count"), errors="coerce").fillna(0)
     out["total_extension_sec"] = out["pedestrian_green_extension_count"] * float(extension_sec)
+    out["pedestrian_clearance_failure_count"] = pd.to_numeric(
+        out.get("pedestrian_clearance_failure_count"), errors="coerce"
+    )
+    out["unfinished_crossing_count"] = pd.to_numeric(out.get("unfinished_crossing_count"), errors="coerce")
+    if out["pedestrian_clearance_failure_count"].isna().all() and {
+        "expected_ped_repeat_count",
+        "pedestrian_crossing_count",
+    }.issubset(out.columns):
+        expected = pd.to_numeric(out.get("expected_ped_repeat_count"), errors="coerce")
+        observed = pd.to_numeric(out.get("pedestrian_crossing_count"), errors="coerce")
+        fallback = (expected - observed).clip(lower=0)
+        out["pedestrian_clearance_failure_count"] = fallback
+        out["unfinished_crossing_count"] = fallback
     out["generated_vehicle_count"] = pd.to_numeric(out.get("generated_vehicle_count"), errors="coerce")
     out["network_arrived_vehicles"] = pd.to_numeric(out.get("network_arrived_vehicles"), errors="coerce")
     out["network_departed_vehicles"] = pd.to_numeric(out.get("network_departed_vehicles"), errors="coerce")
@@ -284,10 +297,12 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         "ped_repeat_spacing_sec": float(args.ped_repeat_spacing_sec),
         "phase_aligned_ped_depart": bool(args.phase_aligned_ped_depart),
         "include_vehicles": bool(args.include_vehicles),
+        "output_profile": str(args.output_profile),
         "args": {
             "metric_sample_interval": float(args.metric_sample_interval),
             "vehicle_sample_interval": float(args.vehicle_sample_interval),
             "progress_interval": float(args.progress_interval),
+            "output_profile": str(args.output_profile),
         },
         **experiment_metadata,
     }
@@ -353,6 +368,7 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
                 bool(args.include_vehicles),
                 float(extension_sec),
                 global_vehicle_file=global_veh_file,
+                output_profile=str(args.output_profile),
             )
             timing[f"simulation_{scenario}_sec"] = float(time.perf_counter() - scenario_t0)
             scenario_frames.append(summary)
@@ -374,7 +390,28 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         )
 
     avg_df = _average_results(seed_df)
-    english_output_columns(seed_df).to_csv(out_dir / "simulation_result.csv", index=False)
+    seed_output = english_output_columns(seed_df)
+    seed_output.to_csv(out_dir / "simulation_result.csv", index=False)
+    seed_output.to_csv(out_dir / "simulation_results_seed.csv", index=False)
+    manifest_columns = [
+        "seed",
+        "scenario",
+        "sim_duration",
+        "scenario_name",
+        "demand_profile",
+        "batch_network_file",
+        "net_sha256",
+        "generated_vehicle_route_file",
+        "vehicle_route_sha256",
+        "pedestrian_route_file",
+        "pedestrian_route_sha256",
+    ]
+    available_manifest_columns = [column for column in manifest_columns if column in seed_output.columns]
+    if available_manifest_columns:
+        seed_output[available_manifest_columns].drop_duplicates().to_csv(
+            out_dir / "route_demand_manifest.csv",
+            index=False,
+        )
     if not seed_df.empty:
         try:
             build_sampled10_demand_params(out_dir)
@@ -443,6 +480,7 @@ def main() -> None:
     parser.add_argument("--manifest-row-role", choices=["baseline_placeholder", "smart_candidate"], required=True)
     parser.add_argument("--manifest-crosswalk-id", default="")
     parser.add_argument("--scenario-name", default="main_realistic_stress")
+    parser.add_argument("--output-profile", choices=["full", "light"], default="full")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
     sys.exit(run_sampled10_group(args))
