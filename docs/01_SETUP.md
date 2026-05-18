@@ -18,6 +18,8 @@ pip install -r requirements.txt
 
 ## SUMO 환경
 
+이 문서는 `SUMO 1.26.0` 기준이다.
+
 ```bash
 export SUMO_HOME="/path/to/your/SUMO_HOME"
 export PATH="$SUMO_HOME/bin:$PATH"

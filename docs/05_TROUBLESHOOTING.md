@@ -25,6 +25,8 @@ bash commands/verify.sh
 
 대응:
 
+`SUMO_HOME`은 `SUMO 1.26.0` 설치 경로를 가리켜야 한다.
+
 ```bash
 export SUMO_HOME="/path/to/your/SUMO_HOME"
 export PATH="$SUMO_HOME/bin:$PATH"
