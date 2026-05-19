@@ -45,7 +45,9 @@
       "Bash([ -f result/junggu_osm_network_*/junggu_generated.net.xml ])",
       "Bash(grep -v \"^Warning\\\\|^pj_obj\\\\|^$\" result/phase6_smoke_119055_20260514_013857/smoke_run.log)",
       "Bash(tee result/phase6_smoke_119055_20260514_013857/smoke_run2.log)",
-      "Bash(tee result/phase_next_multi_crosswalk_recovery_20260514_015058/recovery_run.log)"
+      "Bash(tee result/phase_next_multi_crosswalk_recovery_20260514_015058/recovery_run.log)",
+      "Bash(xargs '-I{}' python3 -c ' *)",
+      "Bash(iconv -f UTF-8 -t UTF-8 -c /Users/junlee/Desktop/2026-1/js/crosswalk_stepwise_result_50m.csv)"
     ]
   }
 }
