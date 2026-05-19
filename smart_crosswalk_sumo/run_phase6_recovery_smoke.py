@@ -1635,6 +1635,7 @@ def _run_scenario(
     extension_sec: float,
     global_vehicle_file: "Path | None" = None,
     output_profile: str = "full",
+    enable_ssm: bool = True,
 ) -> pd.DataFrame:
     if traci is None:
         raise RuntimeError("traci not importable")
@@ -1660,7 +1661,7 @@ def _run_scenario(
         step_length,
         out_dir,
         scenario,
-        enable_ssm=not light_output,
+        enable_ssm=bool(enable_ssm) and not light_output,
     )
 
     cmd = [_sumo_binary(), "-c", str(cfg_path), "--no-step-log", "--collision.action", "warn", "--time-to-teleport", "-1"]

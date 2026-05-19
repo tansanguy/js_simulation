@@ -37,9 +37,27 @@ SIMULATION_COLUMN_MAP = {
     "MAX_SPD": "max_speed_kph",
 }
 
+REQUIRED_SIMULATION_RESULT_COLUMNS = [
+    "crosswalk_id",
+    "scenario",
+    "seed",
+    "pedestrian_clearance_failure_count",
+    "unfinished_crossing_count",
+    "vehicle_route_sha256",
+    "pedestrian_route_sha256",
+]
+
 
 def english_output_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.rename(columns={**CANDIDATE_COLUMN_MAP, **SIMULATION_COLUMN_MAP})
+
+
+def ensure_simulation_result_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    for column in REQUIRED_SIMULATION_RESULT_COLUMNS:
+        if column not in out.columns:
+            out[column] = pd.NA
+    return out
 
 
 def write_csv_utf8_sig(df: pd.DataFrame, path: str | Path, index: bool = False) -> None:

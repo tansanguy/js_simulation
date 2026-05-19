@@ -23,7 +23,7 @@ from smart_crosswalk_sumo.run_phase6_recovery_smoke import (
     _phase_aligned_depart_plan,
     _run_scenario,
 )
-from smart_crosswalk_sumo.output_schema import english_output_columns, write_csv_utf8_sig
+from smart_crosswalk_sumo.output_schema import english_output_columns, ensure_simulation_result_columns, write_csv_utf8_sig
 from smart_crosswalk_sumo.generate_demand import random_trips_script, _enforce_exact_vehicle_count
 from smart_crosswalk_sumo.vehicle_demand_policy import resolve_vehicle_policy_summary
 from smart_crosswalk_sumo.network_utils import sumo_env
@@ -264,6 +264,16 @@ def _result_counts(seed_df: pd.DataFrame, failures: list[dict[str, Any]]) -> dic
     }
 
 
+def _enable_ssm_from_args(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "enable_ssm", False)) and not bool(getattr(args, "disable_ssm", False))
+
+
+def _last_failure_error(failures: list[dict[str, Any]]) -> str:
+    if not failures:
+        return ""
+    return str(failures[-1].get("error") or "")
+
+
 def run_sampled10_group(args: argparse.Namespace) -> int:
     t0 = time.perf_counter()
     candidate_csv = Path(args.candidate_csv).expanduser().resolve()
@@ -274,6 +284,7 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
     experiment_metadata = _experiment_metadata(args.metric_sample_interval, args.vehicle_sample_interval)
     failures: list[dict[str, Any]] = []
     timing: dict[str, float | None] = {"simulation_baseline_sec": 0.0, "simulation_smart_sec": 0.0}
+    enable_ssm = _enable_ssm_from_args(args)
 
     run_metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -298,11 +309,14 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         "phase_aligned_ped_depart": bool(args.phase_aligned_ped_depart),
         "include_vehicles": bool(args.include_vehicles),
         "output_profile": str(args.output_profile),
+        "enable_ssm": enable_ssm,
         "args": {
             "metric_sample_interval": float(args.metric_sample_interval),
             "vehicle_sample_interval": float(args.vehicle_sample_interval),
             "progress_interval": float(args.progress_interval),
             "output_profile": str(args.output_profile),
+            "disable_ssm": bool(getattr(args, "disable_ssm", False)),
+            "enable_ssm": bool(getattr(args, "enable_ssm", False)),
         },
         **experiment_metadata,
     }
@@ -369,6 +383,7 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
                 float(extension_sec),
                 global_vehicle_file=global_veh_file,
                 output_profile=str(args.output_profile),
+                enable_ssm=enable_ssm,
             )
             timing[f"simulation_{scenario}_sec"] = float(time.perf_counter() - scenario_t0)
             scenario_frames.append(summary)
@@ -390,9 +405,9 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         )
 
     avg_df = _average_results(seed_df)
-    seed_output = english_output_columns(seed_df)
-    seed_output.to_csv(out_dir / "simulation_result.csv", index=False)
-    seed_output.to_csv(out_dir / "simulation_results_seed.csv", index=False)
+    seed_output = ensure_simulation_result_columns(english_output_columns(seed_df))
+    write_csv_utf8_sig(seed_output, out_dir / "simulation_result.csv")
+    write_csv_utf8_sig(seed_output, out_dir / "simulation_results_seed.csv")
     manifest_columns = [
         "seed",
         "scenario",
@@ -449,10 +464,23 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         "interrupted": False,
         "completed_scenarios": ["simulation"] if counts["run_success"] else [],
         "current_scenario": "",
+        "last_error": _last_failure_error(failures),
         **experiment_metadata,
         **counts,
     }
     _write_json(out_dir / "benchmark_timing.json", benchmark)
+    print(
+        "[sampled10_group][summary]",
+        f"seed={int(args.seed)}",
+        f"role={args.manifest_row_role}",
+        f"crosswalk={args.manifest_crosswalk_id}",
+        f"run_success={counts['run_success']}",
+        f"result_rows={counts['result_rows']}",
+        f"failed_cases_count={counts['failed_cases_count']}",
+        f"failure_reason={benchmark['failure_reason'] or 'ok'}",
+        f"last_error={benchmark['last_error'] or ''}",
+        flush=True,
+    )
     return 0 if counts["run_success"] else 1
 
 
@@ -481,6 +509,8 @@ def main() -> None:
     parser.add_argument("--manifest-crosswalk-id", default="")
     parser.add_argument("--scenario-name", default="main_realistic_stress")
     parser.add_argument("--output-profile", choices=["full", "light"], default="full")
+    parser.add_argument("--disable-ssm", action="store_true")
+    parser.add_argument("--enable-ssm", action="store_true")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
     sys.exit(run_sampled10_group(args))

@@ -29,7 +29,14 @@ Main folders:
 
 Recommended flow:
 
-1. Run the generated `command_to_run_30seed_*.sh` scripts locally.
-2. Run `command_to_standardize_30seed_outputs.sh`.
-3. Run `command_to_check_30seed_results.sh`.
-4. Run `python3 -m smart_crosswalk_sumo.reporting.aggregate_30seed_results aggregate ...` if needed.
+1. For `seed1` sequential-light validation, run the `command_to_run_seed1_*.sh` wrappers.
+2. For the preserved full/source-of-truth 600-second path, run the `command_to_run_30seed_*.sh` scripts.
+3. Run `command_to_standardize_30seed_outputs.sh`.
+4. Run `command_to_check_30seed_results.sh`.
+5. Run `python3 -m smart_crosswalk_sumo.reporting.aggregate_30seed_results aggregate ...` if needed.
+
+Execution policy update:
+
+- `seed1` validation now uses the lightweight path: `--sim-duration 540` with `--output-profile light`.
+- Do not use the pre-lightweight `seed1` commands that hardcode `--sim-duration 600` without `--output-profile light`.
+- Keep the 600-second/full commands available for the 30-seed source-of-truth flow only.

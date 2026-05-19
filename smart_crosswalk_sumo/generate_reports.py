@@ -15,12 +15,12 @@ try:
     from .mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from .model_config import load_model_parameters
     from .csv_outputs import ensure_csv_output_layout, write_csv_bundle
-    from .output_schema import write_csv_utf8_sig
+    from .output_schema import ensure_simulation_result_columns, write_csv_utf8_sig
 except ImportError:
     from mpl_runtime import configure_matplotlib, ensure_matplotlib_env
     from model_config import load_model_parameters
     from csv_outputs import ensure_csv_output_layout, write_csv_bundle
-    from output_schema import write_csv_utf8_sig
+    from output_schema import ensure_simulation_result_columns, write_csv_utf8_sig
 
 
 SIMULATION_SUMMARY_COLUMNS = [
@@ -1297,16 +1297,16 @@ def generate_all_reports(
     figures_dir = Path(figures_dir)
     csv_layout = ensure_csv_output_layout(output_dir)
     avg_path = _first_existing_path(
-        csv_layout.results / "simulation_result.csv",
         output_dir / "simulation_result.csv",
+        csv_layout.results / "simulation_result.csv",
         csv_layout.results / "simulation_results.csv",
         output_dir / "simulation_results.csv",
     )
     seed_path = _first_existing_path(
-        csv_layout.results / "simulation_results_seed.csv",
         output_dir / "simulation_results_seed.csv",
-        csv_layout.results / "simulation_result.csv",
         output_dir / "simulation_result.csv",
+        csv_layout.results / "simulation_results_seed.csv",
+        csv_layout.results / "simulation_result.csv",
     )
     if not avg_path.exists():
         raise FileNotFoundError(f"{avg_path}가 없습니다. 먼저 시뮬레이션을 실행하세요.")
@@ -1316,14 +1316,27 @@ def generate_all_reports(
     except EmptyDataError:
         avg_df = pd.DataFrame(columns=["crosswalk_id","admin_dong","dong_name","scenario"])
     try:
-        seed_df = pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"]) if seed_path == avg_path else pd.read_csv(seed_path)
+        seed_df = (
+            pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"])
+            if seed_path == avg_path
+            else pd.read_csv(seed_path)
+        )
     except (EmptyDataError, FileNotFoundError):
         seed_df = pd.DataFrame(columns=["crosswalk_id", "scenario", "seed"])
     model_params = load_model_parameters(model_parameters_path)
     write_csv_bundle(
-        avg_df,
-        csv_layout.results / "simulation_results.csv",
-        mirrors=[output_dir / "simulation_results.csv"],
+        ensure_simulation_result_columns(avg_df),
+        csv_layout.results / "simulation_result.csv",
+        mirrors=[
+            output_dir / "simulation_result.csv",
+            csv_layout.results / "simulation_results.csv",
+            output_dir / "simulation_results.csv",
+        ],
+    )
+    write_csv_bundle(
+        ensure_simulation_result_columns(seed_df),
+        csv_layout.results / "simulation_results_seed.csv",
+        mirrors=[output_dir / "simulation_results_seed.csv"],
     )
     simulation_summary = build_simulation_summary(avg_df, seed_df)
     delta_summary = build_baseline_vs_smart_summary(simulation_summary, _load_run_metrics_exact(output_dir))

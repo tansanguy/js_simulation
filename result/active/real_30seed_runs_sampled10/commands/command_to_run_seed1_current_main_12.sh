@@ -13,6 +13,8 @@ LOG_ROOT="$PIPELINE_ROOT/logs/current_main_12"
 SINGLE_CSV_ROOT="$PIPELINE_ROOT/manifests/single_candidates/current_main_12"
 BASELINE_CSV="$PIPELINE_ROOT/manifests/current_main_12_candidates.csv"
 NET_FILE="$NETS_DIR/current_main_12.net.xml"
+SIM_DURATION=540
+OUTPUT_PROFILE=light
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
 if [[ -z "${SUMO_HOME:-}" ]]; then
@@ -143,7 +145,7 @@ run_sampled() {
     verify_report_outputs "$out_dir"
     return 0
   fi
-  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration 600 --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
+  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration "$SIM_DURATION" --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --output-profile "$OUTPUT_PROFILE" --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
   verify_run_success "$out_dir"
   python3 -m smart_crosswalk_sumo.generate_reports --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" --candidates "$candidate_csv" --nets_dir "$NETS_DIR" >>"$log_file" 2>&1
   verify_report_outputs "$out_dir"
