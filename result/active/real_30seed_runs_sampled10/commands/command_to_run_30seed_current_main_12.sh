@@ -32,6 +32,65 @@ if [[ -d "$PROJECT_ROOT/.venv/bin" ]]; then
   export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
 fi
 
+JOBS=1
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --jobs)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "--jobs requires a value" >&2
+        exit 1
+      fi
+      JOBS="$1"
+      shift
+      ;;
+    --jobs=*)
+      JOBS="${1#*=}"
+      shift
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]:-}"
+if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -le 0 ]; then
+  echo "--jobs must be a positive integer" >&2
+  exit 1
+fi
+
+pids=()
+wait_for_slot() {
+  while true; do
+    local active
+    active=$(jobs -p | wc -l | tr -d '[:space:]')
+    if [ "${active:-0}" -lt "$JOBS" ]; then
+      break
+    fi
+    sleep 0.5
+done
+}
+
+wait_for_all_jobs() {
+  local status=0
+  local pid
+  for pid in "${pids[@]:-}"; do
+    wait "$pid" || status=1
+done
+  if [ "$status" -ne 0 ]; then
+    echo "one or more jobs failed" >&2
+    return 1
+  fi
+}
+
+run_sampled_async() {
+  wait_for_slot
+  run_sampled "$1" "$2" "$3" "$4" "$5" "$6" &
+  pids+=("$!")
+}
+
 mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR"
 if [[ ! -f "$NET_FILE" ]]; then
   echo "missing group net input: $NET_FILE" >&2
@@ -153,10 +212,9 @@ echo "[current_main_12] baseline seed1-30 (sampled10)"
 for seed in $(seq 1 30); do
   out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
   log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
-  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
+  run_sampled_async "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
 done
 
-SMART_IDS=("NODE_10335" "NODE_8369" "NODE_167173" "LINK_239754" "NODE_5846" "NODE_5831" "NODE_10377" "NODE_10376" "NODE_150723" "NODE_125895" "NODE_10381" "LINK_120139")
 echo "[current_main_12] smart seed1-30 per candidate (sampled10)"
 for i in "${!SMART_IDS[@]}"; do
   crosswalk_id="${SMART_IDS[$i]}"
@@ -164,6 +222,8 @@ for i in "${!SMART_IDS[@]}"; do
   for seed in $(seq 1 30); do
     out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
     log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
-    run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
+    run_sampled_async "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
   done
 done
+
+wait_for_all_jobs
