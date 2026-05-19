@@ -18,6 +18,7 @@ cut-off / graduation 검토는 full 30seed 실행과 분리된 sequential-light 
 `PASS`는 qualified 후보 pool 유지 및 추가 seed 중단, `CUT`은 후보 pool 제외, `KEEP`은 다음 seed 실행, `RECHECK`는 데이터/구현 확인 대상이다.
 paired comparison은 baseline-only smoke가 아니라 baseline/smart pair가 함께 있는 입력으로만 판단한다.
 `simple_final_pipeline --limit N`은 baseline-first일 수 있으므로 paired 검증용으로 쓰지 않는다.
+sampled10 본실험은 `--disable-ssm`를 기본으로 쓰고, final safety 검증에서만 SSM을 다시 켠다.
 그룹별 sequential-light 운영은 [`docs/02_RUN_GUIDE.md`](docs/02_RUN_GUIDE.md)와 [`docs/07_HANDOFF_FOR_TAEHOON.md`](docs/07_HANDOFF_FOR_TAEHOON.md)를 따른다.
 
 ## 바로 쓰는 명령
@@ -51,6 +52,8 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_
 ```bash
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all_groups.sh
 ```
+
+빠른 파이프라인 전용 체크 명령은 없다. `commands/verify.sh`는 환경/입력 확인용이고, `result/active/real_30seed_runs_sampled10/commands/command_to_check_30seed_results.sh`는 30seed 결과 상태 점검용이다.
 
 태훈님 우선순위와 실행 순서는 [`docs/07_HANDOFF_FOR_TAEHOON.md`](docs/07_HANDOFF_FOR_TAEHOON.md)를 본다.
 

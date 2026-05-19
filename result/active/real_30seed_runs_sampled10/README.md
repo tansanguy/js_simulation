@@ -15,6 +15,7 @@ Important constraints:
 - Codex did not run the 30-seed SUMO jobs.
 - Baseline networks are not shared across groups.
 - CSV columns stay English-only.
+- sampled10 본실험은 기본적으로 `--disable-ssm`를 쓴다. SSM은 final safety 검증에서만 다시 켠다.
 
 Main folders:
 
@@ -29,7 +30,7 @@ Main folders:
 
 Recommended flow:
 
-1. For `seed1` sequential-light validation, run the `command_to_run_seed1_*.sh` wrappers.
+1. For `seed1` sequential-light validation, run the `command_to_run_seed1_*.sh` wrappers. `command_to_run_seed1_all_groups.sh` now covers all 4 groups.
 2. For the preserved full/source-of-truth 600-second path, run the `command_to_run_30seed_*.sh` scripts.
 3. Run `command_to_standardize_30seed_outputs.sh`.
 4. Run `command_to_check_30seed_results.sh`.

@@ -48,6 +48,19 @@ export PATH="$SUMO_HOME/bin:$PATH"
 - `demand_pedestrian.rou.xml`
 - `simulation_result.csv`
 
+## `generated_signal_7` seed02 baseline 실패
+
+증상:
+
+- `FatalTraCIError: Connection already closed`
+- `junction '414685379' bad internal lane geometry` 경고 반복
+
+대응:
+
+- sampled10 본실험에서는 `--disable-ssm`를 기본으로 쓴다.
+- `--enable-ssm`는 final safety 검증처럼 정말 필요할 때만 명시한다.
+- launcher 로그는 seed별 `[sampled10][summary]` 줄과 마지막 `last_error`를 먼저 본다.
+
 ## `vehicle_route_count`가 너무 작음
 
 증상:
@@ -163,6 +176,15 @@ find outputs/smoke/logs -type f | sort | tail -20
 grep -R "Traceback\|TraCIException\|ERROR\|FAILED\|failed" outputs/smoke/logs | tail -80
 grep -R "Traceback\|TraCIException\|ERROR\|FAILED\|failed" outputs/final/logs | tail -80
 ```
+
+## 빠른 파이프라인 체크
+
+파이프라인만 빠르게 확인하는 전용 명령은 현재 없다.
+
+가장 가까운 건 아래 둘이다.
+
+- `bash commands/verify.sh`: 환경/입력 확인
+- `bash result/active/real_30seed_runs_sampled10/commands/command_to_check_30seed_results.sh`: 30seed 결과 상태 점검
 
 ## 보내야 할 것
 

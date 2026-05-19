@@ -130,6 +130,7 @@ primary safety endpoint는 clearance failure, unfinished crossing, low-PET risk 
 
 - `simulation_result.csv`: run 1개, seed 1개 기준 원천 결과다. 없으면 해당 run은 무결하지 않다.
 - `simulation_results_seed.csv`: `simulation_result.csv`와 같은 seed-level compatibility alias다.
+- `simulation_results.csv`: report 호환용 alias다. 원천 기준은 `simulation_result.csv`와 `simulation_results_seed.csv`다.
 - `benchmark_timing.json`: run 성공 여부, 실패 case 수, baseline/smart row 수를 확인한다. 없으면 RECHECK다.
 - `route_demand_manifest.csv`: route/demand hash 공유 확인용이다. 없거나 hash가 비어 있으면 paired comparison은 RECHECK다.
 - baseline-only / smart-only / missing pair 입력도 RECHECK다.
@@ -206,6 +207,8 @@ run 1개, seed 1개 기준 결과다. 일부 칼럼은 `baseline` / `smart` 공�
 - `surrounding_lane_count`: 주변 lane 수
 - `vehicle_bbox_coverage`: 후보 주변 bbox가 네트워크 bbox를 얼마나 덮는지 나타내는 비율
 - `batch_network_file`: 사용한 네트워크 파일 경로
+- `vehicle_route_sha256`: 생성 차량 route hash
+- `pedestrian_route_sha256`: 생성 보행자 route hash
 
 보행자/지연 칼럼:
 
@@ -214,6 +217,8 @@ run 1개, seed 1개 기준 결과다. 일부 칼럼은 `baseline` / `smart` 공�
 - `pedestrian_crossing_count`: `ped_crossing_person_count`와 같은 의미의 원시 칼럼
 - `expected_ped_repeat_count`: 기대한 보행자 반복 수
 - `ped_repeat_count_match`: 관측값이 기대값과 일치하는지
+- `pedestrian_clearance_failure_count`: 기대 횡단 중 완료 실패 수
+- `unfinished_crossing_count`: 미완료 횡단 수
 - `ped_wait_time_mean`: 보행자 평균 대기 시간
 - `ped_wait_time_max`: 보행자 최대 대기 시간
 - `average_pedestrian_wait_time`: `ped_wait_time_mean` 별칭

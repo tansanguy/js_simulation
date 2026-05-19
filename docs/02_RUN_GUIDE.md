@@ -16,6 +16,7 @@ commands/*.sh
 그룹별 30seed 본실험은 위 `smoke` / `final` 흐름과 별도로,
 `result/active/real_30seed_runs_sampled10/commands/*.sh` 아래의 그룹 전용 스크립트로 실행한다.
 실제 계산은 모두 `smart_crosswalk_sumo.run_sampled10_group`가 담당한다.
+sampled10 본실험은 SSM을 기본 off로 둔다. 필요할 때만 `--enable-ssm`를 명시한다.
 
 cut-off / graduation 검토용 sequential-light 경로는 full 30seed 경로와 분리한다.
 sequential-light에서는 `sim_duration=540`, `--output-profile light`, paired baseline/smart delta, KEEP-only candidate CSV를 기준으로 다음 seed를 정한다.
@@ -71,11 +72,13 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_
 
 전체 그룹을 순서대로 돌리려면 아래 스크립트를 쓰면 된다.
 
-현재 `command_to_run_30seed_all_groups.sh` / `command_to_run_seed1_all_groups.sh` / `command_to_run_smoke30_seed1_all_groups.sh`는 `p1_p4_recovery_6`를 건너뛴다. 이 그룹은 위의 개별 명령으로 따로 돌린다.
+현재 `command_to_run_30seed_all_groups.sh` / `command_to_run_smoke30_seed1_all_groups.sh`는 `p1_p4_recovery_6`를 건너뛴다. `command_to_run_seed1_all_groups.sh`는 4개 그룹을 모두 돈다.
 
 ```bash
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all_groups.sh
 ```
+
+파이프라인만 빠르게 확인하는 전용 명령은 없다. 가장 가까운 건 `bash commands/verify.sh`(환경/입력 점검), `bash result/active/real_30seed_runs_sampled10/commands/command_to_check_30seed_results.sh`(30seed 결과 상태 점검)이다.
 
 ## 6. 그룹별 입력 파일
 

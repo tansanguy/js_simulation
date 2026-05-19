@@ -10,7 +10,7 @@
 - 연장은 `extension_increment = 5s`, `max_extensions = 1`이다.
 - extension은 `smart`에서만 발생할 수 있다.
 - `extension_count`는 효과 metric이 아니라 policy exposure 및 trigger sanity check다.
-- SSM은 삭제하지 않는다. 반복/light 실행에서는 off로 두고, final safety 검증에서는 on으로 사용할 수 있게 유지한다.
+- SSM은 삭제하지 않는다. 반복/sampled10/light 실행에서는 기본 off로 두고, final safety 검증에서만 on으로 사용할 수 있게 유지한다.
 
 ## Primary Endpoint
 
