@@ -215,6 +215,7 @@ for seed in $(seq 1 30); do
   run_sampled_async "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_CURRENT_MAIN_12"
 done
 
+SMART_IDS=("NODE_10335" "NODE_8369" "NODE_167173" "LINK_239754" "NODE_5846" "NODE_5831" "NODE_10377" "NODE_10376" "NODE_150723" "NODE_125895" "NODE_10381" "LINK_120139")
 echo "[current_main_12] smart seed1-30 per candidate (sampled10)"
 for i in "${!SMART_IDS[@]}"; do
   crosswalk_id="${SMART_IDS[$i]}"

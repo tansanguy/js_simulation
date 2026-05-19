@@ -72,13 +72,56 @@ bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_p1_
 
 전체 그룹을 순서대로 돌리려면 아래 스크립트를 쓰면 된다.
 
-현재 `command_to_run_30seed_all_groups.sh` / `command_to_run_smoke30_seed1_all_groups.sh`는 `p1_p4_recovery_6`를 건너뛴다. `command_to_run_seed1_all_groups.sh`는 4개 그룹을 모두 돈다.
+- `command_to_run_30seed_all_groups.sh` → 4개 그룹 모두 포함 (current_main_12, signal_fix_9, generated_signal_7, p1_p4_recovery_6)
+- `command_to_run_smoke30_seed1_all_groups.sh` → p1_p4_recovery_6 건너뜀 (명시적 실행 필요)
+- `command_to_run_seed1_all_groups.sh` → 4개 그룹 모두, seed1 단일 실행
 
 ```bash
 bash result/active/real_30seed_runs_sampled10/commands/command_to_run_30seed_all_groups.sh
 ```
 
 파이프라인만 빠르게 확인하는 전용 명령은 없다. 가장 가까운 건 `bash commands/verify.sh`(환경/입력 점검), `bash result/active/real_30seed_runs_sampled10/commands/command_to_check_30seed_results.sh`(30seed 결과 상태 점검)이다.
+
+## 5-1. seed1 단일 실행 (1회 검증용)
+
+본실험(30seed) 전 파이프라인 동작 확인에 쓴다.
+각 그룹의 baseline 1회 + 각 crosswalk smart 1회만 실행한다 (총 38회: baseline 4 + smart 34).
+
+```bash
+# 전체 4그룹 한 번에
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_seed1_all_groups.sh
+
+# 그룹별 개별 실행
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_seed1_current_main_12.sh
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_seed1_signal_fix_9.sh
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_seed1_generated_signal_7.sh
+bash result/active/real_30seed_runs_sampled10/commands/command_to_run_seed1_p1_p4_recovery_6.sh
+```
+
+공통 파라미터: `--sim-duration 540`, `--output-profile light`, `--disable-ssm`, seed 고정 1.
+skip 조건: `is_successful_run` 통과 시 재실행 없음.
+
+## 5-2. 스크립트 검증 이력 및 수정 사항
+
+2026-05-20 검증에서 발견된 버그와 조치 내역.
+
+### 30seed 스크립트 (current_main_12, signal_fix_9)
+
+| 항목 | 내용 |
+|---|---|
+| `verify_report_outputs` 누락 | `simulation_result.csv`, `simulation_results_seed.csv`, `simulation_results.csv` 및 `csv/results/` 사본, 스키마 컬럼 4개(`pedestrian_clearance_failure_count`, `unfinished_crossing_count`, `vehicle_route_sha256`, `pedestrian_route_sha256`) 미검증. `generated_signal_7`의 30seed 스크립트만 검증함 |
+| `run_sampled` 에러 핸들링 | `if !` 패턴 없이 bare call. `set -e`로 서브셸 종료는 되나 실패 시 진단 출력 없음. `generated_signal_7` 30seed만 `print_run_summary` 포함 |
+| `current_main_12` SMART_IDS 선언 누락 | smart loop 앞에 `SMART_IDS=(...)` 선언이 없어 smart 360개 잡이 미실행되는 버그. 워킹트리에서 수정됨(미커밋) |
+
+### seed1 스크립트 (4개 전부)
+
+| 항목 | 수정 전 | 수정 후 |
+|---|---|---|
+| 불필요 seed 루프 | `for seed in $(seq 1 1); do … done` | `seed=1` 직접 선언 |
+| smart 이중 루프 | `for i in "${!SMART_IDS[@]}"` + 내부 `for seed in …` | `for crosswalk_id in "${SMART_IDS[@]}"` 단일 루프 |
+| `generated_signal_7` `--disable-ssm` | 누락 (SSM 켜진 채 실행) | 추가 |
+| `p1_p4_recovery_6` sim-duration | `--sim-duration 600` 하드코딩 | `SIM_DURATION=540` 변수 + `"$SIM_DURATION"` |
+| `p1_p4_recovery_6` output-profile | 없음 | `OUTPUT_PROFILE=light` + `--output-profile "$OUTPUT_PROFILE"` |
 
 ## 6. 그룹별 입력 파일
 

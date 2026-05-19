@@ -145,27 +145,23 @@ run_sampled() {
     verify_report_outputs "$out_dir"
     return 0
   fi
-  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration "$SIM_DURATION" --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --output-profile "$OUTPUT_PROFILE" --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
+  python3 -m smart_crosswalk_sumo.run_sampled10_group --candidate-csv "$candidate_csv" --net-file "$NET_FILE" --seed "$seed" --output-dir "$out_dir" --sim-duration "$SIM_DURATION" --warmup 0 --traci_step_length 0.1 --traffic_measure_radius_m 500.0 --extension_increment 5.0 --max_extensions 1 --metric-sample-interval 10 --vehicle-sample-interval 10 --progress-interval 60 --phase-aligned-ped-depart --ped-repeat-count 5 --ped-repeat-spacing-sec 2 --include-vehicles --disable-ssm --output-profile "$OUTPUT_PROFILE" --manifest-row-role "$manifest_row_role" --manifest-crosswalk-id "$manifest_crosswalk_id" >>"$log_file" 2>&1
   verify_run_success "$out_dir"
   python3 -m smart_crosswalk_sumo.generate_reports --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" --candidates "$candidate_csv" --nets_dir "$NETS_DIR" >>"$log_file" 2>&1
   verify_report_outputs "$out_dir"
 }
 
+seed=1
 echo "[generated_signal_7] baseline seed1 (sampled10)"
-for seed in $(seq 1 1); do
-  out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
-  log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
-  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_GENERATED_SIGNAL_7"
-done
+out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
+log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
+run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_GENERATED_SIGNAL_7"
 
 SMART_IDS=("LINK_212169" "NODE_8452" "NODE_6082" "NODE_6123" "NODE_8426" "NODE_74388" "NODE_10273")
 echo "[generated_signal_7] smart seed1 per candidate (sampled10)"
-for i in "${!SMART_IDS[@]}"; do
-  crosswalk_id="${SMART_IDS[$i]}"
+for crosswalk_id in "${SMART_IDS[@]}"; do
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
-  for seed in $(seq 1 1); do
-    out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
-    log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
-    run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
-  done
+  out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
+  log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
+  run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
 done

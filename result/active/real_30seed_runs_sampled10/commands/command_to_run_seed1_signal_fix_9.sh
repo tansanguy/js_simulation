@@ -151,21 +151,17 @@ run_sampled() {
   verify_report_outputs "$out_dir"
 }
 
+seed=1
 echo "[signal_fix_9] baseline seed1 (sampled10)"
-for seed in $(seq 1 1); do
-  out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
-  log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
-  run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_SIGNAL_FIX_9"
-done
+out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
+log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
+run_sampled "$BASELINE_CSV" "$out_dir" "$log_file" "$seed" "baseline_placeholder" "BASELINE_SIGNAL_FIX_9"
 
 SMART_IDS=("LINK_249048" "NODE_5837" "LINK_10218" "LINK_140740" "NODE_9634" "LINK_194891" "NODE_10378" "NODE_5681" "NODE_10262")
 echo "[signal_fix_9] smart seed1 per candidate (sampled10)"
-for i in "${!SMART_IDS[@]}"; do
-  crosswalk_id="${SMART_IDS[$i]}"
+for crosswalk_id in "${SMART_IDS[@]}"; do
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
-  for seed in $(seq 1 1); do
-    out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
-    log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
-    run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
-  done
+  out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
+  log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
+  run_sampled "$candidate_csv" "$out_dir" "$log_file" "$seed" "smart_candidate" "$crosswalk_id"
 done
