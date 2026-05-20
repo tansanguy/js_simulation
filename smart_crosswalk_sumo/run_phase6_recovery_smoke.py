@@ -975,6 +975,49 @@ def _summarize_local_watcher_pet(
     )
 
 
+def _compute_pet_event_audit_rows(
+    crosswalk_id: str,
+    scenario: str,
+    ped_intervals: list[dict[str, Any]],
+    veh_intervals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for ped in ped_intervals:
+        ped_id  = str(ped.get("pedestrian_id", ""))
+        p_enter = float(ped.get("enter_time", 0.0))
+        p_exit  = float(ped.get("exit_time", p_enter))
+        for veh in veh_intervals:
+            v_id    = str(veh.get("vehicle_id", ""))
+            v_enter = float(veh.get("enter_time", 0.0))
+            v_exit  = float(veh.get("exit_time", 0.0))
+            gap = _interval_gap(p_enter, p_exit, v_enter, v_exit)
+            if gap is None:
+                pet_case  = "undefined"
+                pet_value = float("nan")
+            elif gap == 0.0:
+                pet_case  = "overlap"
+                pet_value = 0.0
+            elif p_exit <= v_enter:
+                pet_case  = "ped_before_veh"
+                pet_value = gap
+            else:
+                pet_case  = "veh_before_ped"
+                pet_value = gap
+            rows.append({
+                "crosswalk_id": crosswalk_id,
+                "scenario":     scenario,
+                "ped_id":       ped_id,
+                "vehicle_id":   v_id,
+                "ped_enter":    round(p_enter, 3),
+                "ped_exit":     round(p_exit, 3),
+                "veh_enter":    round(v_enter, 3),
+                "veh_exit":     round(v_exit, 3),
+                "pet_value":    round(pet_value, 4) if pet_value == pet_value else float("nan"),
+                "pet_case":     pet_case,
+            })
+    return rows
+
+
 def _route_pair_from_crossing_edge(net: Any, crossing_edge_id: str) -> list[tuple[str, str, str]]:
     crossing_edge = net.getEdge(str(crossing_edge_id))
     base_route = pedestrian_route_from_crossing(crossing_edge)
