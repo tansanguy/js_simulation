@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# smoke_top7_seed1.sh
+# top7 후보 seed1 smoke test
+#
+# 목적: 30seed 본 실행 전 candidate CSV + TLS/crossing 매핑이 정상 작동하는지 검증
+#
+# 기존 seed1 스크립트 대비 변경:
+#   - SIM_DURATION: 540 → 600 (warmup 없이도 충분한 관측)
+#   - warmup: 0 유지 (smoke는 속도 우선)
+#   - max_extensions: 1 → 3 (본 실행과 동일 설정 테스트)
+#   - SSM: --disable-ssm 제거 (본 실행과 동일 설정 테스트)
+#   - output-profile: light (결과 파일 최소화)
+#
+# 사용법:
+#   cd /Users/junlee/Desktop/2026-1/js
+#   bash final/top7_sim/commands/smoke_top7_seed1.sh
+#   bash final/top7_sim/commands/smoke_top7_seed1.sh --force  # 기존 결과 무시하고 재실행
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOP7_SIM_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$TOP7_SIM_ROOT/../../.." && pwd)"
+NETS_DIR="$PROJECT_ROOT/result/active/nets"
+FIGURES_DIR="$TOP7_SIM_ROOT/figures"
+RUN_ROOT="$TOP7_SIM_ROOT/runs"
+LOG_ROOT="$TOP7_SIM_ROOT/logs"
+SINGLE_CSV_ROOT="$TOP7_SIM_ROOT/manifests/single_candidates"
+BASELINE_CSV="$TOP7_SIM_ROOT/manifests/top7_baseline_candidates.csv"
+NET_FILE="$NETS_DIR/generated_signal_7.net.xml"
+SIM_DURATION=600
+OUTPUT_PROFILE=light
+export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
+
+FORCE=false
+[[ "${1:-}" == "--force" ]] && FORCE=true
+
+# ── SUMO 환경 ─────────────────────────────────────────────────────────────────
+if [[ -z "${SUMO_HOME:-}" ]]; then
+  command -v sumo >/dev/null 2>&1 || { echo "SUMO_HOME not set" >&2; exit 1; }
+else
+  export PATH="$SUMO_HOME/bin:$PATH"
+  [[ -z "${PROJ_LIB:-}" && -d "$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj" ]] && \
+    export PROJ_LIB="$SUMO_HOME/framework/EclipseSUMO.framework/Resources/proj"
+fi
+[[ -d "$PROJECT_ROOT/.venv/bin" ]] && export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
+
+mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR"
+[[ -f "$NET_FILE"     ]] || { echo "net.xml 없음: $NET_FILE" >&2; exit 1; }
+[[ -f "$BASELINE_CSV" ]] || { echo "baseline CSV 없음 → python3 analysis/make_top7_sim_candidates.py 먼저 실행" >&2; exit 1; }
+
+# ── 검증 함수 ─────────────────────────────────────────────────────────────────
+verify_run_success() {
+  local bench="$1/benchmark_timing.json"
+  python3 - "$bench" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+if not path.exists():
+    print(f"missing: {path}", file=sys.stderr); sys.exit(1)
+d = json.loads(path.read_text(encoding="utf-8"))
+def i(k):
+    try: return int(d.get(k,-1))
+    except: return -1
+ok = d.get("run_success") is True and i("failed_cases_count")==0 and i("baseline_result_rows")>=1 and i("smart_result_rows")>=1
+if not ok:
+    print(f"failed: {d.get('failure_reason','run_success=false')}", file=sys.stderr); sys.exit(1)
+PY
+}
+
+is_done() {
+  local out="$1"
+  $FORCE && return 1
+  [[ -f "$out/simulation_summary.csv" ]]       || return 1
+  [[ -f "$out/baseline_smart_summary.csv" ]]   || return 1
+  verify_run_success "$out" >/dev/null 2>&1
+}
+
+# ── 실행 함수 ─────────────────────────────────────────────────────────────────
+run_smoke() {
+  local candidate_csv="$1" out_dir="$2" log_file="$3"
+  local manifest_row_role="$4" manifest_crosswalk_id="$5"
+  mkdir -p "$out_dir" "$(dirname "$log_file")"
+
+  if is_done "$out_dir"; then
+    echo "  ✓ skip (already done): $manifest_crosswalk_id"; return 0
+  fi
+
+  echo "  → running: $manifest_crosswalk_id (seed=1, ${SIM_DURATION}s)"
+  if ! python3 -m smart_crosswalk_sumo.run_sampled10_group \
+    --candidate-csv   "$candidate_csv" \
+    --net-file        "$NET_FILE" \
+    --seed            1 \
+    --output-dir      "$out_dir" \
+    --sim-duration    "$SIM_DURATION" \
+    --warmup          0 \
+    --traci_step_length 0.1 \
+    --traffic_measure_radius_m 500.0 \
+    --extension_increment 5.0 \
+    --max_extensions  3 \
+    --metric-sample-interval  10 \
+    --vehicle-sample-interval 10 \
+    --progress-interval 30 \
+    --phase-aligned-ped-depart \
+    --ped-repeat-count 5 \
+    --ped-repeat-spacing-sec 2 \
+    --include-vehicles \
+    --output-profile  "$OUTPUT_PROFILE" \
+    --manifest-row-role     "$manifest_row_role" \
+    --manifest-crosswalk-id "$manifest_crosswalk_id" \
+    >>"$log_file" 2>&1; then
+    echo "  ✗ FAILED: $manifest_crosswalk_id  (log: $log_file)" >&2
+    tail -5 "$log_file" >&2
+    return 1
+  fi
+
+  verify_run_success "$out_dir" || { echo "  ✗ verify failed: $manifest_crosswalk_id" >&2; return 1; }
+
+  if ! python3 -m smart_crosswalk_sumo.generate_reports \
+    --figures_dir "$FIGURES_DIR" --output_dir "$out_dir" \
+    --candidates  "$candidate_csv" --nets_dir "$NETS_DIR" \
+    >>"$log_file" 2>&1; then
+    echo "  ⚠ report gen failed (run ok): $manifest_crosswalk_id"
+  fi
+}
+
+# ── smoke 결과 요약 ───────────────────────────────────────────────────────────
+smoke_summary() {
+  python3 - "$RUN_ROOT" <<'PY'
+import json, pandas as pd
+from pathlib import Path
+
+RUN_ROOT = Path(__import__('sys').argv[1])
+SMART_IDS = ["LINK_194891","NODE_10262","NODE_125895","NODE_5831",
+             "LINK_239754","NODE_5846","NODE_8369"]
+
+print("\n=== smoke 결과 요약 ===")
+# baseline
+b = RUN_ROOT/"baseline/seed01/simulation_result.csv"
+if b.exists():
+    df = pd.read_csv(b)
+    n_cw = df['crosswalk_id'].nunique()
+    net_d = df['network_avg_delay_sec'].mean() if 'network_avg_delay_sec' in df.columns else float('nan')
+    print(f"  baseline: crosswalk 수={n_cw}  network_avg_delay={net_d:.3f}s")
+else:
+    print("  baseline: 결과 없음")
+
+# smart
+print()
+for cw in SMART_IDS:
+    f = RUN_ROOT/f"smart/{cw}/seed01/simulation_result.csv"
+    if not f.exists():
+        print(f"  {cw:15s}: 결과 없음")
+        continue
+    df = pd.read_csv(f)
+    smart = df[df['scenario']=='smart'] if 'scenario' in df.columns else df
+    base  = df[df['scenario']=='baseline'] if 'scenario' in df.columns else pd.DataFrame()
+
+    ext   = smart['extension_count'].sum()       if 'extension_count'       in smart.columns else '?'
+    ext_s = smart['total_extension_sec'].sum()   if 'total_extension_sec'   in smart.columns else '?'
+    pet   = smart['pet_event_count'].sum()       if 'pet_event_count'       in smart.columns else '?'
+    net_d = smart['network_avg_delay_sec'].mean() if 'network_avg_delay_sec' in smart.columns else float('nan')
+    b_net = base['network_avg_delay_sec'].mean()  if not base.empty and 'network_avg_delay_sec' in base.columns else float('nan')
+    delta = net_d - b_net if not (net_d != net_d or b_net != b_net) else float('nan')
+
+    bench = RUN_ROOT/f"smart/{cw}/seed01/benchmark_timing.json"
+    success = '✓' if bench.exists() and json.loads(bench.read_text()).get('run_success') else '✗'
+
+    print(f"  {success} {cw:15s}  ext={ext}({ext_s}s)  pet={pet}  "
+          f"net_delay={net_d:.2f}s(Δ{delta:+.2f}s)")
+PY
+}
+
+# ── 실행 ──────────────────────────────────────────────────────────────────────
+SMART_IDS=(
+  "LINK_194891"
+  "NODE_10262"
+  "NODE_125895"
+  "NODE_5831"
+  "LINK_239754"
+  "NODE_5846"
+  "NODE_8369"
+)
+
+echo "[top7_sim smoke] baseline seed1 시작"
+run_smoke "$BASELINE_CSV" \
+  "$RUN_ROOT/baseline/seed01" \
+  "$LOG_ROOT/baseline/seed01.log" \
+  "baseline_placeholder" "BASELINE_TOP7_SIM"
+echo "  ✓ baseline 완료"
+
+echo ""
+echo "[top7_sim smoke] smart seed1 × 7후보 시작"
+FAIL=0
+for cw in "${SMART_IDS[@]}"; do
+  csv="$SINGLE_CSV_ROOT/${cw}.csv"
+  if [[ ! -f "$csv" ]]; then
+    echo "  ✗ CSV 없음: $csv" >&2; FAIL=$((FAIL+1)); continue
+  fi
+  run_smoke "$csv" \
+    "$RUN_ROOT/smart/${cw}/seed01" \
+    "$LOG_ROOT/smart/${cw}/seed01.log" \
+    "smart_candidate" "$cw" || FAIL=$((FAIL+1))
+done
+
+smoke_summary
+
+echo ""
+if [[ "$FAIL" -eq 0 ]]; then
+  echo "✅ smoke 전체 통과 — run_top7_30seed.sh 실행 가능"
+else
+  echo "❌ $FAIL 개 실패 — candidate CSV 및 로그 확인 필요"
+  exit 1
+fi
