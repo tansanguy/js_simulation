@@ -387,7 +387,7 @@ def _run_enhanced_scenario(
     seed: int,
     duration: int,
     step_length: float,
-    out_dir: Path,          # simulation_result.csv + run_metadata.json saved here
+    out_dir: Path,          # csv/ (결과) + log/ (메타데이터) 하위 폴더 생성됨
     sim_tmp_dir: Path,      # sumocfg + demand XMLs written here (no persistence)
     include_vehicles: bool,
     extension_sec: float,
@@ -1045,37 +1045,27 @@ def _run_enhanced_scenario(
             w["tight_veh_intervals"].append(e)
         w["active_tight_veh_entries"].clear()
 
-    # ── trace CSV 출력 (baseline/smart 모두 전 step 기록) ─────────────────────
-    pd.DataFrame(extension_events).to_csv(out_dir / "extension_trace.csv", index=False)
-    if trace_mode != "off":
-        pd.DataFrame([
-            {
-                "crosswalk_id": cid,
-                "tls_id": w["tls_id"],
-                "ped_link_index": w["ped_link_index"],
-                "lane_id": lane_id,
-                "controlled_link_indices": "|".join(str(i) for i in link_indices),
-            }
-            for cid, w in watch.items()
-            for lane_id, link_indices in sorted(w["controlled_lane_link_indices"].items())
-        ]).to_csv(out_dir / "controlled_lane_connection_map.csv", index=False)
-    _write_trace_csv(out_dir / "tls_state_trace.csv",
-                     [r for w in watch.values() for r in w["tls_trace_rows"]], trace_mode)
-    _write_trace_csv(out_dir / "local_lane_effect_trace.csv",
-                     [r for w in watch.values() for r in w["lane_trace_rows"]], trace_mode)
-    _write_trace_csv(out_dir / "controlled_lane_effect_trace.csv",
-                     [r for w in watch.values() for r in w["controlled_lane_step_rows"]], trace_mode)
-    _write_trace_csv(out_dir / "controlled_vehicle_trace.csv",
-                     [r for w in watch.values() for r in w["controlled_lane_trace_rows"]], trace_mode)
-    _write_trace_csv(out_dir / "pet_vehicle_intervals.csv",
-                     [r for w in watch.values() for r in w["veh_intervals"]], trace_mode)
-    _write_trace_csv(out_dir / "pedestrian_effect_trace.csv",
-                     [r for w in watch.values() for r in w["ped_trace_rows"]], trace_mode)
-    pd.DataFrame(
-        [r for w in watch.values() for r in w["ped_crossing_audit_rows"]]
-    ).to_csv(out_dir / "ped_crossing_signal_audit.csv", index=False)
+    # ── 출력 디렉토리: csv/ (결과), log/ (메타데이터) ─────────────────────────
+    csv_dir = out_dir / "csv"
+    log_dir = out_dir / "log"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── local_watcher_pet_event_audit.csv ─────────────────────────────────────
+    # ── observations.csv: 이벤트 상세 4종 통합 ────────────────────────────────
+    _obs_frames: list[pd.DataFrame] = []
+
+    _ext_df = pd.DataFrame(extension_events)
+    if not _ext_df.empty:
+        _ext_df.insert(0, "source", "extension_trace")
+    _obs_frames.append(_ext_df)
+
+    _ped_sig_df = pd.DataFrame(
+        [r for w in watch.values() for r in w["ped_crossing_audit_rows"]]
+    )
+    if not _ped_sig_df.empty:
+        _ped_sig_df.insert(0, "source", "ped_crossing_signal_audit")
+    _obs_frames.append(_ped_sig_df)
+
     _audit_rows: list[dict] = []
     for cid, w in watch.items():
         _audit_rows.extend(
@@ -1087,9 +1077,21 @@ def _run_enhanced_scenario(
             )
         )
     if _audit_rows:
-        pd.DataFrame(_audit_rows).to_csv(
-            out_dir / "local_watcher_pet_event_audit.csv", index=False
-        )
+        _pet_audit_df = pd.DataFrame(_audit_rows)
+        _pet_audit_df.insert(0, "source", "local_watcher_pet_event_audit")
+        _obs_frames.append(_pet_audit_df)
+
+    _veh_int_df = pd.DataFrame(
+        [r for w in watch.values() for r in w["veh_intervals"]]
+    )
+    if not _veh_int_df.empty:
+        _veh_int_df.insert(0, "source", "pet_vehicle_intervals")
+    _obs_frames.append(_veh_int_df)
+
+    _obs_all = [f for f in _obs_frames if not f.empty]
+    (pd.concat(_obs_all, ignore_index=True) if _obs_all else pd.DataFrame()).to_csv(
+        csv_dir / "observations.csv", index=False
+    )
 
     # ── compile per-crosswalk result rows ─────────────────────────────────────
     net_tt   = (sum(veh_travel_times) / len(veh_travel_times)) if veh_travel_times else None
@@ -1290,11 +1292,44 @@ def _run_enhanced_scenario(
     elapsed = round(time.time() - t_start, 2)
     result_df = pd.DataFrame(rows)
 
-    # save per-run CSV
-    csv_path = out_dir / "simulation_result.csv"
-    result_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    # save per-run simulation_result.csv → csv/
+    result_df.to_csv(csv_dir / "simulation_result.csv", index=False, encoding="utf-8-sig")
 
-    # save run_metadata.json
+    # run_info.csv: 횡단보도/시뮬레이션 기본 정보 → csv/
+    _info_rows = []
+    for row in candidate_df.itertuples(index=False):
+        cid = str(row.crosswalk_id)
+        _cw_elderly = (elderly_ratio.get(cid, 0.15) if isinstance(elderly_ratio, dict)
+                       else float(elderly_ratio))
+        _info_rows.append({
+            "crosswalk_id":            cid,
+            "tls_id_used":             getattr(row, "tls_id_used", ""),
+            "crossing_id":             getattr(row, "crossing_id", ""),
+            "nearest_junction_id":     getattr(row, "nearest_junction_id", ""),
+            "ped_link_index":          getattr(row, "ped_link_index", ""),
+            "crossing_edge_id":        getattr(row, "crossing_edge_id", ""),
+            "route_from_edge":         getattr(row, "route_from_edge", ""),
+            "route_to_edge":           getattr(row, "route_to_edge", ""),
+            "controlled_links_count":  getattr(row, "controlled_links_count", ""),
+            "final_verdict":           getattr(row, "final_verdict", ""),
+            "scenario":                scenario,
+            "seed":                    seed,
+            "sim_duration":            duration,
+            "warmup_sec":              warmup_sec,
+            "step_length":             step_length,
+            "extension_sec":           extension_sec,
+            "ped_count":               int(getattr(row, "ped_repeat_count", len(ped_records))),
+            "ped_repeat_spacing_sec":  float(getattr(row, "ped_repeat_spacing_sec", 2.0)),
+            "elderly_ratio":           _cw_elderly,
+            "run_profile":             run_profile,
+            "trace_mode":              trace_mode,
+            "pet_observability_mode":  pet_observability_mode,
+            "group_name":              group_name,
+            "net_file":                str(net_file),
+        })
+    pd.DataFrame(_info_rows).to_csv(csv_dir / "run_info.csv", index=False, encoding="utf-8-sig")
+
+    # run_metadata.json → log/
     meta = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runner": "run_enhanced_smoke_group",
@@ -1332,7 +1367,7 @@ def _run_enhanced_scenario(
         "group_name": group_name,
         "net_file": str(net_file),
     }
-    (out_dir / "run_metadata.json").write_text(
+    (log_dir / "run_metadata.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
@@ -2458,8 +2493,15 @@ def _postprocess_diagnostic_pet_interval_deltas(
     audit_dir.mkdir(parents=True, exist_ok=True)
     diagnostic_only = pet_observability_mode == PET_OBSERVABILITY_RANDOMIZED
 
-    base = _diagnostic_interval_side(_read_csv_or_empty(baseline_dir / "pet_vehicle_intervals.csv"), "baseline")
-    smart = _diagnostic_interval_side(_read_csv_or_empty(smart_dir / "pet_vehicle_intervals.csv"), "smart")
+    def _pet_intervals_from_obs(seed_dir_path: Path) -> pd.DataFrame:
+        obs = _read_csv_or_empty(seed_dir_path / "csv" / "observations.csv")
+        if obs.empty or "source" not in obs.columns:
+            return pd.DataFrame()
+        sub = obs[obs["source"] == "pet_vehicle_intervals"].drop(columns=["source"]).reset_index(drop=True)
+        return sub
+
+    base = _diagnostic_interval_side(_pet_intervals_from_obs(baseline_dir), "baseline")
+    smart = _diagnostic_interval_side(_pet_intervals_from_obs(smart_dir), "smart")
     delta = base.merge(smart, on=["vehicle_id", "occurrence_index"], how="inner")
     if not delta.empty:
         delta["exit_delta"] = (
@@ -2493,9 +2535,9 @@ def _postprocess_diagnostic_pet_interval_deltas(
             summaries_by_cid = {"": _summarize_diagnostic_interval_delta(delta, diagnostic_only)}
 
     for result_path in (
-        baseline_dir / "simulation_result.csv",
-        smart_dir / "simulation_result.csv",
-        smart_dir / "simulation_result_with_baseline.csv",
+        baseline_dir / "csv" / "simulation_result.csv",
+        smart_dir / "csv" / "simulation_result.csv",
+        smart_dir / "csv" / "simulation_result_with_baseline.csv",
     ):
         df = _read_csv_or_empty(result_path)
         if df.empty:
@@ -2895,7 +2937,7 @@ def _run_group(
                 forced_extension_policy_t=forced_extension_policy_t,
             )
         scenario_dfs[scenario] = df
-        print(f"  [{scenario}] seed{seed:05d} done — {len(df)} rows → {result_dir / 'simulation_result.csv'}")
+        print(f"  [{scenario}] seed{seed:05d} done — {len(df)} rows → {result_dir / 'csv' / 'simulation_result.csv'}")
 
     _write_route_hash_audit(out_dir, seed, scenario_dfs)
     _write_pet_observability_audit(
@@ -2908,7 +2950,7 @@ def _run_group(
     if pet_observability_mode == PET_OBSERVABILITY_RANDOMIZED:
         _postprocess_diagnostic_pet_interval_deltas(out_dir, seed, pet_observability_mode)
         for scenario in list(scenario_dfs):
-            patched = _read_csv_or_empty(out_dir / scenario / f"seed{seed:05d}" / "simulation_result.csv")
+            patched = _read_csv_or_empty(out_dir / scenario / f"seed{seed:05d}" / "csv" / "simulation_result.csv")
             if not patched.empty:
                 scenario_dfs[scenario] = patched
 
@@ -2951,7 +2993,7 @@ def _run_group(
                     f"simulation_result_with_baseline: {cid} missing row — got {sub_scenarios}"
                 )
         smart_result_dir = out_dir / "smart" / f"seed{seed:05d}"
-        combined.to_csv(smart_result_dir / "simulation_result_with_baseline.csv",
+        combined.to_csv(smart_result_dir / "csv" / "simulation_result_with_baseline.csv",
                         index=False, encoding="utf-8-sig")
 
     all_df = pd.concat(list(scenario_dfs.values()), ignore_index=True)
@@ -3354,7 +3396,7 @@ def main() -> None:
         _build_excel(result_df, candidate_df_meta, xlsx_out)
     else:
         print(f"\nSingle-crosswalk mode: global CSV/Excel skipped.")
-        print(f"Results → {args.output_dir}/baseline/seed{seeds[0]:05d}/simulation_result.csv")
+        print(f"Results → {args.output_dir}/baseline/seed{seeds[0]:05d}/csv/simulation_result.csv")
 
     # ── next-step command recommendations ────────────────────────────────────
     group = args.candidate_csv.stem.replace("_candidates", "")
