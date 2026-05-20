@@ -51,6 +51,7 @@ from smart_crosswalk_sumo.run_phase6_recovery_smoke import (
     _build_local_scope,
     _candidate_crossing_roads,
     _compute_pet_event_audit_rows,
+    _compute_pet_pair_summary,
     _network_passenger_edge_ids,
     _normalize_road_alias,
     _passenger_lane_count_for_route,
@@ -1120,6 +1121,11 @@ def _run_enhanced_scenario(
             pedestrian_crossing_count=len(w["ped_seen"]),
             conflict_edge_count=len(w["conflict_edge_ids"]),
         )
+        # pair-level diagnostic (per-ped min 포화 우회용 보조 지표)
+        pair_diag = _compute_pet_pair_summary(
+            ped_intervals=w["ped_intervals"],
+            veh_intervals=w["veh_intervals"],
+        )
         pet_severe = float(pet.get("very_risky_crossing_count", 0) or 0)
         cw_eld_inc = float(w["elderly_incomplete"])
         safety_risk = (pet_severe + cw_eld_inc * 2.0)
@@ -1263,6 +1269,18 @@ def _run_enhanced_scenario(
             "cz_pet_mean":                         cz_pet.get("pet_mean"),
             "cz_low_pet_event_count":              cz_pet.get("low_pet_event_count"),
             "cz_very_risky_count":                 cz_pet.get("very_risky_crossing_count"),
+            # ── pair-level diagnostic (보조, PET 대체 아님) ──────────────────
+            "pair_total_count":          pair_diag.get("pair_total_count"),
+            "pair_overlap_count":        pair_diag.get("pair_overlap_count"),
+            "pair_ped_before_veh_count": pair_diag.get("pair_ped_before_veh_count"),
+            "pair_veh_before_ped_count": pair_diag.get("pair_veh_before_ped_count"),
+            "pair_overlap_rate":         pair_diag.get("pair_overlap_rate"),
+            "pair_ped_before_veh_rate":  pair_diag.get("pair_ped_before_veh_rate"),
+            "pair_veh_before_ped_rate":  pair_diag.get("pair_veh_before_ped_rate"),
+            "pair_pet_mean":             pair_diag.get("pair_pet_mean"),
+            "pair_pet_median":           pair_diag.get("pair_pet_median"),
+            "pair_nonzero_pet_mean":     pair_diag.get("pair_nonzero_pet_mean"),
+            "pair_nonzero_pet_median":   pair_diag.get("pair_nonzero_pet_median"),
             "safety_risk_score":                   round(safety_risk, 4),
             "accident_expected_value":             round(accident_ev, 2),
             # ── run context ──────────────────────────────────────────────────

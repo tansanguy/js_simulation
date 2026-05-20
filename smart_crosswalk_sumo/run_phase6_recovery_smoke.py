@@ -1018,6 +1018,65 @@ def _compute_pet_event_audit_rows(
     return rows
 
 
+def _compute_pet_pair_summary(
+    ped_intervals: list[dict[str, Any]],
+    veh_intervals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    All (ped, veh) pair 레벨 분포 지표.
+    per-ped minimum PET summary의 대체가 아닌 diagnostic 보조 지표.
+    overlap 포화 상황에서 extension 효과를 pair 분포 shift로 확인.
+    """
+    pet_vals: list[float] = []
+    nz_vals:  list[float] = []
+    ov = pbv = vbp = 0
+
+    for ped in ped_intervals:
+        p_enter = float(ped.get("enter_time", 0.0))
+        p_exit  = float(ped.get("exit_time", p_enter))
+        for veh in veh_intervals:
+            v_enter = float(veh.get("enter_time", 0.0))
+            v_exit  = float(veh.get("exit_time", 0.0))
+            gap = _interval_gap(p_enter, p_exit, v_enter, v_exit)
+            if gap is None:
+                continue
+            pet_vals.append(gap)
+            if gap == 0.0:
+                ov += 1
+            elif p_exit <= v_enter:
+                pbv += 1
+                nz_vals.append(gap)
+            else:
+                vbp += 1
+                nz_vals.append(gap)
+
+    total = len(pet_vals)
+
+    def _med(lst: list[float]) -> float:
+        if not lst:
+            return float("nan")
+        s = sorted(lst)
+        n = len(s)
+        return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+    def _avg(lst: list[float]) -> float:
+        return sum(lst) / len(lst) if lst else float("nan")
+
+    return {
+        "pair_total_count":          total,
+        "pair_overlap_count":        ov,
+        "pair_ped_before_veh_count": pbv,
+        "pair_veh_before_ped_count": vbp,
+        "pair_overlap_rate":         round(ov  / total, 4) if total else float("nan"),
+        "pair_ped_before_veh_rate":  round(pbv / total, 4) if total else float("nan"),
+        "pair_veh_before_ped_rate":  round(vbp / total, 4) if total else float("nan"),
+        "pair_pet_mean":             round(_avg(pet_vals), 4),
+        "pair_pet_median":           round(_med(pet_vals), 4),
+        "pair_nonzero_pet_mean":     round(_avg(nz_vals), 4),
+        "pair_nonzero_pet_median":   round(_med(nz_vals), 4),
+    }
+
+
 def _route_pair_from_crossing_edge(net: Any, crossing_edge_id: str) -> list[tuple[str, str, str]]:
     crossing_edge = net.getEdge(str(crossing_edge_id))
     base_route = pedestrian_route_from_crossing(crossing_edge)
