@@ -39,6 +39,19 @@ echo "$SUMO_HOME"
 
 아래에서 `$PROJECT_ROOT`는 각자 clone 한 프로젝트 루트다. 예를 들면 `~/js_simulation`이다.
 
+팀 구글드라이브에서 내려받을 기준 폴더는 아래처럼 잡아두면 된다.
+
+- `Google Drive/Shared drives/Smart Crosswalk/top7/generated_signal_7/`
+
+이 폴더 안에는 최소한 다음 파일이 있어야 한다.
+
+- `generated_signal_7.net.xml`
+- `final_top7_candidates.csv`
+- `final_top7_report_table.csv`
+- `final_top7_mapping_audit.csv`
+- `top7_baseline_candidates.csv`
+- `single_candidates/*.csv`
+
 받아야 할 파일은 `result/active/nets/*.net.xml`이다. 이 파일들은 프로젝트 아래의 같은 경로로 넣는다.
 
 ```bash
@@ -62,6 +75,12 @@ cp result/active/nets/*.xml "$PROJECT_ROOT/result/active/nets/"
 - `result/active/nets/signal_fix_9.net.xml`
 - `result/active/nets/generated_signal_7.net.xml`
 - `result/active/nets/p1_p4_recovery_6.net.xml`
+
+top7 실행만 볼 때는 최소한 아래 조합이면 된다.
+
+- `result/active/nets/generated_signal_7.net.xml`
+- `final/top7_sim/manifests/top7_baseline_candidates.csv`
+- `final/top7_sim/manifests/single_candidates/*.csv`
 
 ## 3. 실행 우선순위
 

@@ -52,6 +52,46 @@ generated_signal_7.net.xml (중구 전체 도로망)
 > - NODE_125895 / NODE_8369 → 신당동 동일 교차로 군집 (군집4, 119m 이내)  
 > - 각각 다른 `crossing_edge_id`에 배정되어 있으므로 동시 실행 가능
 
+### 현재 구현된 산출물
+
+최종 top7 관련 산출물은 아래 경로에 생성된다.
+
+- `final/top7/`: top7 선정 결과, 매핑 감사표, 지도 산출물
+- `final/top7_sim/`: smoke / 30seed 실행 스크립트, 실행 결과, 후보 CSV
+
+대표 파일:
+
+- `final/top7/final_top7_candidates.csv`
+- `final/top7/final_top7_report_table.csv`
+- `final/top7/final_top7_mapping_audit.csv`
+- `final/top7/final_top7_map.geojson`
+- `final/top7_sim/manifests/top7_baseline_candidates.csv`
+- `final/top7_sim/manifests/single_candidates/<crosswalk_id>.csv`
+
+### 구글드라이브 수령 경로
+
+팀 구글드라이브에서 파일을 받을 때는 아래 폴더를 기준 경로로 사용한다.
+
+- `Google Drive/Shared drives/Smart Crosswalk/top7/generated_signal_7/`
+
+이 폴더에서 내려받은 뒤, 로컬에서는 다음 위치로 맞춘다.
+
+- `generated_signal_7.net.xml` → `result/active/nets/generated_signal_7.net.xml`
+- `top7_baseline_candidates.csv` → `final/top7_sim/manifests/top7_baseline_candidates.csv`
+- `single_candidates/*.csv` → `final/top7_sim/manifests/single_candidates/`
+- `final_top7_candidates.csv` → `final/top7/final_top7_candidates.csv`
+- `final_top7_report_table.csv` → `final/top7/final_top7_report_table.csv`
+- `final_top7_mapping_audit.csv` → `final/top7/final_top7_mapping_audit.csv`
+- `final_top7_map.geojson` → `final/top7/final_top7_map.geojson`
+
+드라이브에만 있고 로컬에 아직 없다면, 아래처럼 폴더를 열어서 수동 복사해도 된다.
+
+```bash
+open "$PROJECT_ROOT/result/active/nets"
+open "$PROJECT_ROOT/final/top7_sim/manifests"
+open "$PROJECT_ROOT/final/top7"
+```
+
 ---
 
 ## 2. 시뮬레이션 파라미터
@@ -178,6 +218,12 @@ bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 194891 10262
 
 # 재실행 (기존 결과 무시)
 bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 --force
+
+# 특정 횡단보도만 지정해 실행
+bash final/top7_sim/commands/smoke_top7_seed1.sh --ids NODE_5846 NODE_8369
+
+# 숫자 suffix만 넣어도 됨
+bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 5846 8369
 ```
 
 **smoke 결과 확인 포인트**:
@@ -186,6 +232,13 @@ bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 --force
 ```
 - `ext=0` → smart extension이 한 번도 발동 안 됨 (보행자 수요 부족 or TLS 매핑 오류)
 - `net_delay=NaN` → 차량 수요 없음 (`--include-vehicles` 확인)
+
+**`--ids` 동작 방식**
+
+- `--ids` 뒤에 적은 횡단보도만 smoke 대상으로 실행한다.
+- 입력은 `NODE_5846`, `LINK_194891`처럼 정확한 ID 또는 `5846`, `194891` 같은 숫자 suffix 둘 다 가능하다.
+- `--ids`를 생략하면 top7 전체를 순회한다.
+- 선택한 ID가 top7 목록 밖이어도, 해당 `single_candidates/<id>.csv`가 있으면 실행은 허용한다. 이 경우 경고만 출력한다.
 
 ---
 

@@ -1,0 +1,8 @@
+﻿rank,crosswalk_id,dong_name,baseline_ped_wait_time_mean_mean,smart_ped_wait_time_mean_mean,delta_ped_wait_time_mean_mean,baseline_veh_delay_mean_mean,smart_veh_delay_mean_mean,delta_veh_delay_mean_mean,baseline_veh_avg_delay_sec_mean,smart_veh_avg_delay_sec_mean,delta_veh_avg_delay_sec_mean,smart_total_extension_sec_mean,smart_extension_count_mean,baseline_low_pet_event_count_mean,smart_low_pet_event_count_mean,delta_low_pet_event_count_mean,baseline_network_avg_delay_sec_mean,smart_network_avg_delay_sec_mean,delta_network_avg_delay_sec_mean,n_seeds,selection_score,selection_reason
+1,LINK_194891,회현동2가,0.0,0.0,0.0,26.503,23.421,-3.082,26.503,23.421,-3.082,5.0,1.0,5.0,5.0,0.0,,,,30,52.774,차량 지체 증가 적음
+2,NODE_10262,남대문로3가,0.0,0.0,0.0,24.169,21.462,-2.707,24.169,21.462,-2.707,5.0,1.0,5.0,5.0,0.0,,,,30,50.863,차량 지체 증가 적음
+3,NODE_125895,신당동,0.0,0.0,0.0,11.411,11.208,-0.203,11.411,11.208,-0.203,5.0,1.0,18.0,16.0,-2.0,,,,30,49.07,종합 점수 상위
+4,NODE_5831,남대문로5가,,,,28.52,30.055,1.535,28.52,30.055,1.535,5.0,1.0,11.2,7.667,-3.533,,,,30,48.99,안전 지표 개선
+5,LINK_239754,남대문로5가,0.0,0.0,0.0,28.52,30.055,1.535,28.52,30.055,1.535,5.0,1.0,11.2,7.667,-3.533,,,,30,48.99,안전 지표 개선
+6,NODE_5846,남대문로5가,,,,28.52,30.055,1.535,28.52,30.055,1.535,5.0,1.0,11.2,7.667,-3.533,,,,30,48.99,안전 지표 개선
+7,NODE_8369,신당동,0.0,0.0,0.0,11.452,11.249,-0.203,11.452,11.249,-0.203,5.0,1.0,17.767,16.0,-1.767,,,,30,47.246,종합 점수 상위
