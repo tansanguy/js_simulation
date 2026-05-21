@@ -12,12 +12,13 @@
 # 사용법:
 #   bash final/top7_sim/commands/run_top7_30seed.sh
 #   bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4
+#   bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --seeds 1-10
+#   bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --seeds 1-10 --dry-run
 #   bash final/top7_sim/commands/run_top7_30seed.sh --skip-if-done  # 완료된 seed 스킵
 #
 # 주의:
-#   - NODE_5831 / NODE_5846 은 동일 crossing (:5593950705_c0) 사용
-#     → 두 후보가 같은 교차로 신호 대상이므로 결과 해석 시 cluster 군집 맥락 참고
-#   - NODE_125895 / NODE_8369 은 :1936511299_c0 TLS 폴백 사용 (원 crossing 비신호)
+#   - SMART_IDS는 manifests/top7_baseline_candidates.csv의 top7 순서와 맞춤
+#   - NODE_125895 / NODE_8369 은 인접 TLS 군집으로 결과 해석 시 cluster 맥락 참고
 
 set -euo pipefail
 
@@ -55,19 +56,78 @@ fi
 
 # ── 파라미터 파싱 ─────────────────────────────────────────────────────────────
 JOBS=1
+SEEDS_SPEC="1-30"
 SKIP_IF_DONE=false
+DRY_RUN=false
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --jobs)       shift; JOBS="$1";      shift ;;
+    --jobs)
+      shift
+      if [[ $# -eq 0 || "$1" == --* ]]; then
+        echo "--jobs requires a value" >&2
+        exit 1
+      fi
+      JOBS="$1"
+      shift ;;
     --jobs=*)     JOBS="${1#*=}";        shift ;;
+    --seeds)
+      shift
+      if [[ $# -eq 0 || "$1" == --* ]]; then
+        echo "--seeds requires a value" >&2
+        exit 1
+      fi
+      SEEDS_SPEC="$1"
+      shift ;;
+    --seeds=*)    SEEDS_SPEC="${1#*=}";  shift ;;
     --skip-if-done) SKIP_IF_DONE=true;  shift ;;
+    --dry-run)    DRY_RUN=true;         shift ;;
     *)            POSITIONAL+=("$1");    shift ;;
   esac
 done
 set -- "${POSITIONAL[@]:-}"
+if [[ ${#POSITIONAL[@]} -gt 0 ]]; then
+  echo "Unknown option(s): ${POSITIONAL[*]}" >&2
+  exit 1
+fi
 if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -le 0 ]; then
   echo "--jobs must be a positive integer" >&2; exit 1
+fi
+
+parse_seeds() {
+  local spec="$1"
+  python3 - "$spec" <<'PY'
+import sys
+
+spec = sys.argv[1].strip()
+if not spec:
+    raise SystemExit("--seeds must not be empty")
+seeds = []
+for part in spec.split(","):
+    part = part.strip()
+    if not part:
+        continue
+    if "-" in part:
+        a, b = part.split("-", 1)
+        start, end = int(a), int(b)
+        step = 1 if end >= start else -1
+        seeds.extend(range(start, end + step, step))
+    else:
+        seeds.append(int(part))
+if not seeds or any(seed <= 0 for seed in seeds):
+    raise SystemExit("--seeds must contain positive integers")
+seen = set()
+ordered = []
+for seed in seeds:
+    if seed not in seen:
+        seen.add(seed)
+        ordered.append(seed)
+print(" ".join(str(seed) for seed in ordered))
+PY
+}
+read -r -a SEEDS <<<"$(parse_seeds "$SEEDS_SPEC")"
+if [[ ${#SEEDS[@]} -lt 1 ]]; then
+  echo "--seeds produced no seeds" >&2; exit 1
 fi
 
 # ── 병렬 실행 제어 ────────────────────────────────────────────────────────────
@@ -75,7 +135,7 @@ pids=()
 wait_for_slot() {
   while true; do
     local active
-    active=$(jobs -p | wc -l | tr -d '[:space:]')
+    active=$(jobs -pr | wc -l | tr -d '[:space:]')
     if [ "${active:-0}" -lt "$JOBS" ]; then break; fi
     sleep 0.5
   done
@@ -84,6 +144,7 @@ wait_for_all_jobs() {
   local status=0
   local pid
   for pid in "${pids[@]:-}"; do wait "$pid" || status=1; done
+  pids=()
   if [ "$status" -ne 0 ]; then echo "one or more jobs failed" >&2; return 1; fi
 }
 
@@ -223,22 +284,30 @@ if [[ ! -f "$BASELINE_CSV" ]]; then
 fi
 
 # ── top7 SMART_IDS ─────────────────────────────────────────────────────────────
-# 현재 pipeline 기준 top7 (최종 확정 전 변경 가능)
-# 주의: NODE_5831 / NODE_5846 → 동일 crossing :5593950705_c0
-#        NODE_125895 / NODE_8369 → 동일 TLS 폴백 :1936511299_c0
+# 현재 manifests/top7_baseline_candidates.csv 기준 top7
+# 주의: NODE_125895 / NODE_8369 → 신당동 인접 TLS 군집
 SMART_IDS=(
+  "NODE_8369"
+  "LINK_239754"
+  "NODE_5831"
+  "NODE_5846"
+  "NODE_125895"
   "LINK_194891"
   "NODE_10262"
-  "NODE_125895"
-  "NODE_5831"
-  "LINK_239754"
-  "NODE_5846"
-  "NODE_8369"
 )
 
-# ── baseline 30seed ────────────────────────────────────────────────────────────
-echo "[top7_sim] baseline seed1-30 시작 (sim=1800s warmup=300s SSM=on)"
-for seed in $(seq 1 30); do
+if [[ "$DRY_RUN" == true ]]; then
+  echo "[top7_sim][dry-run] jobs=${JOBS} seeds=${SEEDS[*]} skip_if_done=${SKIP_IF_DONE}"
+  echo "[top7_sim][dry-run] baseline_runs=${#SEEDS[@]}"
+  echo "[top7_sim][dry-run] smart_ids=${SMART_IDS[*]}"
+  echo "[top7_sim][dry-run] smart_runs=$((${#SMART_IDS[@]} * ${#SEEDS[@]}))"
+  echo "[top7_sim][dry-run] total_runs=$((${#SEEDS[@]} + ${#SMART_IDS[@]} * ${#SEEDS[@]}))"
+  exit 0
+fi
+
+# ── baseline seeds ─────────────────────────────────────────────────────────────
+echo "[top7_sim] baseline seeds=${SEEDS[*]} 시작 (jobs=${JOBS}, sim=1800s warmup=300s SSM=on)"
+for seed in "${SEEDS[@]}"; do
   out_dir="$RUN_ROOT/baseline/seed$(printf '%02d' "$seed")"
   log_file="$LOG_ROOT/baseline/seed$(printf '%02d' "$seed").log"
   run_sampled_async "$BASELINE_CSV" "$out_dir" "$log_file" \
@@ -247,15 +316,15 @@ done
 wait_for_all_jobs
 echo "[top7_sim] baseline 완료"
 
-# ── smart 7개 × 30seed ────────────────────────────────────────────────────────
-echo "[top7_sim] smart seed1-30 × 7후보 시작"
+# ── smart 7개 × seeds ─────────────────────────────────────────────────────────
+echo "[top7_sim] smart seeds=${SEEDS[*]} × ${#SMART_IDS[@]}후보 시작 (jobs=${JOBS})"
 for crosswalk_id in "${SMART_IDS[@]}"; do
   candidate_csv="$SINGLE_CSV_ROOT/${crosswalk_id}.csv"
   if [[ ! -f "$candidate_csv" ]]; then
     echo "⚠ candidate CSV 없음: $candidate_csv (스킵)" >&2
     continue
   fi
-  for seed in $(seq 1 30); do
+  for seed in "${SEEDS[@]}"; do
     out_dir="$RUN_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed")"
     log_file="$LOG_ROOT/smart/${crosswalk_id}/seed$(printf '%02d' "$seed").log"
     run_sampled_async "$candidate_csv" "$out_dir" "$log_file" \

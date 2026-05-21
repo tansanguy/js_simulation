@@ -191,6 +191,144 @@ def _write_top7_summary(df: pd.DataFrame, out_dir: "Path") -> None:
         write_csv_utf8_sig(pd.DataFrame(delta_rows), out_dir / "top7_delta_summary.csv")
 
 
+def _xml_float(value: Any) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float("nan")
+
+
+def _flatten_statistics_xml(path: Path, scenario: str) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "scenario": scenario,
+        "source_statistics_xml": str(path),
+        "statistics_xml_exists": path.exists(),
+    }
+    if not path.exists():
+        return row
+    try:
+        root = ET.parse(path).getroot()
+    except Exception as exc:
+        row["statistics_parse_error"] = f"{exc.__class__.__name__}: {exc}"
+        return row
+    for child in list(root):
+        tag = str(child.tag).split("}", 1)[-1]
+        for key, value in child.attrib.items():
+            column = f"{tag}__{key}"
+            number = _xml_float(value)
+            row[column] = number if number == number else value
+    return row
+
+
+def _parse_tripinfo_flow_xml(path: Path, scenario: str) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "scenario": scenario,
+        "source_tripinfo_xml": str(path),
+        "tripinfo_xml_exists": path.exists(),
+    }
+    if not path.exists():
+        return row
+    try:
+        root = ET.parse(path).getroot()
+    except Exception as exc:
+        row["tripinfo_parse_error"] = f"{exc.__class__.__name__}: {exc}"
+        return row
+
+    numeric_fields = ("depart", "arrival", "duration", "routeLength", "waitingTime", "timeLoss", "departDelay")
+    values: dict[str, list[float]] = {field: [] for field in numeric_fields}
+    type_counts: dict[str, int] = {}
+    trip_count = 0
+    for tripinfo in root.findall(".//tripinfo"):
+        trip_count += 1
+        vtype = str(tripinfo.attrib.get("vType", "") or "unknown")
+        type_counts[vtype] = type_counts.get(vtype, 0) + 1
+        for field in numeric_fields:
+            value = _xml_float(tripinfo.attrib.get(field))
+            if value == value:
+                values[field].append(value)
+
+    row["tripinfo__count"] = int(trip_count)
+    for field, nums in values.items():
+        if nums:
+            row[f"tripinfo__{field}_mean"] = float(np.mean(nums))
+            row[f"tripinfo__{field}_sum"] = float(np.sum(nums))
+            row[f"tripinfo__{field}_min"] = float(np.min(nums))
+            row[f"tripinfo__{field}_max"] = float(np.max(nums))
+        else:
+            row[f"tripinfo__{field}_mean"] = float("nan")
+            row[f"tripinfo__{field}_sum"] = 0.0
+            row[f"tripinfo__{field}_min"] = float("nan")
+            row[f"tripinfo__{field}_max"] = float("nan")
+    for vtype, count in sorted(type_counts.items()):
+        row[f"tripinfo__vtype_{vtype}_count"] = int(count)
+    return row
+
+
+def _with_delta_row(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    if df.empty or "scenario" not in df.columns:
+        return df
+    baseline = df[df["scenario"] == "baseline"]
+    smart = df[df["scenario"] == "smart"]
+    if baseline.empty or smart.empty:
+        return df
+    b = baseline.iloc[0]
+    s = smart.iloc[0]
+    delta: dict[str, Any] = {"scenario": "delta(smart-baseline)"}
+    for column in df.columns:
+        if column == "scenario":
+            continue
+        sv_raw = s.get(column)
+        bv_raw = b.get(column)
+        if isinstance(sv_raw, (bool, np.bool_)) or isinstance(bv_raw, (bool, np.bool_)):
+            delta[column] = ""
+            continue
+        sv = pd.to_numeric(pd.Series([sv_raw]), errors="coerce").iloc[0]
+        bv = pd.to_numeric(pd.Series([bv_raw]), errors="coerce").iloc[0]
+        if pd.notna(sv) and pd.notna(bv):
+            delta[column] = float(sv - bv)
+        else:
+            delta[column] = ""
+    return pd.concat([df, pd.DataFrame([delta])], ignore_index=True)
+
+
+def _write_global_traffic_flow_csvs(out_dir: Path) -> dict[str, str]:
+    stats_rows = [
+        _flatten_statistics_xml(out_dir / f"phase6_smoke_{scenario}_statistics.xml", scenario)
+        for scenario in ("baseline", "smart")
+    ]
+    trip_rows = [
+        _parse_tripinfo_flow_xml(out_dir / f"phase6_smoke_{scenario}_tripinfo.xml", scenario)
+        for scenario in ("baseline", "smart")
+    ]
+
+    stats_df = _with_delta_row(stats_rows)
+    trip_df = _with_delta_row(trip_rows)
+    merged_rows = []
+    for scenario in ("baseline", "smart"):
+        stats = next((row for row in stats_rows if row.get("scenario") == scenario), {"scenario": scenario})
+        trips = next((row for row in trip_rows if row.get("scenario") == scenario), {"scenario": scenario})
+        merged = dict(stats)
+        for key, value in trips.items():
+            if key == "scenario":
+                continue
+            merged[key] = value
+        merged_rows.append(merged)
+    flow_df = _with_delta_row(merged_rows)
+
+    stats_path = out_dir / "global_traffic_comparison.csv"
+    trip_path = out_dir / "global_tripinfo_flow.csv"
+    flow_path = out_dir / "global_traffic_flow.csv"
+    write_csv_utf8_sig(stats_df, stats_path)
+    write_csv_utf8_sig(trip_df, trip_path)
+    write_csv_utf8_sig(flow_df, flow_path)
+    return {
+        "global_traffic_comparison_csv": str(stats_path),
+        "global_tripinfo_flow_csv": str(trip_path),
+        "global_traffic_flow_csv": str(flow_path),
+    }
+
+
 def _safe_val(row: "Any", col: str) -> "Any":
     if row is None:
         return float("nan")
@@ -495,6 +633,18 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
     write_csv_utf8_sig(seed_output, out_dir / "simulation_result.csv")
     write_csv_utf8_sig(seed_output, out_dir / "simulation_results_seed.csv")
     _write_top7_summary(seed_output, out_dir)
+    global_traffic_paths: dict[str, str] = {}
+    try:
+        global_traffic_paths = _write_global_traffic_flow_csvs(out_dir)
+    except Exception as exc:
+        failures.append(
+            {
+                "crosswalk_id": str(args.manifest_crosswalk_id or ""),
+                "seed": int(args.seed),
+                "step": "write_global_traffic_flow_csvs",
+                "error": f"{exc.__class__.__name__}: {exc}",
+            }
+        )
     manifest_columns = [
         "seed",
         "scenario",
@@ -552,6 +702,7 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         "completed_scenarios": ["simulation"] if counts["run_success"] else [],
         "current_scenario": "",
         "last_error": _last_failure_error(failures),
+        **global_traffic_paths,
         **experiment_metadata,
         **counts,
     }

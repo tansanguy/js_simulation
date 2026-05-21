@@ -29,8 +29,8 @@ generated_signal_7.net.xml (중구 전체 도로망)
 | **횡단보도 반경 500m (local)** | `local_500m_avg_delay_sec`, `local_500m_vehicle_count`, `local_500m_mean_speed` |
 | **횡단보도 개별** | `extension_count`, `total_extension_sec`, `ped_wait_time_mean`, `pedestrian_crossing_count`, `pet_event_count` |
 
-> **전역 교통흐름 측정 방식**: SUMO가 자동 생성하는 `tripinfo.xml`을 파싱.  
-> 시뮬레이션에서 도착 완료한 모든 차량의 `duration` / `timeLoss` / `waitingTime` 평균.  
+> **전역 교통흐름 측정 방식**: SUMO가 자동 생성하는 `statistics.xml`과 `tripinfo.xml`을 파싱.
+> `global_traffic_flow.csv`에는 전체 SUMO 통계와 도착 완료 차량의 `duration` / `timeLoss` / `waitingTime` 집계가 함께 저장된다.
 > → 중구 전체 도로망에서 smart crosswalk 설치의 교통 영향을 정량화.
 
 ---
@@ -255,6 +255,9 @@ bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4
 
 # 완료된 seed는 스킵하고 나머지만 실행
 bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --skip-if-done
+
+# 10회만 실행
+bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --seeds 1-10 --skip-if-done
 ```
 
 **예상 소요 시간** (단일 run 기준 ~35분 × 240 run ÷ 4 병렬 = 약 35시간):
@@ -262,7 +265,7 @@ bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --skip-if-done
 - 30 seed × 1 baseline + 30 seed × 7 smart = 240 runs
 - `--jobs=4` 기준: 약 30~35시간
 
-중간에 끊어도 `--skip-if-done`으로 이어서 실행 가능.
+중간에 끊어도 `--skip-if-done`으로 이어서 실행 가능. `--seeds`는 `1-10`, `1,3,5`, `1-5,8,10` 형식을 지원한다.
 
 ---
 
@@ -326,7 +329,10 @@ final/top7_sim/runs/
 │       ├── simulation_result.csv        ← 핵심: 후보별 지표 1행씩
 │       ├── benchmark_timing.json        ← 성공/실패 여부
 │       ├── phase6_smoke_baseline_tripinfo.xml  ← 전역 교통흐름 원본
-│       └── phase6_smoke_smart_tripinfo.xml
+│       ├── phase6_smoke_smart_tripinfo.xml
+│       ├── global_traffic_flow.csv      ← statistics/tripinfo 통합 전역 교통흐름
+│       ├── global_traffic_comparison.csv← statistics.xml baseline/smart/delta
+│       └── global_tripinfo_flow.csv     ← tripinfo.xml baseline/smart/delta
 │
 └── smart/
     ├── LINK_194891/
@@ -480,8 +486,8 @@ python3 analysis/make_top7_sim_candidates.py --verify-only
 # [Step 2] smoke (먼저 2개만 빠르게 확인)
 bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262 --jobs 2 --force
 
-# [Step 3] 전체 30seed 본 실행
-bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4
+# [Step 3] 10회만 본 실행
+bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --seeds 1-10 --skip-if-done
 
 # [Step 4] 완료 확인
 bash final/top7_sim/commands/verify_top7_runs.sh --summary
