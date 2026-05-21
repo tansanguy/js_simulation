@@ -5,6 +5,9 @@
 # 사용법:
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh                          # top7 전체
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --force                  # 전체 재실행
+#   bash final/top7_sim/commands/smoke_top7_seed1.sh --no-preflight           # preflight 건너뛰기
+#   bash final/top7_sim/commands/smoke_top7_seed1.sh --skip-invalid           # invalid 후보 제외 후 실행
+#   bash final/top7_sim/commands/smoke_top7_seed1.sh --min-success 1          # smart 성공 최소 개수
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids NODE_5846          # 단일 후보
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262  # 복수 후보
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 5846 194891        # 숫자만 입력
@@ -26,6 +29,7 @@ LOG_ROOT="$TOP7_SIM_ROOT/logs"
 SINGLE_CSV_ROOT="$TOP7_SIM_ROOT/manifests/single_candidates"
 BASELINE_CSV="$TOP7_SIM_ROOT/manifests/top7_baseline_candidates.csv"
 TMP_DIR="$TOP7_SIM_ROOT/tmp"
+RESULTS_DIR="$TOP7_SIM_ROOT/results"
 NET_FILE="$NETS_DIR/generated_signal_7.net.xml"
 SIM_DURATION=600
 OUTPUT_PROFILE=light
@@ -33,12 +37,26 @@ export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
 # ── 옵션 파싱 ─────────────────────────────────────────────────────────────────
 FORCE=false
+NO_PREFLIGHT=false
+SKIP_INVALID=false
+MIN_SUCCESS=1
 RAW_IDS=()   # --ids 뒤에 받은 원시 토큰들
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)
       FORCE=true; shift ;;
+    --no-preflight)
+      NO_PREFLIGHT=true; shift ;;
+    --skip-invalid)
+      SKIP_INVALID=true; shift ;;
+    --min-success)
+      shift
+      MIN_SUCCESS="${1:-}"
+      shift ;;
+    --min-success=*)
+      MIN_SUCCESS="${1#*=}"
+      shift ;;
     --ids)
       shift
       while [[ $# -gt 0 && "$1" != --* ]]; do
@@ -49,15 +67,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if ! [[ "$MIN_SUCCESS" =~ ^[0-9]+$ ]] || [ "$MIN_SUCCESS" -lt 1 ]; then
+  echo "--min-success must be a positive integer" >&2
+  exit 1
+fi
+
 # ── top7 마스터 목록 ──────────────────────────────────────────────────────────
 ALL_TOP7=(
+  "NODE_10335"
+  "NODE_8369"
+  "LINK_239754"
+  "NODE_5831"
   "LINK_194891"
   "NODE_10262"
-  "NODE_125895"
-  "NODE_5831"
-  "LINK_239754"
-  "NODE_5846"
-  "NODE_8369"
+  "NODE_5938"
 )
 
 # ── ID 정규화 함수 ─────────────────────────────────────────────────────────────
@@ -94,6 +117,128 @@ resolve_id() {
   return 1
 }
 
+candidate_csv_exists() {
+  local cw="$1"
+  [[ -f "$SINGLE_CSV_ROOT/${cw}.csv" ]]
+}
+
+check_preflight_one() {
+  local cw="$1"
+  python3 - "$PROJECT_ROOT" "$SINGLE_CSV_ROOT/${cw}.csv" <<'PY'
+import math
+import re
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import pandas as pd
+import sumolib
+
+project_root = Path(sys.argv[1])
+csv_path = Path(sys.argv[2])
+cw = csv_path.stem
+df = pd.read_csv(csv_path)
+if df.empty:
+    print("empty candidate csv", file=sys.stderr)
+    sys.exit(1)
+r = df.iloc[0]
+
+net_path = project_root / "result/active/nets/generated_signal_7.net.xml"
+net = sumolib.net.readNet(str(net_path), withInternal=True)
+tree = ET.parse(str(net_path))
+crossing_to_li = {}
+for conn in tree.getroot().findall("connection"):
+    to_e = conn.get("to", "")
+    tl = conn.get("tl", "")
+    li = conn.get("linkIndex", "")
+    if tl and li and re.match(r"^:.+_c\d+$", to_e):
+        crossing_to_li[to_e] = int(li)
+
+crossing_edge_id = str(r.get("crossing_edge_id", ""))
+ped_link_index = int(r.get("ped_link_index", -1))
+from_e = str(r.get("route_from_edge", ""))
+to_e = str(r.get("route_to_edge", ""))
+
+if not net.getEdge(crossing_edge_id):
+    print(f"crossing edge not found: {crossing_edge_id}", file=sys.stderr)
+    sys.exit(1)
+if ped_link_index not in crossing_to_li.values():
+    print(f"ped_link_index {ped_link_index} not in TLS connections", file=sys.stderr)
+    sys.exit(1)
+fe = net.getEdge(from_e) if from_e else None
+te = net.getEdge(to_e) if to_e else None
+if not fe:
+    print(f"route_from_edge not found: {from_e}", file=sys.stderr)
+    sys.exit(1)
+if not te:
+    print(f"route_to_edge not found: {to_e}", file=sys.stderr)
+    sys.exit(1)
+m = re.match(r"^:(.+)_c\d+$", crossing_edge_id)
+if not m:
+    print("can't parse junction", file=sys.stderr)
+    sys.exit(1)
+junc = net.getNode(m.group(1))
+if not junc:
+    print("junction not found", file=sys.stderr)
+    sys.exit(1)
+jx, jy = junc.getCoord()
+fn = fe.getToNode(); fx, fy = fn.getCoord()
+tn = te.getFromNode(); tx, ty = tn.getCoord()
+df = math.sqrt((fx - jx) ** 2 + (fy - jy) ** 2)
+dt = math.sqrt((tx - jx) ** 2 + (ty - jy) ** 2)
+if df > 150.0:
+    print(f"route_from too far: {df:.1f}m", file=sys.stderr)
+    sys.exit(1)
+if dt > 150.0:
+    print(f"route_to too far: {dt:.1f}m", file=sys.stderr)
+    sys.exit(1)
+print(f"ok ({df:.1f}m / {dt:.1f}m)")
+PY
+}
+
+force_reset_run_dir() {
+  local out_dir="$1"
+  local log_file="$2"
+  $FORCE && rm -rf "$out_dir" "$log_file"
+}
+
+write_status_csv() {
+  local status_csv="$RESULTS_DIR/smoke_run_status.csv"
+  local selected_ids_csv="$1"
+  local excluded_ids_csv="$2"
+  local executed_ids_csv="$3"
+  local failed_ids_csv="$4"
+  local baseline_ok="$5"
+  local smart_success_count="$6"
+  local smoke_ok="$7"
+  local failure_reason="$8"
+  python3 - "$status_csv" "$selected_ids_csv" "$excluded_ids_csv" "$executed_ids_csv" \
+    "$failed_ids_csv" "$MIN_SUCCESS" "$baseline_ok" "$smart_success_count" "$smoke_ok" \
+    "$failure_reason" <<'PY'
+import csv, sys
+from pathlib import Path
+
+out = Path(sys.argv[1])
+row = {
+    "selected_ids": sys.argv[2],
+    "excluded_ids": sys.argv[3],
+    "executed_ids": sys.argv[4],
+    "failed_ids": sys.argv[5],
+    "min_success": int(sys.argv[6]),
+    "baseline_ok": sys.argv[7],
+    "smart_success_count": int(sys.argv[8]),
+    "smoke_ok": sys.argv[9],
+    "failure_reason": sys.argv[10],
+}
+out.parent.mkdir(parents=True, exist_ok=True)
+with out.open("w", newline="", encoding="utf-8-sig") as f:
+    w = csv.DictWriter(f, fieldnames=list(row.keys()))
+    w.writeheader()
+    w.writerow(row)
+print(out)
+PY
+}
+
 # ── 선택 ID 결정 ──────────────────────────────────────────────────────────────
 if [[ ${#RAW_IDS[@]} -gt 0 ]]; then
   SELECTED_IDS=()
@@ -113,6 +258,8 @@ else
   MODE="all"
 fi
 
+REQUESTED_IDS=("${SELECTED_IDS[@]}")
+
 # ── SUMO 환경 ─────────────────────────────────────────────────────────────────
 if [[ -z "${SUMO_HOME:-}" ]]; then
   command -v sumo >/dev/null 2>&1 || { echo "SUMO_HOME not set" >&2; exit 1; }
@@ -123,7 +270,7 @@ else
 fi
 [[ -d "$PROJECT_ROOT/.venv/bin" ]] && export PATH="$PROJECT_ROOT/.venv/bin:$PATH"
 
-mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR" "$TMP_DIR"
+mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR" "$TMP_DIR" "$RESULTS_DIR"
 [[ -f "$NET_FILE"     ]] || { echo "net.xml 없음: $NET_FILE" >&2; exit 1; }
 [[ -f "$BASELINE_CSV" ]] || {
   echo "baseline CSV 없음 → python3 analysis/make_top7_sim_candidates.py 먼저 실행" >&2
@@ -133,6 +280,57 @@ mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR" "$TMP_DIR"
 # ── 선택 로그 출력 ────────────────────────────────────────────────────────────
 echo "[top7_sim smoke] selected_ids=${SELECTED_IDS[*]}"
 echo "[top7_sim smoke] mode=${MODE}  force=${FORCE}"
+
+# ── preflight / selection 정리 ─────────────────────────────────────────────────
+EXCLUDED_IDS=()
+VALIDATED_IDS=()
+PRECHECK_FAILS=0
+
+if [[ "$NO_PREFLIGHT" == true ]]; then
+  for cw in "${SELECTED_IDS[@]}"; do
+    if ! candidate_csv_exists "$cw"; then
+      echo "  ✗ candidate CSV 없음: $SINGLE_CSV_ROOT/${cw}.csv" >&2
+      write_status_csv "${REQUESTED_IDS[*]}" "" "" "$cw" false 0 false "missing candidate csv: $cw" >/dev/null
+      exit 1
+    fi
+    VALIDATED_IDS+=("$cw")
+  done
+else
+  for cw in "${SELECTED_IDS[@]}"; do
+    if ! candidate_csv_exists "$cw"; then
+      echo "  ✗ candidate CSV 없음: $SINGLE_CSV_ROOT/${cw}.csv" >&2
+      PRECHECK_FAILS=$((PRECHECK_FAILS + 1))
+      EXCLUDED_IDS+=("$cw")
+      continue
+    fi
+    if msg="$(check_preflight_one "$cw" 2>&1)"; then
+      VALIDATED_IDS+=("$cw")
+    else
+      PRECHECK_FAILS=$((PRECHECK_FAILS + 1))
+      EXCLUDED_IDS+=("$cw")
+      echo "  ✗ preflight failed: $cw  ($msg)" >&2
+    fi
+  done
+
+  if [[ "$SKIP_INVALID" == true ]]; then
+    SELECTED_IDS=("${VALIDATED_IDS[@]}")
+    echo "[top7_sim smoke] excluded_by_preflight=${EXCLUDED_IDS[*]:-}"
+    echo "[top7_sim smoke] selected_after_preflight=${SELECTED_IDS[*]:-}"
+    if [[ ${#SELECTED_IDS[@]} -lt 1 ]]; then
+      echo "❌ skip-invalid 후 남은 후보가 없음" >&2
+      write_status_csv "${REQUESTED_IDS[*]}" "${EXCLUDED_IDS[*]:-}" "" "${EXCLUDED_IDS[*]:-}" false 0 false "no valid candidates after preflight" >/dev/null
+      exit 1
+    fi
+  elif [[ "$PRECHECK_FAILS" -gt 0 ]]; then
+    write_status_csv "${REQUESTED_IDS[*]}" "${EXCLUDED_IDS[*]:-}" "" "${EXCLUDED_IDS[*]:-}" false 0 false "preflight failed" >/dev/null
+    echo "❌ preflight 실패 후보 존재 — --skip-invalid 또는 --no-preflight 사용" >&2
+    exit 1
+  else
+    SELECTED_IDS=("${VALIDATED_IDS[@]}")
+  fi
+fi
+
+REQUESTED_SELECTED_IDS=("${SELECTED_IDS[@]}")
 
 # ── baseline CSV 준비 (선택 ID 필터) ──────────────────────────────────────────
 # 선택 ID만 포함하는 임시 baseline CSV 생성
@@ -158,6 +356,8 @@ else:
 PY
 )"
 
+echo "[top7_sim smoke] selected_ids=${SELECTED_IDS[*]}"
+echo "[top7_sim smoke] mode=${MODE}  force=${FORCE}  no_preflight=${NO_PREFLIGHT}  skip_invalid=${SKIP_INVALID}  min_success=${MIN_SUCCESS}"
 echo "[top7_sim smoke] baseline_csv=$ACTIVE_BASELINE_CSV"
 echo "[top7_sim smoke] baseline_rows=$(python3 -c "import pandas as pd; print(len(pd.read_csv('$ACTIVE_BASELINE_CSV')))")"
 
@@ -199,7 +399,8 @@ run_smoke() {
   mkdir -p "$out_dir" "$(dirname "$log_file")"
 
   # --force 시 로그 초기화
-  $FORCE && [[ -f "$log_file" ]] && : > "$log_file"
+  force_reset_run_dir "$out_dir" "$log_file"
+  mkdir -p "$out_dir" "$(dirname "$log_file")"
 
   if is_done "$out_dir"; then
     echo "  ✓ skip (already done): $manifest_crosswalk_id"; return 0
@@ -289,121 +490,78 @@ for cw in SELECTED_IDS:
 PY
 }
 
-# ── preflight (선택 ID만) ─────────────────────────────────────────────────────
-echo ""
-echo "[top7_sim smoke] preflight 검증 중... (대상: ${SELECTED_IDS[*]})"
-python3 - "$PROJECT_ROOT" "${SELECTED_IDS[@]}" <<'PY'
-import sys
-from pathlib import Path
-
-PROJECT_ROOT = Path(sys.argv[1])
-ids          = sys.argv[2:]
-script       = PROJECT_ROOT / "analysis/make_top7_sim_candidates.py"
-
-# verify-only 스크립트를 직접 임포트해서 선택 ID만 검사
-import re, math
-import xml.etree.ElementTree as ET
-import pandas as pd
-import sumolib
-
-NET_PATH   = PROJECT_ROOT / "result/active/nets/generated_signal_7.net.xml"
-SINGLE_DIR = PROJECT_ROOT / "final/top7_sim/manifests/single_candidates"
-BASELINE_P = PROJECT_ROOT / "final/top7_sim/manifests/top7_baseline_candidates.csv"
-
-net = sumolib.net.readNet(str(NET_PATH), withInternal=True)
-tree = ET.parse(str(NET_PATH))
-crossing_to_li = {}
-for conn in tree.getroot().findall("connection"):
-    to_e = conn.get("to",""); tl = conn.get("tl",""); li = conn.get("linkIndex","")
-    if tl and li and re.match(r"^:.+_c\d+$", to_e):
-        crossing_to_li[to_e] = int(li)
-
-def check(cw_id, crossing_edge_id, ped_link_index, from_e, to_e, max_d=150.0):
-    if not net.getEdge(crossing_edge_id):
-        return False, f"crossing edge not found: {crossing_edge_id}"
-    if ped_link_index not in crossing_to_li.values():
-        return False, f"ped_link_index {ped_link_index} not in TLS connections"
-    fe = net.getEdge(from_e) if from_e else None
-    te = net.getEdge(to_e)   if to_e   else None
-    if not fe: return False, f"route_from_edge not found: {from_e}"
-    if not te: return False, f"route_to_edge not found: {to_e}"
-    m = re.match(r"^:(.+)_c\d+$", crossing_edge_id)
-    if not m: return False, "can't parse junction"
-    junc = net.getNode(m.group(1))
-    if not junc: return False, "junction not found"
-    jx, jy = junc.getCoord()
-    fn = fe.getToNode(); fx, fy = fn.getCoord()
-    df = math.sqrt((fx-jx)**2+(fy-jy)**2)
-    tn = te.getFromNode(); tx, ty = tn.getCoord()
-    dt = math.sqrt((tx-jx)**2+(ty-jy)**2)
-    if df > max_d: return False, f"route_from too far: {df:.1f}m"
-    if dt > max_d: return False, f"route_to too far: {dt:.1f}m"
-    return True, f"ok ({df:.1f}m / {dt:.1f}m)"
-
-all_ok = True
-for cw in ids:
-    p = SINGLE_DIR / f"{cw}.csv"
-    if not p.exists():
-        print(f"  ✗ {cw}: CSV 없음"); all_ok = False; continue
-    r = pd.read_csv(p).iloc[0]
-    ok, msg = check(cw, str(r.get("crossing_edge_id","")),
-                    int(r.get("ped_link_index",-1)),
-                    str(r.get("route_from_edge","")),
-                    str(r.get("route_to_edge","")))
-    print(f"  {'✓' if ok else '✗'} {cw:15s}  {msg}")
-    if not ok: all_ok = False
-
-# baseline CSV 행 수 확인 (선택 ID 기준)
-if BASELINE_P.exists():
-    bdf  = pd.read_csv(BASELINE_P)
-    have = set(bdf["crosswalk_id"].astype(str)) & set(ids)
-    miss = set(ids) - set(bdf["crosswalk_id"].astype(str))
-    if miss:
-        print(f"  ⚠ baseline CSV에 없는 선택 ID: {miss}  (임시 CSV로 처리됨)")
-
-sys.exit(0 if all_ok else 1)
-PY
-preflight_exit=$?
-if [[ "$preflight_exit" -ne 0 ]]; then
-  echo "❌ preflight 실패 — 재생성: python3 analysis/make_top7_sim_candidates.py" >&2
-  exit 1
-fi
-echo ""
-
 # ── baseline 실행 ─────────────────────────────────────────────────────────────
 echo "[top7_sim smoke] baseline seed1 시작"
 echo "  baseline_csv: $ACTIVE_BASELINE_CSV"
-run_smoke "$ACTIVE_BASELINE_CSV" \
+BASELINE_OK=false
+if run_smoke "$ACTIVE_BASELINE_CSV" \
   "$RUN_ROOT/baseline/seed01" \
   "$LOG_ROOT/baseline/seed01.log" \
-  "baseline_placeholder" "BASELINE_TOP7_SIM"
-echo "  ✓ baseline 완료"
+  "baseline_placeholder" "BASELINE_TOP7_SIM"; then
+  BASELINE_OK=true
+  echo "  ✓ baseline 완료"
+else
+  echo "  ✗ baseline 실패" >&2
+fi
 
 # ── smart 실행 (선택 ID만) ────────────────────────────────────────────────────
 echo ""
 echo "[top7_sim smoke] smart seed1 × ${#SELECTED_IDS[@]}후보 시작"
-FAIL=0
+EXECUTED_IDS=()
+FAILED_IDS=()
 for cw in "${SELECTED_IDS[@]}"; do
   csv="$SINGLE_CSV_ROOT/${cw}.csv"
   if [[ ! -f "$csv" ]]; then
-    echo "  ✗ CSV 없음: $csv" >&2; FAIL=$((FAIL+1)); continue
+    echo "  ✗ CSV 없음: $csv" >&2
+    FAILED_IDS+=("$cw")
+    continue
   fi
-  run_smoke "$csv" \
+  if run_smoke "$csv" \
     "$RUN_ROOT/smart/${cw}/seed01" \
     "$LOG_ROOT/smart/${cw}/seed01.log" \
-    "smart_candidate" "$cw" || FAIL=$((FAIL+1))
+    "smart_candidate" "$cw"; then
+    EXECUTED_IDS+=("$cw")
+  else
+    FAILED_IDS+=("$cw")
+  fi
 done
 
 smoke_summary "$RUN_ROOT" "${SELECTED_IDS[@]}"
 
+SMART_SUCCESS_COUNT="${#EXECUTED_IDS[@]}"
+EXCLUDED_JOINED="${EXCLUDED_IDS[*]:-}"
+EXECUTED_JOINED="${EXECUTED_IDS[*]:-}"
+FAILED_JOINED="${FAILED_IDS[*]:-}"
+SELECTED_JOINED="${REQUESTED_IDS[*]:-}"
+
+SMOKE_OK=false
+FAILURE_REASON="ok"
+if [[ "$BASELINE_OK" != true ]]; then
+  FAILURE_REASON="baseline failed"
+elif [[ "$SMART_SUCCESS_COUNT" -lt "$MIN_SUCCESS" ]]; then
+  FAILURE_REASON="smart_success_count=${SMART_SUCCESS_COUNT} < min_success=${MIN_SUCCESS}"
+else
+  SMOKE_OK=true
+fi
+
+write_status_csv "$SELECTED_JOINED" "$EXCLUDED_JOINED" "$EXECUTED_JOINED" "$FAILED_JOINED" \
+  "$BASELINE_OK" "$SMART_SUCCESS_COUNT" "$SMOKE_OK" "$FAILURE_REASON" >/dev/null
+
 echo ""
-if [[ "$FAIL" -eq 0 ]]; then
+echo "[top7_sim smoke] excluded_ids=${EXCLUDED_JOINED:-}"
+echo "[top7_sim smoke] executed_ids=${EXECUTED_JOINED:-}"
+echo "[top7_sim smoke] failed_ids=${FAILED_JOINED:-}"
+echo "[top7_sim smoke] min_success=${MIN_SUCCESS} smart_success_count=${SMART_SUCCESS_COUNT}"
+echo "[top7_sim smoke] status_csv=$RESULTS_DIR/smoke_run_status.csv"
+
+if [[ "$SMOKE_OK" == true ]]; then
   if [[ "$MODE" == "all" ]]; then
     echo "✅ smoke 전체 통과 — run_top7_30seed.sh 실행 가능"
   else
-    echo "✅ smoke 통과 (${SELECTED_IDS[*]})"
+    echo "✅ smoke 통과 (${EXECUTED_JOINED:-})"
   fi
-else
-  echo "❌ ${FAIL}개 실패 — candidate CSV 및 로그 확인 필요"
-  exit 1
+  exit 0
 fi
+
+echo "❌ smoke 실패: $FAILURE_REASON" >&2
+exit 1

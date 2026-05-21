@@ -1162,7 +1162,6 @@ def _extension_skip_reason(
     state: str,
     ped_link_index: int,
     ped_link_state: str,
-    is_pedestrian_only_phase: bool,
     remaining: float,
     ped_near: int,
     already_extended: bool,
@@ -1175,8 +1174,6 @@ def _extension_skip_reason(
         return "scenario_baseline"
     if ped_link_state not in {"G", "g"}:
         return "ped_link_not_green"
-    if not is_pedestrian_only_phase:
-        return "not_pedestrian_only_phase"
     if remaining > 12.0:
         return "outside_extension_window"
     if ped_near <= 0:
@@ -1767,10 +1764,10 @@ def _run_scenario(
     )
 
     cmd = [_sumo_binary(), "-c", str(cfg_path), "--no-step-log", "--collision.action", "warn", "--time-to-teleport", "-1"]
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
+    _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    _sock.bind(("127.0.0.1", 0))
+    traci_port = _sock.getsockname()[1]
+    _sock.close()
     net = read_net(net_file)
     all_network_passenger_edges = _network_passenger_edge_ids(net)
     network_bbox = None
@@ -1784,7 +1781,7 @@ def _run_scenario(
         )
     except Exception:
         network_bbox = None
-    traci.start(cmd, port=port)
+    traci.start(cmd, port=traci_port)
 
     candidate_meta = _person_routes_crossing(candidate_df)
     route_path_by_cid = {
@@ -1822,7 +1819,8 @@ def _run_scenario(
     # per-candidate tracking
     departure_times: dict[str, float] = {}
     wait_recorded: set[str] = set()
-    extended_this_cycle: set[tuple[str, int, str]] = set()
+    extended_this_phase: dict[str, bool] = {cid: False for cid in candidate_df["crosswalk_id"].astype(str).tolist()}
+    last_phase_for_cid: dict[str, int] = {cid: -1 for cid in candidate_df["crosswalk_id"].astype(str).tolist()}
     ped_presence_steps: dict[str, int] = {cid: 0 for cid in candidate_df["crosswalk_id"].astype(str).tolist()}
     ped_people_seen: dict[str, set[str]] = {cid: set() for cid in candidate_df["crosswalk_id"].astype(str).tolist()}
     expected_repeat_counts: dict[str, int] = {
@@ -2013,18 +2011,18 @@ def _run_scenario(
                         ped_near += 1
                         detected_person_ids.append(str(pid))
 
-                key = (str(tls_id), int(phase), cid)
-                already_extended = key in extended_this_cycle
+                if int(phase) != last_phase_for_cid.get(cid, -1):
+                    last_phase_for_cid[cid] = int(phase)
+                    extended_this_phase[cid] = False
                 skip_reason = _extension_skip_reason(
                     scenario,
                     str(tls_id),
                     state,
                     int(ped_link_index),
                     ped_link_state,
-                    is_pedestrian_only_phase,
                     remaining,
                     ped_near,
-                    already_extended,
+                    extended_this_phase[cid],
                 )
                 extension_allowed = skip_reason == ""
                 extension_decision = extension_allowed
@@ -2069,7 +2067,7 @@ def _run_scenario(
                 if extension_allowed and extension_sec > 0:
                     try:
                         traci.trafficlight.setPhaseDuration(tls_id, remaining + extension_sec)
-                        extended_this_cycle.add(key)
+                        extended_this_phase[cid] = True
                         extension_events.append(
                             {
                                 "time": round(t, 1),

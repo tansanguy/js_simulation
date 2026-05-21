@@ -77,3 +77,13 @@ result/active/real_30seed_runs_sampled10/**/*debug*.csv
 # Local reusable SUMO net inputs must be provided explicitly, not newly staged by default.
 result/active/nets/*.net.xml
 result/active/nets/**/*.net.xml
+
+# SUMO large generated network files
+result/active/nets/*.net.xml
+*.net.xml
+
+# heavy simulation outputs
+final/top7_sim/runs/
+final/top7_sim/tmp/
+final/top7_sim/logs/
+result/**/runs/

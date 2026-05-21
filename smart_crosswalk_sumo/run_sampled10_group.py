@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -134,6 +135,70 @@ def _smoke_to_seed_schema(df: pd.DataFrame, extension_sec: float, net_file: Path
     out["surrounding_lane_count"] = pd.to_numeric(out.get("surrounding_lane_count"), errors="coerce")
     out["batch_network_file"] = str(net_file)
     return out
+
+
+_TOP7_SUMMARY_COLS = [
+    "crosswalk_id",
+    "scenario",
+    "seed",
+    "extension_count",
+    "total_extension_sec",
+    "ped_wait_time_mean",
+    "pedestrian_crossing_count",
+    "pedestrian_clearance_failure_count",
+    "network_avg_delay_sec",
+    "network_mean_travel_time",
+    "network_arrived_vehicles",
+    "local_500m_avg_delay_sec",
+    "pet_event_count",
+    "accident_risk_estimate",
+]
+
+
+def _write_top7_summary(df: pd.DataFrame, out_dir: "Path") -> None:
+    if df.empty:
+        return
+    cols = [c for c in _TOP7_SUMMARY_COLS if c in df.columns]
+    summary = df[cols].copy()
+
+    # baseline vs smart delta 계산
+    base = summary[summary["scenario"] == "baseline"].set_index("crosswalk_id")
+    smart = summary[summary["scenario"] == "smart"].set_index("crosswalk_id")
+    delta_rows = []
+    for cid in smart.index:
+        row: dict[str, Any] = {"crosswalk_id": cid}
+        s = smart.loc[cid]
+        b = base.loc[cid] if cid in base.index else None
+        row["extension_count"] = _safe_val(s, "extension_count")
+        row["total_extension_sec"] = _safe_val(s, "total_extension_sec")
+        for col in ("ped_wait_time_mean", "network_avg_delay_sec", "network_mean_travel_time", "local_500m_avg_delay_sec"):
+            sv = _safe_val(s, col)
+            bv = _safe_val(b, col) if b is not None else float("nan")
+            row[f"smart_{col}"] = sv
+            row[f"baseline_{col}"] = bv
+            try:
+                row[f"delta_{col}"] = round(float(sv) - float(bv), 4) if sv == sv and bv == bv else float("nan")
+            except Exception:
+                row[f"delta_{col}"] = float("nan")
+        row["network_arrived_vehicles_smart"] = _safe_val(s, "network_arrived_vehicles")
+        row["network_arrived_vehicles_baseline"] = _safe_val(b, "network_arrived_vehicles") if b is not None else float("nan")
+        row["pet_event_count"] = _safe_val(s, "pet_event_count")
+        row["accident_risk_estimate"] = _safe_val(s, "accident_risk_estimate")
+        delta_rows.append(row)
+
+    write_csv_utf8_sig(summary, out_dir / "top7_summary.csv")
+    if delta_rows:
+        write_csv_utf8_sig(pd.DataFrame(delta_rows), out_dir / "top7_delta_summary.csv")
+
+
+def _safe_val(row: "Any", col: str) -> "Any":
+    if row is None:
+        return float("nan")
+    try:
+        v = row[col] if hasattr(row, "__getitem__") else getattr(row, col, float("nan"))
+        return v if pd.notna(v) else float("nan")
+    except Exception:
+        return float("nan")
 
 
 def _average_results(seed_df: pd.DataFrame) -> pd.DataFrame:
@@ -370,30 +435,51 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
         scenario_frames: list[pd.DataFrame] = []
         for scenario, extension_sec in (("baseline", 0.0), ("smart", float(args.extension_increment))):
             scenario_t0 = time.perf_counter()
-            summary = _run_scenario(
-                candidate_df,
-                net_file,
-                scenario,
-                int(args.seed),
-                int(args.sim_duration),
-                int(args.warmup),
-                float(args.traci_step_length),
-                out_dir,
-                bool(args.include_vehicles),
-                float(extension_sec),
-                global_vehicle_file=global_veh_file,
-                output_profile=str(args.output_profile),
-                enable_ssm=enable_ssm,
-            )
-            timing[f"simulation_{scenario}_sec"] = float(time.perf_counter() - scenario_t0)
-            scenario_frames.append(summary)
+            try:
+                summary = _run_scenario(
+                    candidate_df,
+                    net_file,
+                    scenario,
+                    int(args.seed),
+                    int(args.sim_duration),
+                    int(args.warmup),
+                    float(args.traci_step_length),
+                    out_dir,
+                    bool(args.include_vehicles),
+                    float(extension_sec),
+                    global_vehicle_file=global_veh_file,
+                    output_profile=str(args.output_profile),
+                    enable_ssm=enable_ssm,
+                )
+                timing[f"simulation_{scenario}_sec"] = float(time.perf_counter() - scenario_t0)
+                scenario_frames.append(summary)
+            except Exception as exc:
+                timing[f"simulation_{scenario}_sec"] = float(time.perf_counter() - scenario_t0)
+                failures.append(
+                    {
+                        "crosswalk_id": str(args.manifest_crosswalk_id or ""),
+                        "seed": int(args.seed),
+                        "step": f"run_scenario:{scenario}",
+                        "error": f"{exc.__class__.__name__}: {exc}",
+                        "traceback": traceback.format_exc(),
+                    }
+                )
+                print(
+                    f"[sampled10_group][ERROR] scenario={scenario} crosswalk={args.manifest_crosswalk_id} failed: {exc}",
+                    flush=True,
+                )
+                traceback.print_exc()
+                continue
 
-        seed_df = _smoke_to_seed_schema(
-            pd.concat(scenario_frames, ignore_index=True),
-            float(args.extension_increment),
-            net_file,
-            str(args.scenario_name),
-        )
+        if scenario_frames:
+            seed_df = _smoke_to_seed_schema(
+                pd.concat(scenario_frames, ignore_index=True),
+                float(args.extension_increment),
+                net_file,
+                str(args.scenario_name),
+            )
+        else:
+            seed_df = pd.DataFrame()
     except Exception as exc:
         failures.append(
             {
@@ -408,6 +494,7 @@ def run_sampled10_group(args: argparse.Namespace) -> int:
     seed_output = ensure_simulation_result_columns(english_output_columns(seed_df))
     write_csv_utf8_sig(seed_output, out_dir / "simulation_result.csv")
     write_csv_utf8_sig(seed_output, out_dir / "simulation_results_seed.csv")
+    _write_top7_summary(seed_output, out_dir)
     manifest_columns = [
         "seed",
         "scenario",
