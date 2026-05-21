@@ -1,0 +1,7 @@
+crosswalk_id,seed,vehicle_id,depart_edge,depart_edge_exists,passenger_allowed,replacement_edge,action,reason
+NODE_10060,11,veh_1_NODE_10060,1209133881#0,True,False,-781985788#0,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_122781,11,veh_2_NODE_122781,345046979#5,True,True,345046979#5,generate_vehicle,original_depart_valid
+NODE_14937,11,veh_3_NODE_14937,1201492610#1,True,False,183272312#3,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_5647,11,veh_4_NODE_5647,1461316096#1,True,False,333969025#1,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_6342,11,veh_5_NODE_6342,-1499619438#1,True,True,-1499619438#1,generate_vehicle,original_depart_valid
+NODE_5938,11,veh_6_NODE_5938,1084408283#1,True,True,1084408283#1,generate_vehicle,original_depart_valid

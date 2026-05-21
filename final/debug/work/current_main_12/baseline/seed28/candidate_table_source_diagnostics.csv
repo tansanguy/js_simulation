@@ -1,0 +1,2 @@
+candidate_csv,net_file,factory_table_path,factory_table_used,factory_table_missing,crossing_inventory_used,fallback_used,fallback_reason,candidate_rows
+/Users/iseclient1/sumo-simulation/result/active/real_30seed_runs_sampled10/manifests/current_main_12_candidates.csv,/Users/iseclient1/sumo-simulation/result/active/nets/current_main_12.net.xml,/Users/iseclient1/sumo-simulation/result/phase_next_real_csv_crossing_factory_20260514_103928/real_csv_crossing_factory_table.csv,False,True,False,True,factory_table_missing;net_file_audit_used;crossing_inventory_missing,12

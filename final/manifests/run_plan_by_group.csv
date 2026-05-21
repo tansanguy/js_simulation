@@ -1,0 +1,5 @@
+﻿run_group,net_group,baseline_runs,smart_runs,total_runs,candidate_count,baseline_candidate_csv,baseline_net_file,output_root
+current_main_12,current_main,30,360,390,12,result/active/real_30seed_runs_sampled10/manifests/current_main_12_candidates.csv,result/active/nets/current_main_12.net.xml,result/active/real_30seed_runs_sampled10
+signal_fix_9,signal_fix,30,270,300,9,result/active/real_30seed_runs_sampled10/manifests/signal_fix_9_candidates.csv,result/active/nets/signal_fix_9.net.xml,result/active/real_30seed_runs_sampled10
+generated_signal_7,generated_signal,30,210,240,7,result/active/real_30seed_runs_sampled10/manifests/generated_signal_7_candidates.csv,result/active/nets/generated_signal_7.net.xml,result/active/real_30seed_runs_sampled10
+p1_p4_recovery_6,p1_p4_recovery,30,180,210,6,result/active/real_30seed_runs_sampled10/manifests/p1_p4_recovery_6_candidates.csv,result/active/nets/p1_p4_recovery_6.net.xml,result/active/real_30seed_runs_sampled10

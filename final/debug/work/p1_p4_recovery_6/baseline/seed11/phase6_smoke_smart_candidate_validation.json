@@ -1,0 +1,74 @@
+{
+  "NODE_10060": {
+    "crossing_id": ":11203052964_c0",
+    "crossing_edge_id": ":11203052964_c0",
+    "route_from_edge": "1209133881#0",
+    "route_to_edge": "-781985788#0",
+    "generated_route_edges": "1209133881#0|:11203052964_w1|:11203052964_c0|:11203052964_w0|-781985788#0",
+    "contains_crossing_edge": true,
+    "tls_id": "11203052964",
+    "ped_link_index": 11,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/iseclient1/sumo-simulation/result/active/nets/p1_p4_recovery_6.net.xml"
+  },
+  "NODE_122781": {
+    "crossing_id": ":11203041635_c0",
+    "crossing_edge_id": ":11203041635_c0",
+    "route_from_edge": "345046979#5",
+    "route_to_edge": "-345046979#5",
+    "generated_route_edges": "345046979#5|:11203041635_w1|:11203041635_c0|:11203041635_w0|-345046979#5",
+    "contains_crossing_edge": true,
+    "tls_id": "11203041635",
+    "ped_link_index": 4,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/iseclient1/sumo-simulation/result/active/nets/p1_p4_recovery_6.net.xml"
+  },
+  "NODE_14937": {
+    "crossing_id": ":11139418723_c0",
+    "crossing_edge_id": ":11139418723_c0",
+    "route_from_edge": "1201492610#1",
+    "route_to_edge": "183272312#3",
+    "generated_route_edges": "1201492610#1|:11139418723_w1|:11139418723_c0|:11139418723_w0|183272312#3",
+    "contains_crossing_edge": true,
+    "tls_id": "11139418723",
+    "ped_link_index": 2,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/iseclient1/sumo-simulation/result/active/nets/p1_p4_recovery_6.net.xml"
+  },
+  "NODE_5647": {
+    "crossing_id": ":10974501473_c0",
+    "crossing_edge_id": ":10974501473_c0",
+    "route_from_edge": "1461316096#1",
+    "route_to_edge": "333969025#1",
+    "generated_route_edges": "1461316096#1|:10974501473_w1|:10974501473_c0|:10974501473_w0|333969025#1",
+    "contains_crossing_edge": true,
+    "tls_id": "10974501473",
+    "ped_link_index": 4,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/iseclient1/sumo-simulation/result/active/nets/p1_p4_recovery_6.net.xml"
+  },
+  "NODE_6342": {
+    "crossing_id": ":11203041633_c0",
+    "crossing_edge_id": ":11203041633_c0",
+    "route_from_edge": "-1499619438#1",
+    "route_to_edge": "1499619438#1",
+    "generated_route_edges": "-1499619438#1|:11203041633_w1|:11203041633_c0|:11203041633_w0|1499619438#1",
+    "contains_crossing_edge": true,
+    "tls_id": "11203041633",
+    "ped_link_index": 9,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/iseclient1/sumo-simulation/result/active/nets/p1_p4_recovery_6.net.xml"
+  },
+  "NODE_5938": {
+    "crossing_id": ":5851251266_c0",
+    "crossing_edge_id": ":5851251266_c0",
+    "route_from_edge": "1084408283#1",
+    "route_to_edge": "1084408283#2",
+    "generated_route_edges": "1084408283#1|:5851251266_w0|:5851251266_c0|:5851251266_w1|1084408283#2",
+    "contains_crossing_edge": true,
+    "tls_id": "5851251266",
+    "ped_link_index": 16,
+    "route_reason": "from_nearest_road_edge_to_other_incident_edge",
+    "batch_network_file": "/Users/iseclient1/sumo-simulation/result/active/nets/p1_p4_recovery_6.net.xml"
+  }
+}

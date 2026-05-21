@@ -1,0 +1,7 @@
+{
+  "scenario": "baseline",
+  "ped_route_file": "/Users/iseclient1/sumo-simulation/outputs/final/debug/work/generated_signal_7/baseline/seed16/demand_pedestrian.rou.xml",
+  "ped_route_order_debug_csv": "/Users/iseclient1/sumo-simulation/outputs/final/debug/work/generated_signal_7/baseline/seed16/pedestrian_route_order_debug.csv",
+  "ped_depart_sorted_ok": true,
+  "ped_person_rows": 35
+}

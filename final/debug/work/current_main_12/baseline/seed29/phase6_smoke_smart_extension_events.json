@@ -1,0 +1,134 @@
+[
+  {
+    "time": 80.1,
+    "crosswalk_id": "LINK_239754",
+    "tls_id": "5593950698",
+    "linkIndex": 1,
+    "phase": 2,
+    "state": "rG",
+    "remaining_before": 4.9,
+    "extension_sec": 5.0,
+    "ped_near": 3
+  },
+  {
+    "time": 80.1,
+    "crosswalk_id": "NODE_5846",
+    "tls_id": "5593950698",
+    "linkIndex": 1,
+    "phase": 2,
+    "state": "rG",
+    "remaining_before": 9.9,
+    "extension_sec": 5.0,
+    "ped_near": 3
+  },
+  {
+    "time": 83.0,
+    "crosswalk_id": "NODE_5831",
+    "tls_id": "5593950698",
+    "linkIndex": 1,
+    "phase": 2,
+    "state": "rG",
+    "remaining_before": 12.0,
+    "extension_sec": 5.0,
+    "ped_near": 9
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_10335",
+    "tls_id": "12234253870",
+    "linkIndex": 12,
+    "phase": 5,
+    "state": "rrrrrrrrrrrrG",
+    "remaining_before": 1.9,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_8369",
+    "tls_id": "1936511299",
+    "linkIndex": 11,
+    "phase": 6,
+    "state": "rrrrrrrrrrrGrr",
+    "remaining_before": 1.9,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_167173",
+    "tls_id": "12234253870",
+    "linkIndex": 12,
+    "phase": 5,
+    "state": "rrrrrrrrrrrrG",
+    "remaining_before": 6.9,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_10377",
+    "tls_id": "436839905",
+    "linkIndex": 4,
+    "phase": 5,
+    "state": "rrrrG",
+    "remaining_before": 1.9,
+    "extension_sec": 5.0,
+    "ped_near": 3
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_10376",
+    "tls_id": "436839905",
+    "linkIndex": 4,
+    "phase": 5,
+    "state": "rrrrG",
+    "remaining_before": 6.9,
+    "extension_sec": 5.0,
+    "ped_near": 3
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_150723",
+    "tls_id": "436839905",
+    "linkIndex": 4,
+    "phase": 5,
+    "state": "rrrrG",
+    "remaining_before": 11.9,
+    "extension_sec": 5.0,
+    "ped_near": 3
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "NODE_125895",
+    "tls_id": "1936511299",
+    "linkIndex": 11,
+    "phase": 6,
+    "state": "rrrrrrrrrrrGrr",
+    "remaining_before": 6.9,
+    "extension_sec": 5.0,
+    "ped_near": 3
+  },
+  {
+    "time": 90.1,
+    "crosswalk_id": "LINK_120139",
+    "tls_id": "1936511299",
+    "linkIndex": 11,
+    "phase": 6,
+    "state": "rrrrrrrrrrrGrr",
+    "remaining_before": 11.9,
+    "extension_sec": 5.0,
+    "ped_near": 2
+  },
+  {
+    "time": 90.6,
+    "crosswalk_id": "NODE_10381",
+    "tls_id": "3873291328",
+    "linkIndex": 11,
+    "phase": 6,
+    "state": "rrrrrrrrrrrGrr",
+    "remaining_before": 1.4,
+    "extension_sec": 5.0,
+    "ped_near": 1
+  }
+]

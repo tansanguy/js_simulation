@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2026-05-20T03:10:53.281801+09:00 by Eclipse SUMO sumo 1.26.0
+<sumoConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="/Users/iseclient1/sumo-simulation/result/active/nets/current_main_12.net.xml"/>
+        <route-files value="/Users/iseclient1/sumo-simulation/outputs/final/debug/work/current_main_12/baseline/seed24/demand_pedestrian.rou.xml,/Users/iseclient1/sumo-simulation/outputs/final/debug/work/current_main_12/baseline/seed24/demand_vehicle.rou.xml"/>
+    </input>
+
+    <output>
+        <tripinfo-output value="/Users/iseclient1/sumo-simulation/outputs/final/debug/work/current_main_12/baseline/seed24/phase6_smoke_baseline_tripinfo.xml"/>
+        <collision-output value="/Users/iseclient1/sumo-simulation/outputs/final/debug/work/current_main_12/baseline/seed24/phase6_smoke_baseline_collisions.xml"/>
+        <statistic-output value="/Users/iseclient1/sumo-simulation/outputs/final/debug/work/current_main_12/baseline/seed24/phase6_smoke_baseline_statistics.xml"/>
+    </output>
+
+    <time>
+        <begin value="0"/>
+        <end value="600"/>
+        <step-length value="0.1"/>
+    </time>
+
+    <processing>
+        <collision.action value="warn"/>
+        <intermodal-collision.action value="warn"/>
+        <time-to-teleport value="-1"/>
+    </processing>
+
+    <report>
+        <no-warnings value="false"/>
+        <no-step-log value="true"/>
+    </report>
+
+    <traci_server>
+        <remote-port value="54726"/>
+    </traci_server>
+
+</sumoConfiguration>
+-->
+
+<statistics xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/statistic_file.xsd">
+    <performance clockBegin="1779214254.03" clockEnd="1779215713.95" clockDuration="1459.92" traciDuration="1337.23" realTimeFactor="0.41" vehicleUpdatesPerSecond="5965.63" personUpdatesPerSecond="23.39" begin="0.00" end="600.00" duration="600.00"/>
+    <vehicles loaded="3480" inserted="3466" running="2654" waiting="13"/>
+    <teleports total="0" jam="0" yield="0" wrongLane="0"/>
+    <safety collisions="0" emergencyStops="0" emergencyBraking="21"/>
+    <persons loaded="60" running="0" jammed="0"/>
+    <personTeleports total="0" abortWait="0" wrongDest="0"/>
+    <vehicleTripStatistics count="812" routeLength="2667.75" speed="12.70" duration="212.45" waitingTime="33.23" timeLoss="85.33" departDelay="0.22" departDelayWaiting="-1.00" totalTravelTime="172513.10" totalDepartDelay="179.37"/>
+    <pedestrianStatistics number="60" routeLength="31.49" duration="56.91" timeLoss="34.10"/>
+    <rideStatistics number="0"/>
+    <transportStatistics number="0"/>
+</statistics>

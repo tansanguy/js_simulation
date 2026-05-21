@@ -1,0 +1,13 @@
+time,crosswalk_id,tls_id,linkIndex,phase,state,remaining_before,extension_sec,ped_near,error
+80.1,LINK_239754,5593950698,1,2,rG,4.9,5.0,3,
+80.1,NODE_5846,5593950698,1,2,rG,9.9,5.0,3,
+83.0,NODE_5831,5593950698,1,2,rG,12.0,5.0,9,
+90.1,NODE_10335,12234253870,12,5,rrrrrrrrrrrrG,1.9,5.0,2,
+90.1,NODE_8369,1936511299,11,6,rrrrrrrrrrrGrr,1.9,5.0,2,
+90.1,NODE_167173,12234253870,12,5,rrrrrrrrrrrrG,6.9,5.0,2,
+90.1,NODE_10377,436839905,4,5,rrrrG,1.9,5.0,3,
+90.1,NODE_10376,436839905,4,5,rrrrG,6.9,5.0,3,
+90.1,NODE_150723,436839905,4,5,rrrrG,11.9,5.0,3,
+90.1,NODE_125895,1936511299,11,6,rrrrrrrrrrrGrr,6.9,5.0,3,
+90.1,LINK_120139,1936511299,11,6,rrrrrrrrrrrGrr,11.9,5.0,2,
+90.6,NODE_10381,3873291328,11,6,rrrrrrrrrrrGrr,1.4,5.0,1,

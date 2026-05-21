@@ -1,0 +1,10 @@
+crosswalk_id,seed,vehicle_id,depart_edge,depart_edge_exists,passenger_allowed,replacement_edge,action,reason
+LINK_249048,22,veh_1_LINK_249048,585341916#4,True,False,218926711#4,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_5837,22,veh_2_NODE_5837,585341916#4,True,False,218926711#4,generate_vehicle,replaced_with_nearby_passenger_path
+LINK_10218,22,veh_3_LINK_10218,1201492608#1,True,False,183272312#1,generate_vehicle,replaced_with_nearby_passenger_path
+LINK_140740,22,veh_4_LINK_140740,1201492608#1,True,False,183272312#1,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_9634,22,veh_5_NODE_9634,1461316096#1,True,False,333969025#1,generate_vehicle,replaced_with_nearby_passenger_path
+LINK_194891,22,veh_6_LINK_194891,781985788#1,True,True,781985788#1,generate_vehicle,original_depart_valid
+NODE_10378,22,veh_7_NODE_10378,1201492608#1,True,False,183272312#1,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_5681,22,veh_8_NODE_5681,1201492610#1,True,False,183272312#3,generate_vehicle,replaced_with_nearby_passenger_path
+NODE_10262,22,veh_9_NODE_10262,345046979#5,True,True,345046979#5,generate_vehicle,original_depart_valid

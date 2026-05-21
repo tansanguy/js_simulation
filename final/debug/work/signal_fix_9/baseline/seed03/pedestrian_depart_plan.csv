@@ -1,0 +1,10 @@
+crosswalk_id,tls_id,ped_link_index,selected_ped_green_phase_index,selected_ped_green_phase_state,cycle_duration,first_green_start_time,depart_time,depart_strategy,ped_repeat_count,ped_repeat_spacing_sec,reason
+LINK_249048,5161705573,2,2,rrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+NODE_5837,5161705573,2,2,rrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+LINK_10218,11139418715,2,2,rrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+LINK_140740,11139418715,2,2,rrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+NODE_9634,10974501473,4,2,rrrrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+LINK_194891,11203052965,11,2,rrrrrrrrrrrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+NODE_10378,11139418715,2,2,rrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+NODE_5681,11139418723,2,2,rrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
+NODE_10262,11203041635,4,2,rrrrG,98.0,85.0,83.5,phase_aligned_green_start_minus_1p5s,5,2.0,pedestrian_only_phase_match
