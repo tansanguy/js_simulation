@@ -498,7 +498,76 @@ python3 analysis/final_top7_pipeline.py --runs-root final/top7_sim/runs
 
 ---
 
-## 11. 참고: 기존 30seed 결과와의 관계
+## 11. top7521 후보 세트 실행
+
+> **top7521**은 최종 확정된 7개 후보 세트입니다. 인프라(net.xml, 파라미터, 스크립트 구조)는 기존 top7과 동일합니다.
+
+### 후보 목록
+
+| # | crosswalk_id |
+|---|-------------|
+| 1 | **LINK_239754** |
+| 2 | **NODE_5831** |
+| 3 | **NODE_5846** |
+| 4 | **LINK_10218** |
+| 5 | **LINK_120139** |
+| 6 | **NODE_10335** |
+| 7 | **NODE_10376** |
+
+### 실행 명령
+
+```bash
+# 기본 (순차)
+bash final/top7_sim/commands/run_top7521_30seed.sh
+
+# 병렬 4개 (권장)
+bash final/top7_sim/commands/run_top7521_30seed.sh --jobs=4
+
+# 완료된 seed 스킵하며 이어 실행
+bash final/top7_sim/commands/run_top7521_30seed.sh --jobs=4 --skip-if-done
+
+# seed 범위 지정
+bash final/top7_sim/commands/run_top7521_30seed.sh --jobs=4 --seeds 1-10
+
+# 실제 실행 전 확인
+bash final/top7_sim/commands/run_top7521_30seed.sh --dry-run --jobs=4
+```
+
+dry-run 기준 **총 240 runs** (baseline 30 + smart 7×30).
+
+### 결과 저장 경로
+
+기존 `runs/` 디렉토리와 동일한 위치 사용.
+
+```
+final/top7_sim/runs/
+├── baseline/seed01/ ~ seed30/
+└── smart/
+    ├── LINK_239754/seed01/ ~ seed30/
+    ├── NODE_5831/
+    ├── NODE_5846/
+    ├── LINK_10218/
+    ├── LINK_120139/
+    ├── NODE_10335/
+    └── NODE_10376/
+```
+
+### 전체 흐름 요약
+
+```bash
+# [Step 1] dry-run으로 구성 확인
+bash final/top7_sim/commands/run_top7521_30seed.sh --dry-run --jobs=4
+
+# [Step 2] 30seed 본 실행
+bash final/top7_sim/commands/run_top7521_30seed.sh --jobs=4 --skip-if-done
+
+# [Step 3] 결과 집계
+python3 analysis/final_top7_pipeline.py
+```
+
+---
+
+## 12. 참고: 기존 30seed 결과와의 관계
 
 이번 top7_sim은 기존 `final/runs/` 결과와 **독립적**:
 
