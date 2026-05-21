@@ -1,0 +1,6 @@
+crosswalk_id,crossing_edge_id,mapped_lat,mapped_lon,mapping_level,mapping_score,manual_status,manual_note
+NODE_6123,:7300992884_c0,37.558626,126.978728,good,80,accept_review2,
+NODE_14937,:11139418723_c0,37.555425,126.969115,good,80,accept_review2,
+LINK_140740,:11139418715_c0,37.555262,126.969111,exact,100,accept_review2,
+NODE_10378,:11139418716_c0,37.55529,126.969201,exact,100,accept_review2,
+NODE_5681,:11139418706_c0,37.555281,126.96899,good,80,accept_review2_dedup,
