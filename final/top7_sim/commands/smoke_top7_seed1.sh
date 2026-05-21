@@ -10,6 +10,7 @@
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --min-success 1          # smart 성공 최소 개수
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids NODE_5846          # 단일 후보
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262  # 복수 후보
+#   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262 --jobs 2
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 5846 194891        # 숫자만 입력
 #   bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 194891 --force     # 조합
 
@@ -40,6 +41,7 @@ FORCE=false
 NO_PREFLIGHT=false
 SKIP_INVALID=false
 MIN_SUCCESS=1
+JOBS=1
 RAW_IDS=()   # --ids 뒤에 받은 원시 토큰들
 
 while [[ $# -gt 0 ]]; do
@@ -52,10 +54,25 @@ while [[ $# -gt 0 ]]; do
       SKIP_INVALID=true; shift ;;
     --min-success)
       shift
+      if [[ $# -eq 0 || "$1" == --* ]]; then
+        echo "--min-success requires a value" >&2
+        exit 1
+      fi
       MIN_SUCCESS="${1:-}"
       shift ;;
     --min-success=*)
       MIN_SUCCESS="${1#*=}"
+      shift ;;
+    --jobs)
+      shift
+      if [[ $# -eq 0 || "$1" == --* ]]; then
+        echo "--jobs requires a value" >&2
+        exit 1
+      fi
+      JOBS="${1:-}"
+      shift ;;
+    --jobs=*)
+      JOBS="${1#*=}"
       shift ;;
     --ids)
       shift
@@ -69,6 +86,10 @@ done
 
 if ! [[ "$MIN_SUCCESS" =~ ^[0-9]+$ ]] || [ "$MIN_SUCCESS" -lt 1 ]; then
   echo "--min-success must be a positive integer" >&2
+  exit 1
+fi
+if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -lt 1 ]; then
+  echo "--jobs must be a positive integer" >&2
   exit 1
 fi
 
@@ -279,7 +300,7 @@ mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$FIGURES_DIR" "$TMP_DIR" "$RESULTS_DIR"
 
 # ── 선택 로그 출력 ────────────────────────────────────────────────────────────
 echo "[top7_sim smoke] selected_ids=${SELECTED_IDS[*]}"
-echo "[top7_sim smoke] mode=${MODE}  force=${FORCE}"
+echo "[top7_sim smoke] mode=${MODE}  force=${FORCE}  jobs=${JOBS}"
 
 # ── preflight / selection 정리 ─────────────────────────────────────────────────
 EXCLUDED_IDS=()
@@ -357,7 +378,7 @@ PY
 )"
 
 echo "[top7_sim smoke] selected_ids=${SELECTED_IDS[*]}"
-echo "[top7_sim smoke] mode=${MODE}  force=${FORCE}  no_preflight=${NO_PREFLIGHT}  skip_invalid=${SKIP_INVALID}  min_success=${MIN_SUCCESS}"
+echo "[top7_sim smoke] mode=${MODE}  force=${FORCE}  jobs=${JOBS}  no_preflight=${NO_PREFLIGHT}  skip_invalid=${SKIP_INVALID}  min_success=${MIN_SUCCESS}"
 echo "[top7_sim smoke] baseline_csv=$ACTIVE_BASELINE_CSV"
 echo "[top7_sim smoke] baseline_rows=$(python3 -c "import pandas as pd; print(len(pd.read_csv('$ACTIVE_BASELINE_CSV')))")"
 
@@ -444,6 +465,39 @@ run_smoke() {
   fi
 }
 
+# ── 병렬 실행 제어 ────────────────────────────────────────────────────────────
+pids=()
+wait_for_slot() {
+  while true; do
+    local active
+    active=$(jobs -p | wc -l | tr -d '[:space:]')
+    if [ "${active:-0}" -lt "$JOBS" ]; then break; fi
+    sleep 0.5
+  done
+}
+wait_for_all_jobs() {
+  local status=0
+  local pid
+  for pid in "${pids[@]:-}"; do
+    wait "$pid" || status=1
+  done
+  pids=()
+  return "$status"
+}
+
+run_smart_async() {
+  local cw="$1" csv="$2" out_dir="$3" log_file="$4" status_file="$5"
+  wait_for_slot
+  (
+    if run_smoke "$csv" "$out_dir" "$log_file" "smart_candidate" "$cw"; then
+      printf 'ok\n' > "$status_file"
+    else
+      printf 'failed\n' > "$status_file"
+    fi
+  ) &
+  pids+=("$!")
+}
+
 # ── smoke 결과 요약 ───────────────────────────────────────────────────────────
 smoke_summary() {
   local run_root="$1"
@@ -506,9 +560,12 @@ fi
 
 # ── smart 실행 (선택 ID만) ────────────────────────────────────────────────────
 echo ""
-echo "[top7_sim smoke] smart seed1 × ${#SELECTED_IDS[@]}후보 시작"
+echo "[top7_sim smoke] smart seed1 × ${#SELECTED_IDS[@]}후보 시작 (jobs=${JOBS})"
 EXECUTED_IDS=()
 FAILED_IDS=()
+SMART_RUN_IDS=()
+SMART_STATUS_DIR="$TMP_DIR/smoke_smart_status_$$"
+mkdir -p "$SMART_STATUS_DIR"
 for cw in "${SELECTED_IDS[@]}"; do
   csv="$SINGLE_CSV_ROOT/${cw}.csv"
   if [[ ! -f "$csv" ]]; then
@@ -516,10 +573,29 @@ for cw in "${SELECTED_IDS[@]}"; do
     FAILED_IDS+=("$cw")
     continue
   fi
-  if run_smoke "$csv" \
-    "$RUN_ROOT/smart/${cw}/seed01" \
-    "$LOG_ROOT/smart/${cw}/seed01.log" \
-    "smart_candidate" "$cw"; then
+  SMART_RUN_IDS+=("$cw")
+  status_file="$SMART_STATUS_DIR/${cw}.status"
+  if [[ "$JOBS" -eq 1 ]]; then
+    if run_smoke "$csv" \
+      "$RUN_ROOT/smart/${cw}/seed01" \
+      "$LOG_ROOT/smart/${cw}/seed01.log" \
+      "smart_candidate" "$cw"; then
+      printf 'ok\n' > "$status_file"
+    else
+      printf 'failed\n' > "$status_file"
+    fi
+  else
+    run_smart_async "$cw" "$csv" \
+      "$RUN_ROOT/smart/${cw}/seed01" \
+      "$LOG_ROOT/smart/${cw}/seed01.log" \
+      "$status_file"
+  fi
+done
+wait_for_all_jobs || true
+
+for cw in "${SMART_RUN_IDS[@]}"; do
+  status_file="$SMART_STATUS_DIR/${cw}.status"
+  if [[ -f "$status_file" && "$(cat "$status_file")" == "ok" ]]; then
     EXECUTED_IDS+=("$cw")
   else
     FAILED_IDS+=("$cw")

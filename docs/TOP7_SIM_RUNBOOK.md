@@ -213,6 +213,9 @@ bash final/top7_sim/commands/smoke_top7_seed1.sh
 # 특정 후보만 빠르게 (권장: 처음엔 2~3개만 먼저 확인)
 bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262
 
+# smart 후보 병렬 실행
+bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262 --jobs 2
+
 # 숫자만 입력 가능
 bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 194891 10262
 
@@ -475,7 +478,7 @@ python3 -c "import sumolib, traci, pandas, scipy; print('OK')"
 python3 analysis/make_top7_sim_candidates.py --verify-only
 
 # [Step 2] smoke (먼저 2개만 빠르게 확인)
-bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262 --force
+bash final/top7_sim/commands/smoke_top7_seed1.sh --ids LINK_194891 NODE_10262 --jobs 2 --force
 
 # [Step 3] 전체 30seed 본 실행
 bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4
