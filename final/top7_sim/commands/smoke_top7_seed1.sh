@@ -446,6 +446,7 @@ run_smoke() {
     --ped-repeat-count 5 \
     --ped-repeat-spacing-sec 2 \
     --include-vehicles \
+    --enable-ssm \
     --output-profile  "$OUTPUT_PROFILE" \
     --manifest-row-role     "$manifest_row_role" \
     --manifest-crosswalk-id "$manifest_crosswalk_id" \
