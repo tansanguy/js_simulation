@@ -36,6 +36,10 @@ import numpy as np
 import pandas as pd
 
 # ── CLI 인자 파싱 ──────────────────────────────────────────────────────────────
+# 우선순위: CLI --jobs > 환경변수 SIM_JOBS > 기본값 1
+# 전역 기본값 설정: export SIM_JOBS=8  (~/.zshrc 또는 ~/.bashrc에 추가)
+_env_jobs = int(os.environ.get("SIM_JOBS", "1"))
+
 _parser = argparse.ArgumentParser(
     description="top7 후보 선정 파이프라인",
     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -43,13 +47,15 @@ _parser = argparse.ArgumentParser(
 _parser.add_argument(
     "-j", "--jobs",
     type=int,
-    default=1,
+    default=_env_jobs,
     metavar="N",
-    help="병렬 스레드 수 (Step 1 CSV 로딩, Step 6 매핑 audit). 0 이면 CPU 코어 수 사용.",
+    help="병렬 스레드 수 (Step 1 CSV 로딩, Step 6 매핑 audit). 0 이면 CPU 코어 수 사용."
+         " 환경변수 SIM_JOBS로 기본값 설정 가능.",
 )
 _args = _parser.parse_args()
 JOBS: int = _args.jobs if _args.jobs > 0 else (os.cpu_count() or 1)
-print(f"[설정] --jobs={JOBS}")
+_jobs_src = "CLI" if _args.jobs != _env_jobs else ("SIM_JOBS 환경변수" if _env_jobs != 1 else "기본값")
+print(f"[설정] --jobs={JOBS} ({_jobs_src})")
 
 try:
     from scipy import stats as scipy_stats
