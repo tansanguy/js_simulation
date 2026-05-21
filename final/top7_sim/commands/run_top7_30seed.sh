@@ -242,6 +242,7 @@ run_sampled() {
     --ped-repeat-count 5 \
     --ped-repeat-spacing-sec 2 \
     --include-vehicles \
+    --enable-ssm \
     --manifest-row-role      "$manifest_row_role" \
     --manifest-crosswalk-id  "$manifest_crosswalk_id" \
     >>"$log_file" 2>&1; then

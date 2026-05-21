@@ -107,10 +107,13 @@ max_extensions  3        (보행 신호 1사이클당 최대 연장 횟수)
 radius_m        500.0    (local 교통 측정 반경)
 ped-repeat      5 회     (보행자 1명 반복 횟수)
 ped-spacing     1.5 s    (반복 간격)
-SSM             ON       (PET 관측 활성화)
+SSM             ON       (PET 관측 활성화) ← 디폴트 OFF, 반드시 --enable-ssm 명시
 include-vehicles ON
 output-profile  full (30seed 본 실행) / light (smoke 검증)
 ```
+
+> **SSM 주의**: `run_sampled10_group`의 SSM 디폴트는 **OFF**이다.  
+> `--enable-ssm` 플래그를 명시해야 PET 이벤트가 기록된다. `--disable-ssm`은 명시적으로 끌 때 사용.
 
 ---
 
@@ -249,6 +252,9 @@ bash final/top7_sim/commands/smoke_top7_seed1.sh --ids 5846 8369
 
 smoke 전체 통과 후 실행. **맥미니에서 `--jobs=4` 병렬 권장.**
 
+> **SSM**: `run_top7_30seed.sh`가 내부적으로 `--enable-ssm`을 포함하는지 확인할 것.  
+> 포함되지 않았다면 직접 `run_sampled10_group`을 호출할 때 아래 예시처럼 명시해야 한다.
+
 ```bash
 # 병렬 4개 실행 (CPU 코어 수에 맞게 조정)
 bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4
@@ -259,6 +265,28 @@ bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --skip-if-done
 # 10회만 실행
 bash final/top7_sim/commands/run_top7_30seed.sh --jobs=4 --seeds 1-10 --skip-if-done
 ```
+
+**`--enable-ssm` 직접 호출 예시** (SSM을 명시적으로 켜야 할 때):
+
+```bash
+# LINK_194891, seed 1, SSM ON — run_sampled10_group 직접 호출
+python3 -m smart_crosswalk_sumo.run_sampled10_group \
+  --candidate-csv   final/top7_sim/manifests/single_candidates/LINK_194891.csv \
+  --net-file        result/active/nets/generated_signal_7.net.xml \
+  --seed            1 \
+  --output-dir      final/top7_sim/runs/smart/LINK_194891/seed01 \
+  --sim-duration    1800 \
+  --warmup          300 \
+  --traci_step_length 0.1 \
+  --traffic_measure_radius_m 500.0 \
+  --extension_increment 5.0 \
+  --max_extensions  3 \
+  --include-vehicles \
+  --output-profile  full \
+  --enable-ssm
+```
+
+- `--enable-ssm` 없이 실행하면 `pet_event_count` 등 SSM 지표가 모두 0 또는 NaN이 된다.
 
 **예상 소요 시간** (단일 run 기준 ~35분 × 240 run ÷ 4 병렬 = 약 35시간):
 - 1 run = baseline (1800s) + smart (1800s) = 3600s sim ≒ 30~40분 wall clock
